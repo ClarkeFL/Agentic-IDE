@@ -505,7 +505,14 @@ private struct ProjectRow: View {
 
             // Summary line — always visible regardless of selection so the
             // row height doesn't shift when expanding/collapsing children.
+            // When the children are collapsed we promote the most-attention-
+            // worthy tab status here so the user can see "AI is working" /
+            // "AI has a question" without having to expand.
             HStack(spacing: 6) {
+                if let aggregate = aggregateStatus, !isExpanded {
+                    TerminalStatusBadge(status: aggregate)
+                    Text("·").font(.caption2).foregroundStyle(.tertiary)
+                }
                 if !session.tabs.isEmpty {
                     Label(tabCountLabel, systemImage: "rectangle.stack")
                         .labelStyle(.titleAndIcon)
@@ -560,6 +567,17 @@ private struct ProjectRow: View {
         return n == 1 ? "1 terminal" : "\(n) terminals"
     }
 
+    /// Highest-priority status across all tabs in this project. Mirrors what
+    /// the user is most likely to want to know about: "is the AI waiting for
+    /// me" wins over "is it still working" wins over "did it just finish".
+    private var aggregateStatus: TerminalTabStatus? {
+        let priority: [TerminalTabStatus] = [.failed, .working, .completed]
+        for s in priority where session.tabs.contains(where: { $0.status == s }) {
+            return s
+        }
+        return nil
+    }
+
     /// Minutes/hours/days only — never seconds.
     private func formatRelative(_ date: Date) -> String {
         let diff = max(0, Int(now.timeIntervalSince(date)))
@@ -585,6 +603,7 @@ private struct TerminalChildRow: View {
     @State private var isHovered = false
     @State private var isEditing = false
     @State private var draftName: String = ""
+    @State private var pulseOpacity: Double = 1.0
     @FocusState private var nameFieldFocused: Bool
 
     var body: some View {
@@ -593,10 +612,23 @@ private struct TerminalChildRow: View {
         // appears on hover. The close button is overlaid on top so its taps
         // aren't fighting the row's onTapGesture for select/rename.
         HStack(spacing: 6) {
-            Image(systemName: "terminal")
-                .font(.system(size: 11, weight: .medium))
-                .foregroundStyle(.secondary)
-                .frame(width: 14)
+            // Status dot replaces the generic terminal glyph when something
+            // interesting is happening (working / completed /
+            // failed) — keeps the row at the same height but communicates
+            // state at a glance. When idle we fall back to the terminal icon.
+            if let info = TerminalStatusBadge.info(for: tab.status) {
+                Circle()
+                    .fill(info.color)
+                    .frame(width: 7, height: 7)
+                    .frame(width: 14)
+                    .opacity(tab.status == .working ? pulseOpacity : 1.0)
+                    .help(info.label)
+            } else {
+                Image(systemName: "terminal")
+                    .font(.system(size: 11, weight: .medium))
+                    .foregroundStyle(.secondary)
+                    .frame(width: 14)
+            }
 
             if isEditing {
                 TextField("", text: $draftName)
@@ -606,10 +638,18 @@ private struct TerminalChildRow: View {
                     .onSubmit(commitRename)
                     .onExitCommand { isEditing = false }
             } else {
-                Text(tab.title)
-                    .font(.system(size: 12, weight: isActive ? .semibold : .regular))
-                    .foregroundStyle(isActive ? .primary : .secondary)
-                    .lineLimit(1)
+                HStack(spacing: 5) {
+                    if let info = TerminalStatusBadge.info(for: tab.status) {
+                        Text(info.label)
+                            .font(.system(size: 12, weight: .semibold))
+                            .foregroundStyle(info.color)
+                            .lineLimit(1)
+                    }
+                    Text(tab.title)
+                        .font(.system(size: 12, weight: isActive ? .semibold : .regular))
+                        .foregroundStyle(isActive ? .primary : .secondary)
+                        .lineLimit(1)
+                }
             }
 
             Spacer(minLength: 4)
@@ -655,6 +695,24 @@ private struct TerminalChildRow: View {
             Divider()
             Button("Close", role: .destructive) { onClose() }
         }
+        .onChange(of: tab.status) { _, newValue in
+            if newValue == .working {
+                withAnimation(.easeInOut(duration: 0.9).repeatForever(autoreverses: true)) {
+                    pulseOpacity = 0.35
+                }
+            } else {
+                withAnimation(.easeInOut(duration: 0.2)) { pulseOpacity = 1.0 }
+            }
+        }
+        .onAppear {
+            // Re-establish the pulse if the tab was already working when the
+            // row appeared (e.g. after switching between projects).
+            if tab.status == .working {
+                withAnimation(.easeInOut(duration: 0.9).repeatForever(autoreverses: true)) {
+                    pulseOpacity = 0.35
+                }
+            }
+        }
     }
 
     private func startRename() {
@@ -667,5 +725,48 @@ private struct TerminalChildRow: View {
         let trimmed = draftName.trimmingCharacters(in: .whitespaces)
         if !trimmed.isEmpty { onRename(trimmed) }
         isEditing = false
+    }
+}
+
+/// Small `● Label` indicator used on collapsed project rows so the user can
+/// see "Working" / "Question" / "Completed" / "Failed" without expanding the
+/// row. The per-tab rows render the dot+label inline in their own layout
+/// instead of using this view, so they can match the row's typography.
+struct TerminalStatusBadge: View {
+    let status: TerminalTabStatus
+
+    var body: some View {
+        if let info = Self.info(for: status) {
+            HStack(spacing: 4) {
+                Circle()
+                    .fill(info.color)
+                    .frame(width: 6, height: 6)
+                Text(info.label)
+                    .font(.caption2.weight(.semibold))
+                    .foregroundStyle(info.color)
+            }
+        }
+    }
+
+    struct Info {
+        let label: String
+        let color: Color
+    }
+
+    /// Single source of truth for the colour + label of each status. Returns
+    /// nil for `.idle` so callers know to fall back to their default chrome.
+    static func info(for status: TerminalTabStatus) -> Info? {
+        switch status {
+        case .idle:
+            return nil
+        case .working:
+            // Soft blue: in-progress, neutral. Pulses in the per-tab row to
+            // reinforce "still moving."
+            return Info(label: "Working", color: Color(red: 0.30, green: 0.62, blue: 0.95))
+        case .completed:
+            return Info(label: "Completed", color: Color(red: 0.30, green: 0.78, blue: 0.45))
+        case .failed:
+            return Info(label: "Failed", color: Color(red: 0.92, green: 0.36, blue: 0.36))
+        }
     }
 }

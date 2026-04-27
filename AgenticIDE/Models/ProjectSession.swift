@@ -10,7 +10,25 @@ final class ProjectSession: Identifiable {
     let projectId: UUID
     var tabs: [TerminalTab] = []
     var activeTabId: UUID? {
-        didSet { saveHook?() }
+        didSet {
+            saveHook?()
+            clearStatusOnActiveTab()
+        }
+    }
+
+    /// When the user opens a tab whose status is one of the "got your
+    /// attention" states (completed / failed), drop it back to idle —
+    /// they've now seen the indicator. Working stays put because the AI
+    /// is still running and the indicator is still meaningful.
+    private func clearStatusOnActiveTab() {
+        guard let id = activeTabId,
+              let tab = tabs.first(where: { $0.id == id }) else { return }
+        switch tab.status {
+        case .completed, .failed:
+            tab.status = .idle
+        case .idle, .working:
+            break
+        }
     }
 
     /// Called whenever tabs/active-tab change in a way that should be

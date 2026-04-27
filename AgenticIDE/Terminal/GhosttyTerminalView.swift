@@ -40,6 +40,11 @@ final class GhosttyTerminalView: NSView, NSTextInputClient {
     var onUserSubmitLine: ((String) -> Void)?
     private var lineBuffer: String = ""
 
+    /// Called on the main thread for every terminal lifecycle event we care
+    /// about (BEL, OSC-9;4 progress, shell-integration command-finished, child
+    /// exit). The owning `TerminalTab` folds these into a `TerminalTabStatus`.
+    var onTerminalEvent: ((TerminalEvent) -> Void)?
+
     init(config: SurfaceConfig) {
         self.config = config
         super.init(frame: .zero)
@@ -112,19 +117,30 @@ final class GhosttyTerminalView: NSView, NSTextInputClient {
         // After re-attaching to a window the frame may already be the size
         // we want, so AppKit doesn't fire `setFrameSize` and the metal layer
         // can show whatever stale frame it had before detach. Re-assert the
-        // drawable size + surface size on the next runloop tick (bounds are
-        // settled by then) — this is the same work `setFrameSize` does, and
-        // matches what a manual divider drag was triggering.
-        DispatchQueue.main.async { [weak self] in
-            guard let self = self, self.window != nil else { return }
-            let scale = self.window?.backingScaleFactor ?? 2.0
-            let widthPx = UInt32(max(1, self.bounds.width * scale))
-            let heightPx = UInt32(max(1, self.bounds.height * scale))
-            (self.layer as? CAMetalLayer)?.drawableSize = CGSize(width: CGFloat(widthPx), height: CGFloat(heightPx))
-            if let surface = self.surface {
-                ghostty_surface_set_size(surface, widthPx, heightPx)
-                ghostty_surface_refresh(surface)
-            }
+        // drawable size + surface size and request a paint.
+        //
+        // Two ticks: the immediate `async` catches the common case where
+        // SwiftUI has already laid out by the time we re-enter the runloop;
+        // the second `asyncAfter` is a belt-and-suspenders fallback for the
+        // race where SwiftUI's layout pass runs after our first tick (so
+        // bounds was still stale) or the metal layer's drawable wasn't ready
+        // yet — without it the surface stays on its pre-detach frame until
+        // the user types and ghostty marks the grid dirty.
+        DispatchQueue.main.async { [weak self] in self?.refreshAfterReattach() }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) { [weak self] in
+            self?.refreshAfterReattach()
+        }
+    }
+
+    private func refreshAfterReattach() {
+        guard window != nil else { return }
+        let scale = window?.backingScaleFactor ?? 2.0
+        let widthPx = UInt32(max(1, bounds.width * scale))
+        let heightPx = UInt32(max(1, bounds.height * scale))
+        (layer as? CAMetalLayer)?.drawableSize = CGSize(width: CGFloat(widthPx), height: CGFloat(heightPx))
+        if let surface {
+            ghostty_surface_set_size(surface, widthPx, heightPx)
+            ghostty_surface_refresh(surface)
         }
     }
 
@@ -145,6 +161,12 @@ final class GhosttyTerminalView: NSView, NSTextInputClient {
         (layer as? CAMetalLayer)?.drawableSize = CGSize(width: CGFloat(widthPx), height: CGFloat(heightPx))
         if let surface {
             ghostty_surface_set_size(surface, widthPx, heightPx)
+            // Kick a paint. Without this, when SwiftUI sizes us *after* the
+            // viewDidMoveToWindow async tick already ran on stale (zero)
+            // bounds, the surface ends up at the right size with no request
+            // to repaint and the metal layer keeps showing its pre-detach
+            // frame until the user types.
+            ghostty_surface_refresh(surface)
         }
     }
 
