@@ -59,14 +59,23 @@ struct GitDiffView: View {
                 DiffFileHeader(header: header, stats: parsed.stats)
                 Divider()
             }
-            ScrollView(.vertical) {
-                LazyVStack(alignment: .leading, spacing: 0) {
+            // GeometryReader gives each row a `minLineWidth` so short rows
+            // (and their colored backgrounds) stretch across the viewport
+            // while long rows extend past it and trigger horizontal scroll.
+            // The explicit maxHeight: .infinity is critical — without it,
+            // GeometryReader collapses to zero height inside a VStack and
+            // the ScrollView gets no viewport to scroll within.
+            // Single ScrollView with both axes + eager VStack so the content
+            // reports its real maximum width up front. LazyVStack measures
+            // only currently-rendered rows, which kept the content reported
+            // as ≈ viewport width — no horizontal overflow → no h-scroll.
+            ScrollView([.vertical, .horizontal], showsIndicators: true) {
+                VStack(alignment: .leading, spacing: 0) {
                     ForEach(parsed.rows) { row in
                         DiffRowView(row: row)
                     }
                 }
                 .padding(.vertical, 2)
-                .frame(maxWidth: .infinity, alignment: .leading)
             }
             .background(Color(nsColor: .textBackgroundColor).opacity(0.35))
         }
@@ -108,8 +117,9 @@ private struct DiffFileHeader: View {
             Spacer(minLength: 8)
             statsBar
         }
-        .padding(.horizontal, 12)
-        .padding(.vertical, 7)
+        .padding(.leading, 14)
+        .padding(.trailing, 14)
+        .padding(.vertical, 8)
         .background(Color(nsColor: .controlBackgroundColor))
     }
 
@@ -152,17 +162,13 @@ private struct DiffRowView: View {
                 .font(Self.monoFont)
                 .foregroundStyle(signColor)
                 .frame(width: 14, alignment: .center)
-            // No fixedSize — long source lines wrap inside the pane
-            // instead of getting clipped or forcing a horizontal scroll
-            // (which fights the vertical scroll on macOS).
             Text(row.text.isEmpty ? " " : row.text)
                 .font(Self.monoFont)
                 .foregroundStyle(.primary)
                 .padding(.trailing, 12)
-                .frame(maxWidth: .infinity, alignment: .leading)
         }
+        .fixedSize(horizontal: true, vertical: false)
         .padding(.vertical, 0.5)
-        .frame(maxWidth: .infinity, alignment: .leading)
         .background(rowBackground)
         .textSelection(.enabled)
     }
@@ -183,10 +189,10 @@ private struct DiffRowView: View {
                 .font(Self.monoFont.italic())
                 .foregroundStyle(Color(red: 0.55, green: 0.45, blue: 0.95))
                 .padding(.leading, 6)
-                .frame(maxWidth: .infinity, alignment: .leading)
+                .padding(.trailing, 12)
         }
+        .fixedSize(horizontal: true, vertical: false)
         .padding(.vertical, 2)
-        .frame(maxWidth: .infinity, alignment: .leading)
         .background(Color(red: 0.55, green: 0.45, blue: 0.95).opacity(0.10))
     }
 
@@ -198,10 +204,10 @@ private struct DiffRowView: View {
                 .font(Self.monoFont.italic())
                 .foregroundStyle(.tertiary)
                 .padding(.leading, 6)
-                .frame(maxWidth: .infinity, alignment: .leading)
+                .padding(.trailing, 12)
         }
+        .fixedSize(horizontal: true, vertical: false)
         .padding(.vertical, 0.5)
-        .frame(maxWidth: .infinity, alignment: .leading)
     }
 
     private func gutter(_ lineNo: Int?) -> some View {
