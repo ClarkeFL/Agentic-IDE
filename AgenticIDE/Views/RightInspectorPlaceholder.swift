@@ -330,7 +330,7 @@ private struct ChangedFilesList: View {
                             .listRowInsets(EdgeInsets(top: 3,
                                                       leading: Inspector.hPadding,
                                                       bottom: 3,
-                                                      trailing: Inspector.hPadding))
+                                                      trailing: Inspector.hPadding + 8))
                             .listRowSeparator(.hidden)
                             .listRowBackground(Color.clear)
                     }
@@ -437,7 +437,7 @@ private struct ChangedFileRow: View {
             VStack(alignment: .leading, spacing: 1) {
                 Text(change.displayName)
                     .font(.system(size: 12))
-                    .foregroundStyle(filenameColor)
+                    .foregroundStyle(.primary)
                     .lineLimit(1)
                     .truncationMode(.middle)
                 Text(change.stateSubtitle)
@@ -471,11 +471,5 @@ private struct ChangedFileRow: View {
         }
     }
 
-    /// Filename takes a soft tint of the status color so a glance at the
-    /// list reads green = new, amber = modified, red = deleted, without
-    /// shouting. Subtitle gets the full status color underneath.
-    private var filenameColor: Color {
-        change.status.tint.opacity(0.92)
-    }
 }
 

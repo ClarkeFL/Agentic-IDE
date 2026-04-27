@@ -97,28 +97,40 @@ private struct DiffFileHeader: View {
 
     var body: some View {
         HStack(alignment: .center, spacing: 10) {
-            VStack(alignment: .leading, spacing: 1) {
-                HStack(spacing: 0) {
+            VStack(alignment: .leading, spacing: 2) {
+                // Filename is the primary signal — pin it to the leading
+                // edge with high layout priority so the path beside/below
+                // takes the truncation hit instead of the filename.
+                Text(header.displayName)
+                    .font(.system(size: 12, weight: .semibold))
+                    .foregroundStyle(.primary)
+                    .lineLimit(1)
+                    .truncationMode(.middle)
+                    .layoutPriority(1)
+
+                // Path + status on one secondary line, separated by `·`.
+                // Path truncates from the head when narrow ("…tic-IDE/Views").
+                HStack(spacing: 6) {
                     if !header.directory.isEmpty {
-                        Text(header.directory + "/")
-                            .font(.system(size: 11))
+                        Text(header.directory)
                             .foregroundStyle(.tertiary)
                             .lineLimit(1)
                             .truncationMode(.head)
+                        Text("·")
+                            .foregroundStyle(.tertiary)
                     }
-                    Text(header.displayName)
-                        .font(.system(size: 12, weight: .semibold))
+                    Text(header.stateSubtitle)
+                        .foregroundStyle(.secondary)
                         .lineLimit(1)
+                        .layoutPriority(1)
                 }
-                Text(header.stateSubtitle)
-                    .font(.system(size: 9.5, weight: .medium))
-                    .foregroundStyle(.secondary)
+                .font(.system(size: 10, weight: .medium))
             }
-            Spacer(minLength: 8)
+            Spacer(minLength: 12)
             statsBar
         }
         .padding(.leading, 14)
-        .padding(.trailing, 14)
+        .padding(.trailing, 22)
         .padding(.vertical, 8)
         .background(Color(nsColor: .controlBackgroundColor))
     }
