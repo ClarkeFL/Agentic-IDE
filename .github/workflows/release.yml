@@ -58,6 +58,12 @@ jobs:
       - name: Generate Xcode project
         run: xcodegen
 
+      - name: Fetch GhosttyKit
+        # Vendor/GhosttyKit.xcframework is gitignored — Xcode's prebuild script
+        # would fetch it, but xcodebuild needs the framework to exist before
+        # it builds the dependency graph. Run the fetch up front.
+        run: ./Scripts/fetch-ghosttykit.sh
+
       - name: Resolve SPM packages
         run: xcodebuild -project AgenticIDE.xcodeproj -scheme AgenticIDE -resolvePackageDependencies
 
