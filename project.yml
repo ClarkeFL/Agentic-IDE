@@ -7,6 +7,11 @@ options:
   createIntermediateGroups: true
   generateEmptyDirectories: true
 
+packages:
+  Sparkle:
+    url: https://github.com/sparkle-project/Sparkle
+    from: 2.6.0
+
 settings:
   base:
     SWIFT_VERSION: "5.10"
@@ -31,12 +36,15 @@ targets:
         CODE_SIGN_STYLE: Automatic
         CODE_SIGN_IDENTITY: "-"
         DEVELOPMENT_TEAM: ""
-        ENABLE_HARDENED_RUNTIME: NO
+        ENABLE_HARDENED_RUNTIME: YES
         GENERATE_INFOPLIST_FILE: YES
         INFOPLIST_KEY_NSHumanReadableCopyright: ""
         INFOPLIST_KEY_LSApplicationCategoryType: public.app-category.developer-tools
         INFOPLIST_KEY_NSMainStoryboardFile: ""
         INFOPLIST_KEY_NSPrincipalClass: NSApplication
+        INFOPLIST_KEY_SUFeedURL: "https://raw.githubusercontent.com/ClarkeFL/Agentic-IDE/main/appcast.xml"
+        INFOPLIST_KEY_SUEnableAutomaticChecks: YES
+        INFOPLIST_KEY_SUPublicEDKey: "iNkqfiKbf44ySMxWHYdroNzuxe0T6SKyi/CkkqWpzYo="
         ARCHS: arm64
         ONLY_ACTIVE_ARCH: YES
         SWIFT_VERSION: "5.10"
@@ -56,6 +64,8 @@ targets:
     dependencies:
       - framework: Vendor/GhosttyKit.xcframework
         embed: false
+      - package: Sparkle
+        product: Sparkle
     preBuildScripts:
       - name: Fetch GhosttyKit
         script: '"${SRCROOT}/Scripts/fetch-ghosttykit.sh"'
