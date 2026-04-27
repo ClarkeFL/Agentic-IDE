@@ -1,17 +1,14 @@
 import AppKit
 import SwiftUI
 
-/// Three-pane horizontal split that persists divider positions across launches.
-/// Wraps `NSSplitViewController` because SwiftUI's `HSplitView` doesn't expose
-/// an autosave hook.
+/// Three-pane horizontal split view, implemented entirely in SwiftUI so it
+/// is immune to the `NSSplitViewController` ↔ SwiftUI sizing quirks (where
+/// the bridge would re-derive `preferredContentSize` from the splitView's
+/// intrinsic size mid-drag and shrink the bridged frame).
 ///
-/// Notes on sizing:
-///   * We avoid `preferredContentSize` and intrinsic-content sizing on the
-///     hosting controllers — those add Auto Layout width constraints that
-///     fight the divider drag and can compress the entire layout.
-///   * Initial divider positions are set explicitly on the first layout pass
-///     when no autosaved state is restored from `UserDefaults`.
-struct PersistentSplitView<L: View, M: View, R: View>: NSViewControllerRepresentable {
+/// Persistence: leading / trailing widths are stored in `UserDefaults`
+/// keyed by `autosaveName`. The center pane gets the remaining width.
+struct PersistentSplitView<L: View, M: View, R: View>: View {
     let autosaveName: String
     let leadingMin: CGFloat
     let leadingInitial: CGFloat
@@ -24,17 +21,19 @@ struct PersistentSplitView<L: View, M: View, R: View>: NSViewControllerRepresent
     let center: () -> M
     let trailing: () -> R
 
+    @State private var leadingWidth: CGFloat
+    @State private var trailingWidth: CGFloat
+    @State private var dragLeadingStart: CGFloat?
+    @State private var dragTrailingStart: CGFloat?
+
     init(autosaveName: String,
          leadingMin: CGFloat = 180,
          leadingInitial: CGFloat = 240,
          leadingMax: CGFloat = 420,
-         centerMin: CGFloat = 240,
+         centerMin: CGFloat = 360,
          trailingMin: CGFloat = 200,
          trailingInitial: CGFloat = 280,
-         // Effectively unbounded — the new git diff inspector wants room to
-         // breathe when reviewing large files. Center pane has the lower
-         // holding priority so it absorbs the shrink.
-         trailingMax: CGFloat = .greatestFiniteMagnitude,
+         trailingMax: CGFloat = 600,
          @ViewBuilder leading: @escaping () -> L,
          @ViewBuilder center: @escaping () -> M,
          @ViewBuilder trailing: @escaping () -> R) {
@@ -49,88 +48,111 @@ struct PersistentSplitView<L: View, M: View, R: View>: NSViewControllerRepresent
         self.leading = leading
         self.center = center
         self.trailing = trailing
+
+        let storedLeading = UserDefaults.standard.object(forKey: "\(autosaveName).leadingWidth") as? Double
+        let storedTrailing = UserDefaults.standard.object(forKey: "\(autosaveName).trailingWidth") as? Double
+        let lead = CGFloat(storedLeading ?? Double(leadingInitial))
+        let trail = CGFloat(storedTrailing ?? Double(trailingInitial))
+        self._leadingWidth = State(initialValue: max(leadingMin, min(leadingMax, lead)))
+        self._trailingWidth = State(initialValue: max(trailingMin, min(trailingMax, trail)))
     }
 
-    func makeNSViewController(context: Context) -> PersistentSplitController {
-        let svc = PersistentSplitController()
-        svc.autosaveKey = autosaveName
-        svc.leadingInitial = leadingInitial
-        svc.trailingInitial = trailingInitial
+    var body: some View {
+        GeometryReader { geo in
+            let total = geo.size.width
+            // Compute clamped widths so dragging never violates mins.
+            let leadingW = clamp(leadingWidth, min: leadingMin, max: leadingMax)
+            let maxTrailing = max(trailingMin, total - leadingW - centerMin - DividerView.thickness * 2)
+            let trailingW = min(clamp(trailingWidth, min: trailingMin, max: trailingMax), maxTrailing)
+            let centerW = max(centerMin, total - leadingW - trailingW - DividerView.thickness * 2)
 
-        svc.splitView.dividerStyle = .thin
-        svc.splitView.autosaveName = autosaveName
-        svc.splitView.identifier = NSUserInterfaceItemIdentifier(autosaveName)
+            HStack(spacing: 0) {
+                leading()
+                    .frame(width: leadingW)
+                    .clipped()
 
-        let leadingHost = makeHost(leading())
-        let leadingItem = NSSplitViewItem(viewController: leadingHost)
-        leadingItem.minimumThickness = leadingMin
-        leadingItem.maximumThickness = leadingMax
-        leadingItem.canCollapse = false
-        leadingItem.holdingPriority = NSLayoutConstraint.Priority(260)
-        svc.addSplitViewItem(leadingItem)
+                DividerView(onDrag: { delta in dragLeading(delta: delta, total: total) },
+                            onDragEnd: persist)
 
-        let centerHost = makeHost(center())
-        let centerItem = NSSplitViewItem(viewController: centerHost)
-        centerItem.minimumThickness = centerMin
-        centerItem.canCollapse = false
-        centerItem.holdingPriority = NSLayoutConstraint.Priority(240)
-        svc.addSplitViewItem(centerItem)
+                center()
+                    .frame(width: centerW)
+                    .clipped()
 
-        let trailingHost = makeHost(trailing())
-        let trailingItem = NSSplitViewItem(viewController: trailingHost)
-        trailingItem.minimumThickness = trailingMin
-        trailingItem.maximumThickness = trailingMax
-        trailingItem.canCollapse = false
-        trailingItem.holdingPriority = NSLayoutConstraint.Priority(260)
-        svc.addSplitViewItem(trailingItem)
+                DividerView(onDrag: { delta in dragTrailing(delta: delta, total: total) },
+                            onDragEnd: persist)
 
-        return svc
+                trailing()
+                    .frame(width: trailingW)
+                    .clipped()
+            }
+            .frame(width: total, height: geo.size.height, alignment: .leading)
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
 
-    func updateNSViewController(_ svc: PersistentSplitController, context: Context) {
-        guard svc.splitViewItems.count == 3 else { return }
-        (svc.splitViewItems[0].viewController as? NSHostingController<L>)?.rootView = leading()
-        (svc.splitViewItems[1].viewController as? NSHostingController<M>)?.rootView = center()
-        (svc.splitViewItems[2].viewController as? NSHostingController<R>)?.rootView = trailing()
+    // MARK: - Drag handlers
+
+    /// Positive delta = mouse moved right = leading should grow.
+    private func dragLeading(delta: CGFloat, total: CGFloat) {
+        let start = dragLeadingStart ?? leadingWidth
+        if dragLeadingStart == nil { dragLeadingStart = start }
+        let proposed = start + delta
+        let maxAllowed = total - centerMin - trailingWidth - DividerView.thickness * 2
+        leadingWidth = clamp(proposed, min: leadingMin, max: min(leadingMax, maxAllowed))
     }
 
-    /// Builds an NSHostingController that defers all sizing to its parent split
-    /// item. Without zeroing `sizingOptions` the controller imposes intrinsic
-    /// width constraints, which fight divider dragging.
-    private func makeHost<V: View>(_ view: V) -> NSHostingController<V> {
-        let host = NSHostingController(rootView: view)
-        host.sizingOptions = []
-        return host
+    /// Positive delta = mouse moved right = trailing should shrink.
+    private func dragTrailing(delta: CGFloat, total: CGFloat) {
+        let start = dragTrailingStart ?? trailingWidth
+        if dragTrailingStart == nil { dragTrailingStart = start }
+        let proposed = start - delta
+        let maxAllowed = total - centerMin - leadingWidth - DividerView.thickness * 2
+        trailingWidth = clamp(proposed, min: trailingMin, max: min(trailingMax, maxAllowed))
+    }
+
+    private func persist() {
+        dragLeadingStart = nil
+        dragTrailingStart = nil
+        UserDefaults.standard.set(Double(leadingWidth), forKey: "\(autosaveName).leadingWidth")
+        UserDefaults.standard.set(Double(trailingWidth), forKey: "\(autosaveName).trailingWidth")
+    }
+
+    private func clamp(_ value: CGFloat, min lo: CGFloat, max hi: CGFloat) -> CGFloat {
+        Swift.max(lo, Swift.min(hi, value))
     }
 }
 
-final class PersistentSplitController: NSSplitViewController {
-    var autosaveKey: String = ""
-    var leadingInitial: CGFloat = 240
-    var trailingInitial: CGFloat = 280
-    private var didApplyInitialPositions = false
+/// Thin draggable divider with an enlarged invisible hit area and a
+/// resize-cursor on hover. Reports drag deltas to the parent so the
+/// parent owns the width state and the clamping rules.
+private struct DividerView: View {
+    static let thickness: CGFloat = 1
+    static let hitArea: CGFloat = 7
+    let onDrag: (CGFloat) -> Void
+    let onDragEnd: () -> Void
 
-    override func viewDidLayout() {
-        super.viewDidLayout()
-        guard !didApplyInitialPositions else { return }
-        guard splitViewItems.count == 3 else { return }
-        // If autosave restored sizes the framework already applied them by the
-        // time we lay out — only apply defaults when nothing is on disk.
-        if !hasAutosavedFrames {
-            let total = splitView.bounds.width
-            guard total > 0 else { return }
-            // Divider 0: end of leading pane.
-            splitView.setPosition(leadingInitial, ofDividerAt: 0)
-            // Divider 1: end of center pane (= total width - trailingInitial).
-            splitView.setPosition(total - trailingInitial, ofDividerAt: 1)
+    var body: some View {
+        ZStack {
+            Rectangle()
+                .fill(Color(nsColor: .separatorColor))
+                .frame(width: Self.thickness)
+            Rectangle()
+                .fill(Color.white.opacity(0.001))
+                .frame(width: Self.hitArea)
         }
-        didApplyInitialPositions = true
-    }
-
-    private var hasAutosavedFrames: Bool {
-        guard !autosaveKey.isEmpty else { return false }
-        // AppKit stores split-view frames under "NSSplitView Subview Frames <name>".
-        let key = "NSSplitView Subview Frames \(autosaveKey)"
-        return UserDefaults.standard.object(forKey: key) != nil
+        .frame(maxHeight: .infinity)
+        .contentShape(Rectangle().inset(by: -3))
+        .onHover { hovering in
+            if hovering {
+                NSCursor.resizeLeftRight.push()
+            } else {
+                NSCursor.pop()
+            }
+        }
+        .gesture(
+            DragGesture(minimumDistance: 0)
+                .onChanged { value in onDrag(value.translation.width) }
+                .onEnded { _ in onDragEnd() }
+        )
     }
 }

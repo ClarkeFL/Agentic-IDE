@@ -78,9 +78,12 @@ struct RightInspectorView: View {
             .buttonStyle(.borderless)
             .help("Refresh git status")
             .disabled(project == nil)
+            .padding(.trailing, 6)
         }
-        .padding(.horizontal, 12)
-        .padding(.vertical, 8)
+        .padding(.leading, Inspector.hPadding)
+        .padding(.trailing, Inspector.hPadding)
+        .padding(.top, 18)
+        .padding(.bottom, 12)
     }
 
     private var diffHeader: DiffHeader? {
@@ -172,6 +175,13 @@ struct RightInspectorView: View {
             isLoadingDiff = false
         }
     }
+}
+
+/// Single source of truth for horizontal inset across the inspector — the
+/// header, the list rows, and the diff content all line up to the same
+/// gutter so nothing looks dragged left or right of anything else.
+enum Inspector {
+    static let hPadding: CGFloat = 14
 }
 
 // MARK: - Changed files tree
@@ -317,10 +327,18 @@ private struct ChangedFilesList: View {
                 List(selection: $selectedFile) {
                     ForEach(visibleRows) { row in
                         rowView(for: row)
+                            .listRowInsets(EdgeInsets(top: 3,
+                                                      leading: Inspector.hPadding,
+                                                      bottom: 3,
+                                                      trailing: Inspector.hPadding + 8))
+                            .listRowSeparator(.hidden)
+                            .listRowBackground(Color.clear)
                     }
                 }
-                .listStyle(.sidebar)
+                .listStyle(.plain)
                 .scrollContentBackground(.hidden)
+                .environment(\.defaultMinListRowHeight, 0)
+                .padding(.top, 8)
             }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -342,13 +360,12 @@ private struct ChangedFilesList: View {
         }
     }
 
-    /// 14pt per depth level. Files indent an extra 14pt past the chevron
-    /// column so a child file's name sits below its parent directory's
-    /// name (not under the chevron).
+    /// One indent level (14pt) per depth. The chevron column on directory
+    /// rows is the same width, so a file at depth N visually sits below
+    /// its parent's name without an extra column. List's own leading
+    /// inset is collapsed via `listRowInsets` so this is the only indent.
     private func indentSpacer(depth: Int, isFile: Bool) -> some View {
-        let levels = CGFloat(depth)
-        let extra: CGFloat = isFile ? 14 : 0
-        return Color.clear.frame(width: levels * 14 + extra)
+        Color.clear.frame(width: CGFloat(depth) * 14)
     }
 
     private func toggle(_ id: String) {
@@ -386,13 +403,16 @@ private struct DirectoryRow: View {
 
     var body: some View {
         Button(action: toggle) {
-            HStack(spacing: 4) {
+            HStack(spacing: 6) {
                 Color.clear.frame(width: CGFloat(depth) * 14)
+                // Pin chevron to the leading edge of its column so its
+                // pivot point aligns with the leading edge of "CHANGES"
+                // in the header above and with file rows below.
                 Image(systemName: "chevron.right")
                     .font(.system(size: 9, weight: .bold))
                     .foregroundStyle(.secondary)
                     .rotationEffect(.degrees(isExpanded ? 90 : 0))
-                    .frame(width: 10)
+                    .frame(width: 10, alignment: .leading)
                 Text(node.name)
                     .font(.system(size: 11, weight: .semibold))
                     .foregroundStyle(.secondary)
@@ -417,7 +437,7 @@ private struct ChangedFileRow: View {
             VStack(alignment: .leading, spacing: 1) {
                 Text(change.displayName)
                     .font(.system(size: 12))
-                    .foregroundStyle(filenameColor)
+                    .foregroundStyle(.primary)
                     .lineLimit(1)
                     .truncationMode(.middle)
                 Text(change.stateSubtitle)
@@ -451,11 +471,5 @@ private struct ChangedFileRow: View {
         }
     }
 
-    /// Filename takes a soft tint of the status color so a glance at the
-    /// list reads green = new, amber = modified, red = deleted, without
-    /// shouting. Subtitle gets the full status color underneath.
-    private var filenameColor: Color {
-        change.status.tint.opacity(0.92)
-    }
 }
 
