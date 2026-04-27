@@ -11,20 +11,25 @@ struct ProjectWorkspaceView: View {
         let session = sessions.session(for: project.id)
 
         VStack(spacing: 0) {
-            TabBarView(session: session,
-                       project: project,
+            TabBarView(project: project,
                        onLaunch: { ql in launch(ql, in: session) },
-                       onLaunchDefaultShell: { launchDefaultShell(in: session) },
-                       onCloseTab: { id in session.closeTab(id: id) },
-                       onSelectTab: { id in session.activeTabId = id })
+                       onLaunchDefaultShell: { launchDefaultShell(in: session) })
 
             Divider()
 
             ZStack {
-                if let active = session.activeTab {
-                    GhosttyTerminal(view: active.view)
-                        .id(active.id)
-                } else {
+                // Keep every terminal NSView attached to the hierarchy at the
+                // same time and just toggle opacity to switch. Adding/removing
+                // surfaces from the AppKit tree on every switch was the source
+                // of the visible lag — surfaces now stay live and instantly
+                // pop to the front when their tab is selected.
+                ForEach(session.tabs) { tab in
+                    GhosttyTerminal(view: tab.view)
+                        .opacity(tab.id == session.activeTabId ? 1 : 0)
+                        .allowsHitTesting(tab.id == session.activeTabId)
+                        .zIndex(tab.id == session.activeTabId ? 1 : 0)
+                }
+                if session.activeTab == nil {
                     EmptyStateView()
                 }
             }
@@ -42,6 +47,7 @@ struct ProjectWorkspaceView: View {
 
         let cfg = PtyService.quickLaunchConfig(ql, cwd: project.path)
         let tab = TerminalTab(title: ql.label, config: cfg)
+        session.wireSmartRename(tab)
         session.addTab(tab)
         store.recordActivity(projectId: project.id, command: ql.command)
     }
@@ -50,6 +56,7 @@ struct ProjectWorkspaceView: View {
         let cfg = PtyService.defaultShellConfig(cwd: project.path)
         let shell = (PtyService.defaultShell() as NSString).lastPathComponent
         let tab = TerminalTab(title: shell, config: cfg)
+        session.wireSmartRename(tab)
         session.addTab(tab)
         store.recordActivity(projectId: project.id, command: shell)
     }

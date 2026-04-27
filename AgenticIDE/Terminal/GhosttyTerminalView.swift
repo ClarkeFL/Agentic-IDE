@@ -27,6 +27,19 @@ final class GhosttyTerminalView: NSView, NSTextInputClient {
     private var imeMarkedRange = NSRange(location: NSNotFound, length: 0)
     private var imeSelectedRange = NSRange(location: NSNotFound, length: 0)
 
+    // MARK: - Smart-rename hook
+    //
+    // Tracks the user's most recently typed line so the host (TerminalTab)
+    // can rename a tab to that line. We accumulate printable input, handle
+    // Backspace, and clear on cursor / control keys that imply non-line edits.
+    // On Return we hand the buffer to `onUserSubmitLine` and reset.
+
+    /// Called on the main thread when the user presses Return after typing
+    /// a non-empty line. The string contains everything they typed since the
+    /// previous Return / cancel.
+    var onUserSubmitLine: ((String) -> Void)?
+    private var lineBuffer: String = ""
+
     init(config: SurfaceConfig) {
         self.config = config
         super.init(frame: .zero)
@@ -60,7 +73,26 @@ final class GhosttyTerminalView: NSView, NSTextInputClient {
 
     deinit {
         if let surface {
-            ghostty_surface_free(surface)
+            // ghostty_surface_free reaps the PTY child and tears down the
+            // renderer, which can take a few hundred ms. Hand the handle off
+            // to a background queue so the close click returns immediately
+            // and the SwiftUI re-render isn't blocked.
+            let handle = surface
+            self.surface = nil
+            DispatchQueue.global(qos: .background).async {
+                ghostty_surface_free(handle)
+            }
+        }
+    }
+
+    /// Optional hook callers can use to release the ghostty surface eagerly
+    /// instead of waiting for ARC. Useful when a tab is closed but its NSView
+    /// might be retained briefly by the SwiftUI representable cache.
+    func tearDown() {
+        guard let handle = surface else { return }
+        surface = nil
+        DispatchQueue.global(qos: .background).async {
+            ghostty_surface_free(handle)
         }
     }
 
@@ -76,6 +108,23 @@ final class GhosttyTerminalView: NSView, NSTextInputClient {
         (layer as? CAMetalLayer)?.contentsScale = scale
         if let surface {
             ghostty_surface_set_content_scale(surface, scale, scale)
+        }
+        // After re-attaching to a window the frame may already be the size
+        // we want, so AppKit doesn't fire `setFrameSize` and the metal layer
+        // can show whatever stale frame it had before detach. Re-assert the
+        // drawable size + surface size on the next runloop tick (bounds are
+        // settled by then) — this is the same work `setFrameSize` does, and
+        // matches what a manual divider drag was triggering.
+        DispatchQueue.main.async { [weak self] in
+            guard let self = self, self.window != nil else { return }
+            let scale = self.window?.backingScaleFactor ?? 2.0
+            let widthPx = UInt32(max(1, self.bounds.width * scale))
+            let heightPx = UInt32(max(1, self.bounds.height * scale))
+            (self.layer as? CAMetalLayer)?.drawableSize = CGSize(width: CGFloat(widthPx), height: CGFloat(heightPx))
+            if let surface = self.surface {
+                ghostty_surface_set_size(surface, widthPx, heightPx)
+                ghostty_surface_refresh(surface)
+            }
         }
     }
 
@@ -179,6 +228,7 @@ final class GhosttyTerminalView: NSView, NSTextInputClient {
     // MARK: - Keyboard
 
     override func keyDown(with event: NSEvent) {
+        observeForLineBuffer(event)
         if let surface {
             var key = ghostty_input_key_s()
             key.action = GHOSTTY_ACTION_PRESS
@@ -191,6 +241,37 @@ final class GhosttyTerminalView: NSView, NSTextInputClient {
             if ghostty_surface_key(surface, key) { return }
         }
         interpretKeyEvents([event])
+    }
+
+    /// Updates `lineBuffer` based on which control key was pressed. Printable
+    /// characters are appended later in `insertText` (so we don't have to
+    /// reimplement modifier/IME handling here).
+    private func observeForLineBuffer(_ event: NSEvent) {
+        let kc = Int(event.keyCode)
+        switch kc {
+        case kVK_Return, kVK_ANSI_KeypadEnter:
+            // Shift+Return = soft newline (Claude / many CLIs use this for
+            // multi-line input); keep the buffer.
+            if event.modifierFlags.contains(.shift) {
+                lineBuffer.append("\n")
+                return
+            }
+            let submitted = lineBuffer.trimmingCharacters(in: .whitespacesAndNewlines)
+            lineBuffer = ""
+            if !submitted.isEmpty {
+                onUserSubmitLine?(submitted)
+            }
+        case kVK_Delete:
+            if !lineBuffer.isEmpty { lineBuffer.removeLast() }
+        case kVK_Escape,
+             kVK_LeftArrow, kVK_RightArrow, kVK_UpArrow, kVK_DownArrow,
+             kVK_Home, kVK_End, kVK_PageUp, kVK_PageDown:
+            // Cursor / cancel keys imply the user is editing a previous line
+            // or escaping the prompt — give up on tracking this buffer.
+            lineBuffer = ""
+        default:
+            break
+        }
     }
 
     override func keyUp(with event: NSEvent) {
@@ -259,6 +340,11 @@ final class GhosttyTerminalView: NSView, NSTextInputClient {
         else if let s = string as? NSAttributedString { text = s.string }
         else { return }
         guard let surface, !text.isEmpty else { return }
+        // Capture printable input for the smart-rename buffer. Filter out
+        // control characters (Return/Tab arrive separately as keyDown events
+        // and are tracked via observeForLineBuffer).
+        let printable = text.filter { !$0.isNewline && $0 != "\t" && !($0.asciiValue.map { $0 < 0x20 } ?? false) }
+        if !printable.isEmpty { lineBuffer.append(printable) }
         text.withCString { ptr in
             ghostty_surface_text(surface, ptr, UInt(strlen(ptr)))
         }
@@ -320,9 +406,78 @@ final class GhosttyTerminalView: NSView, NSTextInputClient {
     }
 
     @objc func paste(_ sender: Any?) {
-        guard let surface, let s = NSPasteboard.general.string(forType: .string) else { return }
+        guard surface != nil else { return }
+        let pb = NSPasteboard.general
+
+        // 1) File URLs from Finder (or any app that puts file URLs on the pasteboard):
+        //    paste the shell-quoted path(s) so the agent / shell can read them.
+        if let urls = pb.readObjects(forClasses: [NSURL.self], options: nil) as? [URL],
+           !urls.isEmpty,
+           urls.allSatisfy(\.isFileURL) {
+            let joined = urls.map { Self.shellQuote($0.path) }.joined(separator: " ")
+            sendText(joined)
+            return
+        }
+
+        // 2) Image data on the pasteboard (e.g. screenshot, image copied from a browser
+        //    or Preview): save to a temp file and paste its path. This lets agents
+        //    like Claude Code pick up the image by reading the file.
+        if let (data, ext) = Self.imageDataFromPasteboard(pb),
+           let url = Self.saveImageToTemp(data, ext: ext) {
+            sendText(Self.shellQuote(url.path))
+            return
+        }
+
+        // 3) Plain text fallback (the original behavior).
+        if let s = pb.string(forType: .string) {
+            sendText(s)
+        }
+    }
+
+    private func sendText(_ s: String) {
+        guard let surface, !s.isEmpty else { return }
         s.withCString { ptr in
             ghostty_surface_text(surface, ptr, UInt(strlen(ptr)))
+        }
+    }
+
+    /// Single-quote a path for safe shell pasting. Embedded single quotes are
+    /// closed-escaped-reopened: foo'bar -> 'foo'\''bar'.
+    private static func shellQuote(_ path: String) -> String {
+        let escaped = path.replacingOccurrences(of: "'", with: "'\\''")
+        return "'\(escaped)'"
+    }
+
+    /// Returns (data, extension) for the first image representation we recognise.
+    /// Prefers PNG; converts TIFF to PNG when possible so agents always get a png.
+    private static func imageDataFromPasteboard(_ pb: NSPasteboard) -> (Data, String)? {
+        let types = pb.types ?? []
+        if types.contains(.png), let data = pb.data(forType: .png) {
+            return (data, "png")
+        }
+        if types.contains(.tiff), let data = pb.data(forType: .tiff) {
+            if let rep = NSBitmapImageRep(data: data),
+               let png = rep.representation(using: .png, properties: [:]) {
+                return (png, "png")
+            }
+            return (data, "tiff")
+        }
+        return nil
+    }
+
+    private static func saveImageToTemp(_ data: Data, ext: String) -> URL? {
+        let fm = FileManager.default
+        let dir = fm.temporaryDirectory.appendingPathComponent("AgenticIDE-paste", isDirectory: true)
+        try? fm.createDirectory(at: dir, withIntermediateDirectories: true)
+        let formatter = DateFormatter()
+        formatter.dateFormat = "yyyyMMdd-HHmmss-SSS"
+        let name = "image-\(formatter.string(from: Date())).\(ext)"
+        let url = dir.appendingPathComponent(name)
+        do {
+            try data.write(to: url, options: .atomic)
+            return url
+        } catch {
+            return nil
         }
     }
 }

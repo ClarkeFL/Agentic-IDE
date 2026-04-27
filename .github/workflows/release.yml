@@ -1,0 +1,148 @@
+name: Release
+
+# Trigger: push a tag like `v0.2.0`. The job builds Release, packages an
+# ad-hoc-signed `.zip`, signs the update with Sparkle's Ed25519 key (from
+# `SPARKLE_PRIVATE_KEY`), creates a GitHub Release, and updates `appcast.xml`
+# on the default branch so installed copies of the app see the new version.
+#
+# One-time setup expected:
+#   - Repo secret `SPARKLE_PRIVATE_KEY` containing the base64 Ed25519 key
+#     printed by Sparkle's `generate_keys` tool.
+#   - Public key embedded in the app via `INFOPLIST_KEY_SUPublicEDKey`
+#     (set in AgenticIDE.xcodeproj build settings).
+#   - `SUFeedURL` in build settings pointing at the appcast URL on this repo.
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: macos-14
+    timeout-minutes: 25
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          # Need full history so we can push appcast.xml back to the default
+          # branch via the same workflow run.
+          fetch-depth: 0
+
+      - name: Select Xcode
+        run: sudo xcode-select -s /Applications/Xcode_16.app || sudo xcode-select -s /Applications/Xcode.app
+
+      - name: Read version from tag
+        id: version
+        run: |
+          TAG="${GITHUB_REF#refs/tags/}"
+          # Strip leading 'v'.
+          VERSION="${TAG#v}"
+          echo "tag=$TAG"     >> "$GITHUB_OUTPUT"
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+
+      - name: Resolve SPM packages
+        run: xcodebuild -project AgenticIDE.xcodeproj -scheme AgenticIDE -resolvePackageDependencies
+
+      - name: Build & archive
+        run: |
+          xcodebuild \
+            -project AgenticIDE.xcodeproj \
+            -scheme AgenticIDE \
+            -configuration Release \
+            -destination 'platform=macOS' \
+            -archivePath build/AgenticIDE.xcarchive \
+            CODE_SIGN_IDENTITY=- \
+            CODE_SIGNING_REQUIRED=NO \
+            MARKETING_VERSION=${{ steps.version.outputs.version }} \
+            CURRENT_PROJECT_VERSION=${{ github.run_number }} \
+            archive
+
+      - name: Export .app from archive
+        run: |
+          mkdir -p build/Export
+          cp -R build/AgenticIDE.xcarchive/Products/Applications/AgenticIDE.app build/Export/
+
+      - name: Re-sign ad-hoc (deep) for distribution
+        run: |
+          codesign --force --deep --sign - build/Export/AgenticIDE.app
+
+      - name: Package as zip
+        run: |
+          cd build/Export
+          ditto -c -k --sequesterRsrc --keepParent AgenticIDE.app ../AgenticIDE-${{ steps.version.outputs.version }}.zip
+
+      - name: Locate Sparkle tools
+        id: sparkle
+        run: |
+          DERIVED=$(xcodebuild -project AgenticIDE.xcodeproj -scheme AgenticIDE -showBuildSettings 2>/dev/null | awk -F'= ' '/ BUILD_DIR /{print $2}' | head -1)
+          # Sparkle CLI tools live next to the framework after the package
+          # has been resolved + a build has been done.
+          SPARKLE_TOOLS=$(find ~/Library/Developer/Xcode/DerivedData -type d -name 'Sparkle' -path '*Sparkle.xcframework*' 2>/dev/null | head -1)
+          # Fall back to the artifacts cache that SPM puts the prebuilt tools in.
+          SIGN_TOOL=$(find ~/Library/Developer/Xcode/DerivedData -name sign_update -type f 2>/dev/null | head -1)
+          GENERATE_TOOL=$(find ~/Library/Developer/Xcode/DerivedData -name generate_appcast -type f 2>/dev/null | head -1)
+          echo "sign_update=$SIGN_TOOL" >> "$GITHUB_OUTPUT"
+          echo "generate_appcast=$GENERATE_TOOL" >> "$GITHUB_OUTPUT"
+
+      - name: Sign the update
+        id: sign
+        env:
+          SPARKLE_PRIVATE_KEY: ${{ secrets.SPARKLE_PRIVATE_KEY }}
+        run: |
+          if [ -z "$SPARKLE_PRIVATE_KEY" ]; then
+            echo "::warning::SPARKLE_PRIVATE_KEY secret not set — appcast will be unsigned"
+            echo "signature=" >> "$GITHUB_OUTPUT"
+            echo "length=$(stat -f%z build/AgenticIDE-${{ steps.version.outputs.version }}.zip)" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          KEY_FILE="$RUNNER_TEMP/sparkle_ed25519.key"
+          printf '%s' "$SPARKLE_PRIVATE_KEY" > "$KEY_FILE"
+          chmod 600 "$KEY_FILE"
+          OUTPUT=$("${{ steps.sparkle.outputs.sign_update }}" -f "$KEY_FILE" "build/AgenticIDE-${{ steps.version.outputs.version }}.zip")
+          # sign_update prints e.g.  sparkle:edSignature="…" length="…"
+          SIG=$(echo "$OUTPUT" | sed -nE 's/.*sparkle:edSignature="([^"]+)".*/\1/p')
+          LEN=$(echo "$OUTPUT" | sed -nE 's/.*length="([^"]+)".*/\1/p')
+          echo "signature=$SIG" >> "$GITHUB_OUTPUT"
+          echo "length=$LEN" >> "$GITHUB_OUTPUT"
+          rm -f "$KEY_FILE"
+
+      - name: Update appcast.xml
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+          BUILD: ${{ github.run_number }}
+          SIG: ${{ steps.sign.outputs.signature }}
+          LEN: ${{ steps.sign.outputs.length }}
+          REPO: ${{ github.repository }}
+          TAG: ${{ steps.version.outputs.tag }}
+        run: |
+          ./Scripts/update-appcast.sh
+
+      - name: Commit appcast back to default branch
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email 'github-actions[bot]@users.noreply.github.com'
+          DEFAULT_BRANCH="${GITHUB_REF_NAME}"
+          DEFAULT_BRANCH="${{ github.event.repository.default_branch }}"
+          git fetch origin "$DEFAULT_BRANCH"
+          git checkout "$DEFAULT_BRANCH"
+          git add appcast.xml
+          if git diff --cached --quiet; then
+            echo "No appcast changes to commit"
+          else
+            git commit -m "chore(release): update appcast for ${{ steps.version.outputs.tag }}"
+            git push origin HEAD:"$DEFAULT_BRANCH"
+          fi
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          name: AgenticIDE ${{ steps.version.outputs.version }}
+          tag_name: ${{ steps.version.outputs.tag }}
+          generate_release_notes: true
+          files: |
+            build/AgenticIDE-${{ steps.version.outputs.version }}.zip

@@ -1,71 +1,44 @@
 import SwiftUI
 
 struct TabBarView: View {
-    @Bindable var session: ProjectSession
     let project: Project
     let onLaunch: (QuickLaunch) -> Void
     let onLaunchDefaultShell: () -> Void
-    let onCloseTab: (UUID) -> Void
-    let onSelectTab: (UUID) -> Void
 
     @State private var runServerEditTarget: QuickLaunch?
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 0) {
-            ScrollView(.horizontal, showsIndicators: false) {
-                HStack(spacing: 6) {
-                    ForEach(project.quickLaunches) { ql in
-                        QuickLaunchButton(ql: ql) {
-                            if ql.command.isEmpty {
-                                runServerEditTarget = ql
-                            } else {
-                                onLaunch(ql)
-                            }
-                        }
-                        .popover(item: Binding(
-                            get: { runServerEditTarget?.id == ql.id ? runServerEditTarget : nil },
-                            set: { runServerEditTarget = $0 }
-                        )) { target in
-                            RunServerPopover(initialCommand: target.command,
-                                             onSave: { newCmd in
-                                                 var updated = target
-                                                 updated.command = newCmd
-                                                 // The parent owns updating the store + spawning.
-                                                 onLaunch(updated)
-                                                 runServerEditTarget = nil
-                                             },
-                                             onCancel: { runServerEditTarget = nil })
+        ScrollView(.horizontal, showsIndicators: false) {
+            HStack(spacing: 6) {
+                ForEach(project.quickLaunches) { ql in
+                    QuickLaunchButton(ql: ql) {
+                        if ql.command.isEmpty {
+                            runServerEditTarget = ql
+                        } else {
+                            onLaunch(ql)
                         }
                     }
-
-                    Button(action: onLaunchDefaultShell) {
-                        Image(systemName: "plus")
-                            .font(.body.weight(.semibold))
-                            .padding(.horizontal, 8)
-                            .padding(.vertical, 4)
+                    .popover(item: Binding(
+                        get: { runServerEditTarget?.id == ql.id ? runServerEditTarget : nil },
+                        set: { runServerEditTarget = $0 }
+                    )) { target in
+                        RunServerPopover(initialCommand: target.command,
+                                         onSave: { newCmd in
+                                             var updated = target
+                                             updated.command = newCmd
+                                             onLaunch(updated)
+                                             runServerEditTarget = nil
+                                         },
+                                         onCancel: { runServerEditTarget = nil })
                     }
-                    .buttonStyle(.bordered)
-                    .help("New shell tab")
                 }
-                .padding(.horizontal, 10)
-                .padding(.vertical, 8)
-            }
 
-            if !session.tabs.isEmpty {
-                Divider()
-                ScrollView(.horizontal, showsIndicators: false) {
-                    HStack(spacing: 4) {
-                        ForEach(session.tabs) { tab in
-                            TabChip(tab: tab,
-                                    isActive: session.activeTabId == tab.id,
-                                    onSelect: { onSelectTab(tab.id) },
-                                    onClose: { onCloseTab(tab.id) })
-                        }
-                    }
-                    .padding(.horizontal, 10)
-                    .padding(.vertical, 6)
-                }
+                InlineIconButton(systemName: "plus",
+                                 help: "New shell tab",
+                                 action: onLaunchDefaultShell)
             }
+            .padding(.horizontal, 10)
+            .padding(.vertical, 6)
         }
         .background(.regularMaterial)
     }
@@ -75,53 +48,64 @@ private struct QuickLaunchButton: View {
     let ql: QuickLaunch
     let action: () -> Void
 
+    @State private var isHovered = false
+    @State private var isPressed = false
+
     var body: some View {
         Button(action: action) {
-            HStack(spacing: 6) {
-                if let icon = ql.icon {
-                    Image(systemName: icon)
-                }
+            HStack(spacing: 5) {
+                quickLaunchIcon(name: ql.icon, size: 12)
                 Text(ql.label)
+                    .font(.system(size: 12, weight: .medium))
             }
-            .padding(.horizontal, 10)
-            .padding(.vertical, 4)
+            .padding(.horizontal, 6)
+            .padding(.vertical, 3)
+            .background(
+                RoundedRectangle(cornerRadius: 5, style: .continuous)
+                    .fill(Color.primary.opacity(isPressed ? 0.14 : (isHovered ? 0.08 : 0.0)))
+            )
+            .contentShape(Rectangle())
+            .scaleEffect(isPressed ? 0.97 : 1.0)
         }
-        .buttonStyle(.bordered)
+        .buttonStyle(.plain)
+        .onHover { isHovered = $0 }
+        .simultaneousGesture(
+            DragGesture(minimumDistance: 0)
+                .onChanged { _ in isPressed = true }
+                .onEnded { _ in isPressed = false }
+        )
         .help(ql.command.isEmpty ? "Click to set a command" : ql.command)
     }
 }
 
-private struct TabChip: View {
-    let tab: TerminalTab
-    let isActive: Bool
-    let onSelect: () -> Void
-    let onClose: () -> Void
+private struct InlineIconButton: View {
+    let systemName: String
+    let help: String
+    let action: () -> Void
+
+    @State private var isHovered = false
+    @State private var isPressed = false
 
     var body: some View {
-        HStack(spacing: 6) {
-            Button(action: onSelect) {
-                Text(tab.title)
-                    .lineLimit(1)
-                    .padding(.leading, 10)
-                    .padding(.vertical, 3)
-            }
-            .buttonStyle(.plain)
-
-            Button(action: onClose) {
-                Image(systemName: "xmark")
-                    .font(.system(size: 9, weight: .bold))
-                    .padding(4)
-            }
-            .buttonStyle(.plain)
-            .padding(.trailing, 4)
+        Button(action: action) {
+            Image(systemName: systemName)
+                .font(.system(size: 12, weight: .semibold))
+                .frame(width: 22, height: 22)
+                .background(
+                    RoundedRectangle(cornerRadius: 5, style: .continuous)
+                        .fill(Color.primary.opacity(isPressed ? 0.14 : (isHovered ? 0.08 : 0.0)))
+                )
+                .contentShape(Rectangle())
+                .scaleEffect(isPressed ? 0.95 : 1.0)
         }
-        .background(
-            RoundedRectangle(cornerRadius: 6, style: .continuous)
-                .fill(isActive ? Color.accentColor.opacity(0.18) : Color.gray.opacity(0.12))
+        .buttonStyle(.plain)
+        .onHover { isHovered = $0 }
+        .simultaneousGesture(
+            DragGesture(minimumDistance: 0)
+                .onChanged { _ in isPressed = true }
+                .onEnded { _ in isPressed = false }
         )
-        .overlay(
-            RoundedRectangle(cornerRadius: 6, style: .continuous)
-                .strokeBorder(isActive ? Color.accentColor.opacity(0.5) : Color.clear, lineWidth: 1)
-        )
+        .help(help)
     }
 }
+

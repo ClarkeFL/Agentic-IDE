@@ -3,21 +3,31 @@ import UniformTypeIdentifiers
 
 struct MainWindow: View {
     @Environment(ProjectStore.self) private var store
+    @Environment(SessionManager.self) private var sessions
     @AppStorage("currentProjectId") private var currentProjectIdString: String = ""
 
     @State private var selectedProjectId: UUID?
 
     var body: some View {
-        NavigationSplitView(columnVisibility: .constant(.all)) {
-            ProjectSidebarView(selectedProjectId: $selectedProjectId)
-                .navigationSplitViewColumnWidth(min: 200, ideal: 240, max: 360)
-        } content: {
-            workspaceColumn
-                .navigationSplitViewColumnWidth(min: 480, ideal: 720)
-        } detail: {
-            RightInspectorPlaceholder(project: activeProject)
-                .navigationSplitViewColumnWidth(min: 220, ideal: 280, max: 480)
-        }
+        PersistentSplitView(
+            autosaveName: "AgenticIDE.MainSplit",
+            leading: {
+                ProjectSidebarView(selectedProjectId: $selectedProjectId)
+                    .environment(store)
+                    .environment(sessions)
+            },
+            center: {
+                workspaceColumn
+                    .environment(store)
+                    .environment(sessions)
+            },
+            trailing: {
+                RightInspectorView(project: activeProject)
+                    .environment(store)
+                    .environment(sessions)
+            }
+        )
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
         .navigationTitle(activeProject?.name ?? "Agentic IDE")
         .onAppear { restoreSelection() }
         .onChange(of: selectedProjectId) { _, new in
