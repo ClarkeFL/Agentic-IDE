@@ -11,6 +11,8 @@ struct Project: Identifiable, Codable, Hashable {
     var lastActivityAt: Date?
     var lastActivityCommand: String?
     var archived: Bool
+    /// Group this project belongs to. nil means "Ungrouped".
+    var groupId: UUID?
 
     init(id: UUID = UUID(),
          name: String,
@@ -18,7 +20,8 @@ struct Project: Identifiable, Codable, Hashable {
          quickLaunches: [QuickLaunch] = QuickLaunch.defaults(),
          lastActivityAt: Date? = nil,
          lastActivityCommand: String? = nil,
-         archived: Bool = false) {
+         archived: Bool = false,
+         groupId: UUID? = nil) {
         self.id = id
         self.name = name
         self.pathString = path.path
@@ -26,6 +29,7 @@ struct Project: Identifiable, Codable, Hashable {
         self.lastActivityAt = lastActivityAt
         self.lastActivityCommand = lastActivityCommand
         self.archived = archived
+        self.groupId = groupId
     }
 
     var path: URL { URL(fileURLWithPath: pathString) }

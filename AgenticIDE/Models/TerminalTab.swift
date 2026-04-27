@@ -10,6 +10,9 @@ final class TerminalTab: Identifiable, Hashable {
     let id: UUID
     var title: String
     let command: String?
+    /// Captured at spawn time so the tab can be re-spawned on next launch with
+    /// the same working directory.
+    let workingDirectoryPath: String?
     let view: GhosttyTerminalView
     let createdAt: Date
 
@@ -17,6 +20,7 @@ final class TerminalTab: Identifiable, Hashable {
         self.id = id
         self.title = title
         self.command = config.command
+        self.workingDirectoryPath = config.workingDirectory?.path
         self.view = GhosttyTerminalView(config: config)
         self.createdAt = Date()
     }

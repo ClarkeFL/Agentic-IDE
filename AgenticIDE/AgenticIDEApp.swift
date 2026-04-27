@@ -4,6 +4,7 @@ import SwiftUI
 struct AgenticIDEApp: App {
     @State private var store = ProjectStore()
     @State private var sessions = SessionManager()
+    @StateObject private var updater = UpdaterManager()
 
     init() {
         GhosttyApp.shared.bootstrap()
@@ -14,6 +15,7 @@ struct AgenticIDEApp: App {
             MainWindow()
                 .environment(store)
                 .environment(sessions)
+                .environmentObject(updater)
                 .frame(minWidth: 900, minHeight: 560)
         }
         .windowResizability(.contentMinSize)
@@ -24,6 +26,12 @@ struct AgenticIDEApp: App {
                     NotificationCenter.default.post(name: .addProject, object: nil)
                 }
                 .keyboardShortcut("n", modifiers: [.command])
+            }
+            // Sparkle-driven update flow. Sits in the app menu where macOS
+            // users expect it.
+            CommandGroup(after: .appInfo) {
+                Button("Check for Updates…") { updater.checkForUpdates() }
+                    .disabled(!updater.canCheckForUpdates)
             }
         }
     }
