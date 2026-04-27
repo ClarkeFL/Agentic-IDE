@@ -51,6 +51,18 @@ private struct QuickLaunchButton: View {
     @State private var isHovered = false
     @State private var isPressed = false
 
+    @AppStorage(AppSettings.Keys.claudeDangerousSkipPermissions)
+    private var claudeDangerous: Bool = false
+
+    @AppStorage(AppSettings.Keys.codexDangerousBypass)
+    private var codexDangerous: Bool = false
+
+    private var commandExecutable: String {
+        let trimmed = ql.command.trimmingCharacters(in: .whitespaces)
+        guard let token = trimmed.split(separator: " ", maxSplits: 1).first else { return "" }
+        return (String(token) as NSString).lastPathComponent
+    }
+
     var body: some View {
         Button(action: action) {
             HStack(spacing: 5) {
@@ -74,7 +86,38 @@ private struct QuickLaunchButton: View {
                 .onChanged { _ in isPressed = true }
                 .onEnded { _ in isPressed = false }
         )
-        .help(ql.command.isEmpty ? "Click to set a command" : ql.command)
+        .help(helpText)
+        .contextMenu { contextMenuContents }
+    }
+
+    private var helpText: String {
+        if ql.command.isEmpty { return "Click to set a command" }
+        switch commandExecutable {
+        case "claude" where claudeDangerous:
+            return ql.command + " --dangerously-skip-permissions"
+        case "codex" where codexDangerous:
+            return ql.command + " --dangerously-bypass-approvals-and-sandbox"
+        default:
+            return ql.command
+        }
+    }
+
+    @ViewBuilder
+    private var contextMenuContents: some View {
+        switch commandExecutable {
+        case "claude":
+            Toggle("Run with --dangerously-skip-permissions", isOn: $claudeDangerous)
+            Divider()
+            Text("Applies app-wide. Change in Settings…")
+                .font(.caption)
+        case "codex":
+            Toggle("Run with --dangerously-bypass-approvals-and-sandbox", isOn: $codexDangerous)
+            Divider()
+            Text("Applies app-wide. Change in Settings…")
+                .font(.caption)
+        default:
+            EmptyView()
+        }
     }
 }
 

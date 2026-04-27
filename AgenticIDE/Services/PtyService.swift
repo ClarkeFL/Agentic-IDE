@@ -29,8 +29,32 @@ enum PtyService {
     /// the user's command paints its UI.
     static func quickLaunchConfig(_ ql: QuickLaunch, cwd: URL) -> SurfaceConfig {
         let shell = defaultShell()
-        let escaped = ql.command.replacingOccurrences(of: "'", with: "'\\''")
+        let augmented = augmentedCommand(ql.command)
+        let escaped = augmented.replacingOccurrences(of: "'", with: "'\\''")
         let cmd = "\(shell) -ilc 'clear; \(escaped)'"
         return SurfaceConfig(command: cmd, workingDirectory: cwd, env: [:])
+    }
+
+    /// If the user has flipped on a "dangerous" toggle in Settings and the
+    /// command's first token is `claude` or `codex`, append the matching
+    /// auto-accept flag. Idempotent — won't duplicate an existing flag.
+    static func augmentedCommand(_ command: String) -> String {
+        let trimmed = command.trimmingCharacters(in: .whitespaces)
+        guard let firstToken = trimmed.split(separator: " ", maxSplits: 1).first else {
+            return command
+        }
+        let executable = (String(firstToken) as NSString).lastPathComponent
+
+        if executable == "claude",
+           AppSettings.claudeDangerousSkipPermissions,
+           !command.contains("--dangerously-skip-permissions") {
+            return command + " --dangerously-skip-permissions"
+        }
+        if executable == "codex",
+           AppSettings.codexDangerousBypass,
+           !command.contains("--dangerously-bypass-approvals-and-sandbox") {
+            return command + " --dangerously-bypass-approvals-and-sandbox"
+        }
+        return command
     }
 }
