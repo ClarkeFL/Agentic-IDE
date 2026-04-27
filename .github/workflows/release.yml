@@ -22,7 +22,9 @@ permissions:
 
 jobs:
   build:
-    runs-on: macos-14
+    # macos-15 ships Xcode 16, which can open the objectVersion=77 pbxproj
+    # XcodeGen produces. Older runners can't read it.
+    runs-on: macos-15
     timeout-minutes: 25
 
     steps:
