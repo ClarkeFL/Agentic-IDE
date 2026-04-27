@@ -28,6 +28,20 @@ targets:
     deploymentTarget: "14.0"
     sources:
       - path: AgenticIDE
+    # Use an explicit generated Info.plist instead of GENERATE_INFOPLIST_FILE
+    # because Xcode silently drops INFOPLIST_KEY_* settings whose key isn't on
+    # its built-in recognized-keys list — that hid SUFeedURL / SUPublicEDKey
+    # from Sparkle and broke "Check for Updates".
+    info:
+      path: Generated/Info.plist
+      properties:
+        LSApplicationCategoryType: public.app-category.developer-tools
+        NSHumanReadableCopyright: ""
+        NSMainStoryboardFile: ""
+        NSPrincipalClass: NSApplication
+        SUFeedURL: https://raw.githubusercontent.com/ClarkeFL/Agentic-IDE/main/appcast.xml
+        SUEnableAutomaticChecks: true
+        SUPublicEDKey: iNkqfiKbf44ySMxWHYdroNzuxe0T6SKyi/CkkqWpzYo=
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.fabio.AgenticIDE
@@ -37,14 +51,6 @@ targets:
         CODE_SIGN_IDENTITY: "-"
         DEVELOPMENT_TEAM: ""
         ENABLE_HARDENED_RUNTIME: YES
-        GENERATE_INFOPLIST_FILE: YES
-        INFOPLIST_KEY_NSHumanReadableCopyright: ""
-        INFOPLIST_KEY_LSApplicationCategoryType: public.app-category.developer-tools
-        INFOPLIST_KEY_NSMainStoryboardFile: ""
-        INFOPLIST_KEY_NSPrincipalClass: NSApplication
-        INFOPLIST_KEY_SUFeedURL: "https://raw.githubusercontent.com/ClarkeFL/Agentic-IDE/main/appcast.xml"
-        INFOPLIST_KEY_SUEnableAutomaticChecks: YES
-        INFOPLIST_KEY_SUPublicEDKey: "iNkqfiKbf44ySMxWHYdroNzuxe0T6SKyi/CkkqWpzYo="
         ARCHS: arm64
         ONLY_ACTIVE_ARCH: YES
         SWIFT_VERSION: "5.10"
