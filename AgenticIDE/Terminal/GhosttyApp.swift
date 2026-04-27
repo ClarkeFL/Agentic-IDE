@@ -86,10 +86,52 @@ final class GhosttyApp {
         }
     }
 
-    private static let actionCallback: ghostty_runtime_action_cb = { _, _, _ in
-        // We don't implement window/tab/split actions in v1.
-        // Returning false signals "not handled".
-        return false
+    private static let actionCallback: ghostty_runtime_action_cb = { _, target, action in
+        // We forward a small subset of surface-scoped events to the owning
+        // GhosttyTerminalView so it can drive its tab's status indicator
+        // (working / awaiting / completed / failed). Everything else — splits,
+        // tabs, fullscreen, etc. — is unimplemented in v1.
+        guard target.tag == GHOSTTY_TARGET_SURFACE else { return false }
+        let surfaceHandle = target.target.surface
+        guard let userdata = ghostty_surface_userdata(surfaceHandle) else {
+            return false
+        }
+        let view = Unmanaged<GhosttyTerminalView>.fromOpaque(userdata).takeUnretainedValue()
+
+        let event: TerminalEvent?
+        switch action.tag {
+        case GHOSTTY_ACTION_PROGRESS_REPORT:
+            event = .progress(progressState(from: action.action.progress_report.state))
+        case GHOSTTY_ACTION_RING_BELL:
+            event = .bell
+        case GHOSTTY_ACTION_COMMAND_FINISHED:
+            event = .commandFinished(exitCode: Int(action.action.command_finished.exit_code))
+        case GHOSTTY_ACTION_SHOW_CHILD_EXITED:
+            event = .childExited(exitCode: Int(action.action.child_exited.exit_code))
+        case GHOSTTY_ACTION_RENDER:
+            // Used as an "is the terminal still actively producing output"
+            // hint so silent moments mid-turn don't drop the working
+            // indicator. TerminalTab applies a gap filter to ignore the
+            // steady cursor-blink renders.
+            event = .render
+        default:
+            event = nil
+        }
+
+        guard let event else { return false }
+        DispatchQueue.main.async { view.onTerminalEvent?(event) }
+        return true
+    }
+
+    private static func progressState(from raw: ghostty_action_progress_report_state_e) -> GhosttyProgressState {
+        switch raw {
+        case GHOSTTY_PROGRESS_STATE_SET: return .set
+        case GHOSTTY_PROGRESS_STATE_REMOVE: return .remove
+        case GHOSTTY_PROGRESS_STATE_ERROR: return .error
+        case GHOSTTY_PROGRESS_STATE_INDETERMINATE: return .indeterminate
+        case GHOSTTY_PROGRESS_STATE_PAUSE: return .pause
+        default: return .remove
+        }
     }
 
     private static let readClipboardCallback: ghostty_runtime_read_clipboard_cb = { userdata, clipboard, state in

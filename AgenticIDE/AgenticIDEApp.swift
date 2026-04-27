@@ -34,6 +34,11 @@ struct AgenticIDEApp: App {
                     .disabled(!updater.canCheckForUpdates)
             }
         }
+
+        // Standard macOS Settings… scene (gives ⌘, automatically).
+        Settings {
+            SettingsView()
+        }
     }
 }
 
