@@ -1,0 +1,21 @@
+<?xml version="1.0" encoding="utf-8"?>
+<rss version="2.0" xmlns:sparkle="http://www.andymatuschak.org/xml-namespaces/sparkle" xmlns:dc="http://purl.org/dc/elements/1.1/">
+    <channel>
+        <title>AgenticIDE</title>
+        <description>Updates for AgenticIDE</description>
+        <language>en</language>
+        <item>
+            <title>Version 0.1.0</title>
+            <link>https://github.com/ClarkeFL/Agentic-IDE/releases/tag/v0.1.0</link>
+            <sparkle:version>4</sparkle:version>
+            <sparkle:shortVersionString>0.1.0</sparkle:shortVersionString>
+            <sparkle:releaseNotesLink>https://github.com/ClarkeFL/Agentic-IDE/releases/tag/v0.1.0</sparkle:releaseNotesLink>
+            <pubDate>Mon, 27 Apr 2026 11:35:36 +0000</pubDate>
+            <enclosure
+                url="https://github.com/ClarkeFL/Agentic-IDE/releases/download/v0.1.0/AgenticIDE-0.1.0.zip"
+                sparkle:edSignature="uNq1qai/eFc4ByQpewHID6bR7hGPHTj2P4y0V9fpjtPEn5vkM+drZ9ZD4vsRmY0i0camfiaWpogarNC5p+cTDw=="
+                length="7645482"
+                type="application/octet-stream" />
+        </item>
+    </channel>
+</rss>
