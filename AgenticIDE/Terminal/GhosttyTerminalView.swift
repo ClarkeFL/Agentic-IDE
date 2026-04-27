@@ -4,25 +4,41 @@ import GhosttyKit
 import Metal
 import OSLog
 
+/// Configuration for the PTY a surface will spawn.
+struct SurfaceConfig {
+    /// Single shell command line; nil means use the user's default login shell.
+    var command: String?
+    /// Working directory for the spawned process.
+    var workingDirectory: URL?
+    /// Extra environment variables (merged on top of the inherited env).
+    var env: [String: String]
+}
+
 /// NSView that hosts a single Ghostty surface. Backed by a CAMetalLayer that
-/// Ghostty's renderer draws into directly. Forwards keyboard, mouse, and
-/// focus events into the surface.
+/// Ghostty's renderer draws into directly. Owns its `ghostty_surface_t` —
+/// one view, one surface, lifetime tied to this object.
 final class GhosttyTerminalView: NSView, NSTextInputClient {
     private let log = Logger(subsystem: "com.fabio.AgenticIDE", category: "GhosttyTerminalView")
 
+    private let config: SurfaceConfig
     private var surface: ghostty_surface_t?
+
     private var markedText = NSMutableAttributedString()
     private var imeMarkedRange = NSRange(location: NSNotFound, length: 0)
     private var imeSelectedRange = NSRange(location: NSNotFound, length: 0)
 
-    override init(frame frameRect: NSRect) {
-        super.init(frame: frameRect)
+    init(config: SurfaceConfig) {
+        self.config = config
+        super.init(frame: .zero)
         commonInit()
+        attachSurfaceIfNeeded()
     }
 
     required init?(coder: NSCoder) {
+        self.config = SurfaceConfig(command: nil, workingDirectory: nil, env: [:])
         super.init(coder: coder)
         commonInit()
+        attachSurfaceIfNeeded()
     }
 
     private func commonInit() {
@@ -32,10 +48,11 @@ final class GhosttyTerminalView: NSView, NSTextInputClient {
         metalLayer.pixelFormat = .bgra8Unorm
         metalLayer.framebufferOnly = false
         metalLayer.contentsScale = NSScreen.main?.backingScaleFactor ?? 2.0
+        metalLayer.masksToBounds = true
         self.layer = metalLayer
         self.layerContentsRedrawPolicy = .duringViewResize
+        self.autoresizingMask = [.width, .height]
 
-        // Track mouse moves so the terminal can update cursor position.
         let opts: NSTrackingArea.Options = [.activeAlways, .inVisibleRect, .mouseMoved, .mouseEnteredAndExited, .cursorUpdate]
         let area = NSTrackingArea(rect: .zero, options: opts, owner: self, userInfo: nil)
         addTrackingArea(area)
@@ -54,8 +71,12 @@ final class GhosttyTerminalView: NSView, NSTextInputClient {
 
     override func viewDidMoveToWindow() {
         super.viewDidMoveToWindow()
-        guard window != nil, surface == nil else { return }
-        attachSurface()
+        guard window != nil else { return }
+        let scale = window?.backingScaleFactor ?? NSScreen.main?.backingScaleFactor ?? 2.0
+        (layer as? CAMetalLayer)?.contentsScale = scale
+        if let surface {
+            ghostty_surface_set_content_scale(surface, scale, scale)
+        }
     }
 
     override func viewDidChangeBackingProperties() {
@@ -78,7 +99,10 @@ final class GhosttyTerminalView: NSView, NSTextInputClient {
         }
     }
 
-    private func attachSurface() {
+    /// Creates the underlying ghostty_surface_t, binding it to this NSView.
+    /// Must be called once. The surface owns the spawned PTY process.
+    private func attachSurfaceIfNeeded() {
+        guard surface == nil else { return }
         guard let app = GhosttyApp.shared.app else {
             log.error("Cannot attach surface: GhosttyApp not bootstrapped")
             return
@@ -88,47 +112,73 @@ final class GhosttyTerminalView: NSView, NSTextInputClient {
         cfg.platform_tag = GHOSTTY_PLATFORM_MACOS
         cfg.platform = ghostty_platform_u(macos: ghostty_platform_macos_s(nsview: Unmanaged.passUnretained(self).toOpaque()))
         cfg.userdata = Unmanaged.passUnretained(self).toOpaque()
-        let scale = window?.backingScaleFactor ?? NSScreen.main?.backingScaleFactor ?? 2.0
+        let scale = NSScreen.main?.backingScaleFactor ?? 2.0
         cfg.scale_factor = scale
-        cfg.context = GHOSTTY_SURFACE_CONTEXT_WINDOW
+        cfg.context = GHOSTTY_SURFACE_CONTEXT_TAB
 
-        guard let s = ghostty_surface_new(app, &cfg) else {
-            log.error("ghostty_surface_new returned nil")
-            return
+        // strdup the strings so they're stable for the duration of the call.
+        // ghostty_surface_new copies these internally; we free our copies after.
+        let cmdC: UnsafeMutablePointer<CChar>? = config.command.map { strdup($0) }
+        let cwdC: UnsafeMutablePointer<CChar>? = config.workingDirectory.map { strdup($0.path) }
+        defer {
+            if let cmdC { free(cmdC) }
+            if let cwdC { free(cwdC) }
         }
-        self.surface = s
+        cfg.command = UnsafePointer(cmdC)
+        cfg.working_directory = UnsafePointer(cwdC)
 
-        let widthPx = UInt32(max(1, bounds.size.width * scale))
-        let heightPx = UInt32(max(1, bounds.size.height * scale))
-        (layer as? CAMetalLayer)?.drawableSize = CGSize(width: CGFloat(widthPx), height: CGFloat(heightPx))
-        ghostty_surface_set_size(s, widthPx, heightPx)
-        ghostty_surface_set_content_scale(s, scale, scale)
+        // Build env_vars on the heap so the pointers in ghostty_env_var_s remain
+        // valid during ghostty_surface_new. Free everything after.
+        let envCount = config.env.count
+        var envKeys: [UnsafeMutablePointer<CChar>?] = []
+        var envVals: [UnsafeMutablePointer<CChar>?] = []
+        envKeys.reserveCapacity(envCount)
+        envVals.reserveCapacity(envCount)
+        for (k, v) in config.env {
+            envKeys.append(strdup(k))
+            envVals.append(strdup(v))
+        }
+        defer {
+            for p in envKeys { if let p { free(p) } }
+            for p in envVals { if let p { free(p) } }
+        }
+
+        var envEntries: [ghostty_env_var_s] = []
+        envEntries.reserveCapacity(envCount)
+        for i in 0..<envCount {
+            envEntries.append(ghostty_env_var_s(key: UnsafePointer(envKeys[i]),
+                                                 value: UnsafePointer(envVals[i])))
+        }
+
+        envEntries.withUnsafeMutableBufferPointer { buf in
+            cfg.env_vars = buf.baseAddress
+            cfg.env_var_count = buf.count
+            guard let s = ghostty_surface_new(app, &cfg) else {
+                log.error("ghostty_surface_new returned nil")
+                return
+            }
+            self.surface = s
+            ghostty_surface_set_content_scale(s, cfg.scale_factor, cfg.scale_factor)
+        }
     }
 
     // MARK: - Focus
 
     override func becomeFirstResponder() -> Bool {
         let ok = super.becomeFirstResponder()
-        if let surface {
-            ghostty_surface_set_focus(surface, true)
-        }
+        if let surface { ghostty_surface_set_focus(surface, true) }
         return ok
     }
 
     override func resignFirstResponder() -> Bool {
         let ok = super.resignFirstResponder()
-        if let surface {
-            ghostty_surface_set_focus(surface, false)
-        }
+        if let surface { ghostty_surface_set_focus(surface, false) }
         return ok
     }
 
     // MARK: - Keyboard
 
     override func keyDown(with event: NSEvent) {
-        // Let NSTextInputClient handle composition / typed characters first.
-        // Ghostty itself processes the key event via ghostty_surface_key for
-        // bindings; the text path handles typed character insertion.
         if let surface {
             var key = ghostty_input_key_s()
             key.action = GHOSTTY_ACTION_PRESS
@@ -138,10 +188,7 @@ final class GhosttyTerminalView: NSView, NSTextInputClient {
             key.text = nil
             key.unshifted_codepoint = 0
             key.composing = false
-            let consumed = ghostty_surface_key(surface, key)
-            if consumed {
-                return
-            }
+            if ghostty_surface_key(surface, key) { return }
         }
         interpretKeyEvents([event])
     }
@@ -159,11 +206,6 @@ final class GhosttyTerminalView: NSView, NSTextInputClient {
         _ = ghostty_surface_key(surface, key)
     }
 
-    override func flagsChanged(with event: NSEvent) {
-        // Could forward modifier-key state, but not required for v1 echo.
-        super.flagsChanged(with: event)
-    }
-
     private func mods(from flags: NSEvent.ModifierFlags) -> ghostty_input_mods_e {
         var raw: UInt32 = 0
         if flags.contains(.shift)    { raw |= GHOSTTY_MODS_SHIFT.rawValue }
@@ -176,24 +218,12 @@ final class GhosttyTerminalView: NSView, NSTextInputClient {
 
     // MARK: - Mouse
 
-    override func mouseDown(with event: NSEvent) {
-        forwardMouseButton(GHOSTTY_MOUSE_PRESS, GHOSTTY_MOUSE_LEFT, event)
-    }
-    override func mouseUp(with event: NSEvent) {
-        forwardMouseButton(GHOSTTY_MOUSE_RELEASE, GHOSTTY_MOUSE_LEFT, event)
-    }
-    override func rightMouseDown(with event: NSEvent) {
-        forwardMouseButton(GHOSTTY_MOUSE_PRESS, GHOSTTY_MOUSE_RIGHT, event)
-    }
-    override func rightMouseUp(with event: NSEvent) {
-        forwardMouseButton(GHOSTTY_MOUSE_RELEASE, GHOSTTY_MOUSE_RIGHT, event)
-    }
-    override func otherMouseDown(with event: NSEvent) {
-        forwardMouseButton(GHOSTTY_MOUSE_PRESS, GHOSTTY_MOUSE_MIDDLE, event)
-    }
-    override func otherMouseUp(with event: NSEvent) {
-        forwardMouseButton(GHOSTTY_MOUSE_RELEASE, GHOSTTY_MOUSE_MIDDLE, event)
-    }
+    override func mouseDown(with event: NSEvent) { forwardMouseButton(GHOSTTY_MOUSE_PRESS, GHOSTTY_MOUSE_LEFT, event) }
+    override func mouseUp(with event: NSEvent) { forwardMouseButton(GHOSTTY_MOUSE_RELEASE, GHOSTTY_MOUSE_LEFT, event) }
+    override func rightMouseDown(with event: NSEvent) { forwardMouseButton(GHOSTTY_MOUSE_PRESS, GHOSTTY_MOUSE_RIGHT, event) }
+    override func rightMouseUp(with event: NSEvent) { forwardMouseButton(GHOSTTY_MOUSE_RELEASE, GHOSTTY_MOUSE_RIGHT, event) }
+    override func otherMouseDown(with event: NSEvent) { forwardMouseButton(GHOSTTY_MOUSE_PRESS, GHOSTTY_MOUSE_MIDDLE, event) }
+    override func otherMouseUp(with event: NSEvent) { forwardMouseButton(GHOSTTY_MOUSE_RELEASE, GHOSTTY_MOUSE_MIDDLE, event) }
 
     override func mouseMoved(with event: NSEvent) { forwardMousePos(event) }
     override func mouseDragged(with event: NSEvent) { forwardMousePos(event) }
@@ -202,10 +232,8 @@ final class GhosttyTerminalView: NSView, NSTextInputClient {
 
     override func scrollWheel(with event: NSEvent) {
         guard let surface else { return }
-        let dx = event.scrollingDeltaX
-        let dy = event.scrollingDeltaY
         let scrollMods: Int32 = event.hasPreciseScrollingDeltas ? 1 : 0
-        ghostty_surface_mouse_scroll(surface, dx, dy, scrollMods)
+        ghostty_surface_mouse_scroll(surface, event.scrollingDeltaX, event.scrollingDeltaY, scrollMods)
     }
 
     private func forwardMouseButton(_ state: ghostty_input_mouse_state_e, _ button: ghostty_input_mouse_button_e, _ event: NSEvent) {
@@ -217,7 +245,6 @@ final class GhosttyTerminalView: NSView, NSTextInputClient {
     private func forwardMousePos(_ event: NSEvent) {
         guard let surface else { return }
         let local = convert(event.locationInWindow, from: nil)
-        // Ghostty expects top-left origin in pixels.
         let scale = window?.backingScaleFactor ?? 2.0
         let x = local.x * scale
         let y = (bounds.height - local.y) * scale
@@ -228,13 +255,9 @@ final class GhosttyTerminalView: NSView, NSTextInputClient {
 
     func insertText(_ string: Any, replacementRange: NSRange) {
         let text: String
-        if let s = string as? String {
-            text = s
-        } else if let s = string as? NSAttributedString {
-            text = s.string
-        } else {
-            return
-        }
+        if let s = string as? String { text = s }
+        else if let s = string as? NSAttributedString { text = s.string }
+        else { return }
         guard let surface, !text.isEmpty else { return }
         text.withCString { ptr in
             ghostty_surface_text(surface, ptr, UInt(strlen(ptr)))
@@ -267,11 +290,7 @@ final class GhosttyTerminalView: NSView, NSTextInputClient {
     func selectedRange() -> NSRange { imeSelectedRange }
     func markedRange() -> NSRange { imeMarkedRange }
     func hasMarkedText() -> Bool { imeMarkedRange.location != NSNotFound }
-
-    func attributedSubstring(forProposedRange range: NSRange, actualRange: NSRangePointer?) -> NSAttributedString? {
-        nil
-    }
-
+    func attributedSubstring(forProposedRange range: NSRange, actualRange: NSRangePointer?) -> NSAttributedString? { nil }
     func validAttributesForMarkedText() -> [NSAttributedString.Key] { [] }
 
     func firstRect(forCharacterRange range: NSRange, actualRange: NSRangePointer?) -> NSRect {
@@ -286,12 +305,7 @@ final class GhosttyTerminalView: NSView, NSTextInputClient {
 
     func characterIndex(for point: NSPoint) -> Int { NSNotFound }
 
-    // MARK: - Editor selectors (cmd-c / cmd-v / cmd-a)
-
-    override func doCommand(by selector: Selector) {
-        // Allow the surface to handle these as bindings.
-        super.doCommand(by: selector)
-    }
+    // MARK: - Edit menu
 
     @objc func copy(_ sender: Any?) {
         guard let surface else { return }
