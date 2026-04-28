@@ -49,6 +49,19 @@ struct FullDiskAccessOnboarding: View {
         .padding(32)
         .frame(width: 480)
         .onDisappear { gate.stopPolling() }
+        .onChange(of: gate.status) { _, newStatus in
+            // Auto-relaunch the moment the user grants FDA. We want to win
+            // the race against System Settings' own "Quit & Reopen" prompt
+            // — that path leaves the toggle in a half-set state on
+            // ad-hoc-signed builds (the toggle reverts to off after the
+            // restart), whereas relaunching ourselves via `open -n` keeps
+            // the grant intact for the new instance.
+            if didOpenSettings, newStatus == .granted {
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.25) {
+                    gate.relaunch()
+                }
+            }
+        }
     }
 
     private var message: String {
