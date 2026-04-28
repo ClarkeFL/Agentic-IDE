@@ -80,10 +80,27 @@ struct MainWindow: View {
     /// Re-probes FDA on appear and shows the onboarding sheet when the user
     /// hasn't been granted access and hasn't already skipped this build.
     /// Cheap to call repeatedly — the probe is just a `FileHandle` open.
+    ///
+    /// When the app is relaunched right after the user toggled FDA in System
+    /// Settings, TCC sometimes hasn't propagated the new grant to our just-
+    /// spawned process by the time the first probe runs — the result is the
+    /// onboarding sheet showing again on a freshly-permitted launch. A short
+    /// re-probe loop covers the propagation window so we don't bother the
+    /// user a second time.
     private func evaluateFullDiskAccess() {
         fda.refresh()
-        if fda.status == .denied && !fda.skippedThisBuild {
-            showFDAOnboarding = true
+        guard fda.status != .granted else { return }
+        if fda.skippedThisBuild { return }
+
+        Task { @MainActor in
+            for _ in 0..<6 {
+                try? await Task.sleep(nanoseconds: 250_000_000)
+                fda.refresh()
+                if fda.status == .granted { return }
+            }
+            if fda.status == .denied && !fda.skippedThisBuild {
+                showFDAOnboarding = true
+            }
         }
     }
 

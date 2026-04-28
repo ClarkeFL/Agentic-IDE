@@ -94,7 +94,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // process to die — otherwise the user sees the bell-and-stay-open bug.
         dismissAttachedSheets(in: NSApp)
         NSApp.terminate(nil)
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.6) { exit(0) }
+        // Background queue: a mid-termination main runloop can stall main-queue
+        // dispatches and skip our safety-net exit, leaving the old process
+        // alongside the relaunched one.
+        DispatchQueue.global(qos: .userInitiated).asyncAfter(deadline: .now() + 0.6) {
+            exit(0)
+        }
     }
 
     private func dismissAttachedSheets(in app: NSApplication) {

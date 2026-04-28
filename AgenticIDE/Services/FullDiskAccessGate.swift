@@ -118,15 +118,20 @@ final class FullDiskAccessGate {
             log.error("relaunch failed: \(error.localizedDescription, privacy: .public)")
             return
         }
-        // Try the normal termination path first so SwiftUI gets a chance to
-        // persist state, but follow up with a hard exit. NSApp.terminate is
-        // routinely refused while a modal sheet is up (which is exactly our
-        // situation — the FDA onboarding sheet is still presented when the
-        // user clicks Restart), and a refused terminate leaves the old PID
-        // running alongside the new one. The 600ms gap is enough for `open`
-        // to hand the spawn off to launchd before we vanish.
+        // Dismiss any sheets so the standard terminate path can complete —
+        // sheets refuse termination silently and that's how we end up with
+        // two instances running side by side.
+        for window in NSApp.windows {
+            if let sheet = window.attachedSheet { window.endSheet(sheet) }
+        }
         DispatchQueue.main.async { NSApp.terminate(nil) }
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.6) { exit(0) }
+        // Hard-exit safety net on a *background* queue. Putting it on the
+        // main queue means a mid-termination main runloop can stall the
+        // dispatch and the old process never dies — exactly the bug the
+        // user reported when clicking Restart with the FDA sheet up.
+        DispatchQueue.global(qos: .userInitiated).asyncAfter(deadline: .now() + 0.6) {
+            exit(0)
+        }
     }
 
     /// Coarse build-identity stamp — bundle version + executable mtime.
