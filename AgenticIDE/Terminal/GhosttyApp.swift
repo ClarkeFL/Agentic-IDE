@@ -149,7 +149,10 @@ final class GhosttyApp {
             // Used as an "is the terminal still actively producing output"
             // hint so silent moments mid-turn don't drop the working
             // indicator. TerminalTab applies a gap filter to ignore the
-            // steady cursor-blink renders.
+            // steady cursor-blink renders. We throttle the firehose to
+            // ~20 Hz at the C-callback level so a hot AI stream can't
+            // flood the main queue with per-frame dispatch_async.
+            if !view.shouldDispatchRender() { return true }
             event = .render
         default:
             event = nil

@@ -1,7 +1,9 @@
+import AppKit
 import SwiftUI
 
 @main
 struct AgenticIDEApp: App {
+    @NSApplicationDelegateAdaptor(AppDelegate.self) private var appDelegate
     @State private var store = ProjectStore()
     @State private var sessions = SessionManager()
     @State private var speaker = SystemSpeaker()
@@ -62,4 +64,42 @@ extension Notification.Name {
     /// Posted by the Speech menu command. Observed by `ProjectWorkspaceView`,
     /// which forwards the active tab's selected text to the shared `Speaker`.
     static let speakSelection = Notification.Name("AgenticIDE.speakSelection")
+}
+
+/// Lives only to make termination unrefusable. macOS sends a quit AppleEvent
+/// when the user toggles a TCC permission and clicks "Quit & Reopen" in
+/// System Settings; with no override, that event was being silently refused
+/// (audible system bell, no quit) whenever our FDA-onboarding sheet was up.
+final class AppDelegate: NSObject, NSApplicationDelegate {
+    func applicationDidFinishLaunching(_ notification: Notification) {
+        NSAppleEventManager.shared().setEventHandler(
+            self,
+            andSelector: #selector(handleQuitAppleEvent(_:withReplyEvent:)),
+            forEventClass: AEEventClass(kCoreEventClass),
+            andEventID: AEEventID(kAEQuitApplication)
+        )
+    }
+
+    func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
+        dismissAttachedSheets(in: sender)
+        return .terminateNow
+    }
+
+    @objc private func handleQuitAppleEvent(_ event: NSAppleEventDescriptor,
+                                            withReplyEvent reply: NSAppleEventDescriptor) {
+        // Run the standard termination flow first so SwiftUI gets a chance to
+        // flush state, but follow up with a hard exit. NSApp.terminate is the
+        // path System Settings expects to use, but if anything blocks it
+        // (modal sheet, NSAlert, document save dialog) we still need the
+        // process to die — otherwise the user sees the bell-and-stay-open bug.
+        dismissAttachedSheets(in: NSApp)
+        NSApp.terminate(nil)
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.6) { exit(0) }
+    }
+
+    private func dismissAttachedSheets(in app: NSApplication) {
+        for window in app.windows {
+            if let sheet = window.attachedSheet { window.endSheet(sheet) }
+        }
+    }
 }

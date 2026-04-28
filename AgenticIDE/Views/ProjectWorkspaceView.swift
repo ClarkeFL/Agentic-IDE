@@ -22,15 +22,20 @@ struct ProjectWorkspaceView: View {
 
             ZStack {
                 // Keep every terminal NSView attached to the hierarchy at the
-                // same time and just toggle opacity to switch. Adding/removing
-                // surfaces from the AppKit tree on every switch was the source
-                // of the visible lag — surfaces now stay live and instantly
-                // pop to the front when their tab is selected.
+                // same time and just toggle activeness to switch. Adding/
+                // removing surfaces from the AppKit tree on every switch was
+                // the source of the visible lag — surfaces now stay live and
+                // instantly pop to the front when their tab is selected.
+                // `isActive` drives both the SwiftUI overlay (opacity / hit
+                // test / z-order) and the AppKit-level hide signal (Ghostty
+                // surface occlusion + metal layer isHidden) so background
+                // tabs aren't burning GPU on frames the user can't see.
                 ForEach(session.tabs) { tab in
-                    GhosttyTerminal(view: tab.view)
-                        .opacity(tab.id == session.activeTabId ? 1 : 0)
-                        .allowsHitTesting(tab.id == session.activeTabId)
-                        .zIndex(tab.id == session.activeTabId ? 1 : 0)
+                    let isActive = tab.id == session.activeTabId
+                    GhosttyTerminal(view: tab.view, isActive: isActive)
+                        .opacity(isActive ? 1 : 0)
+                        .allowsHitTesting(isActive)
+                        .zIndex(isActive ? 1 : 0)
                 }
                 if session.activeTab == nil {
                     EmptyStateView()

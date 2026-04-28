@@ -62,6 +62,25 @@ final class GhosttyTerminalView: NSView, NSTextInputClient {
     /// bar use; the actual cursor change comes through `MOUSE_SHAPE`.
     private(set) var hoveredLinkURL: String?
 
+    /// `mach_absolute_time` of the last `.render` event we let through to
+    /// main. Used by the C action callback to throttle the firehose down to
+    /// ~20 Hz — well below the per-streamed-token rate of any AI CLI but
+    /// still enough to keep the gap-filter in `TerminalTab` correctly
+    /// classifying bursts of output as "still working." Read/written from
+    /// the libxev thread; mutating without a lock is safe because Ghostty
+    /// dispatches per-surface action callbacks serially.
+    @ObservationIgnored
+    private var lastRenderDispatchHostTime: UInt64 = 0
+    /// Minimum interval between `.render` dispatches in mach-absolute units.
+    /// Computed once from `mach_timebase_info` so the comparison stays a
+    /// single 64-bit subtract on the hot path.
+    private static let renderThrottleAbsTime: UInt64 = {
+        var info = mach_timebase_info_data_t()
+        mach_timebase_info(&info)
+        let nanos: UInt64 = 50_000_000  // 50 ms
+        return nanos * UInt64(info.denom) / UInt64(info.numer)
+    }()
+
     init(config: SurfaceConfig) {
         self.config = config
         super.init(frame: .zero)
@@ -145,6 +164,38 @@ final class GhosttyTerminalView: NSView, NSTextInputClient {
     /// another action-callback round trip.
     func setHoveredLink(_ url: String?) {
         hoveredLinkURL = url
+    }
+
+    /// Mark this surface occluded (when its tab goes inactive). Ghostty
+    /// stops painting and the metal layer is hidden so CoreAnimation stops
+    /// compositing it — together that removes the GPU/CPU cost of background
+    /// AI streams the user can't see. Re-activating refreshes the surface
+    /// so it pops back to current state without waiting for a keystroke.
+    func setOccluded(_ occluded: Bool) {
+        guard let surface else { return }
+        ghostty_surface_set_occlusion(surface, occluded)
+        if let metal = layer as? CAMetalLayer {
+            metal.isHidden = occluded
+        }
+        if !occluded {
+            ghostty_surface_refresh(surface)
+        }
+    }
+
+    /// Called from `GhosttyApp.actionCallback` on the libxev thread for
+    /// every `GHOSTTY_ACTION_RENDER` event. Returns true to forward a
+    /// `.render` event to main, false to drop it. Throttles the firehose
+    /// to ~20 Hz: AI streaming runs at 200–400 ms/token so we never lose
+    /// burst classification, but a runaway repaint loop can no longer
+    /// flood the main runloop with per-frame dispatch_async.
+    func shouldDispatchRender() -> Bool {
+        let now = mach_absolute_time()
+        let last = lastRenderDispatchHostTime
+        if last != 0 && now &- last < Self.renderThrottleAbsTime {
+            return false
+        }
+        lastRenderDispatchHostTime = now
+        return true
     }
 
     private static func nsCursor(for shape: ghostty_action_mouse_shape_e) -> NSCursor {

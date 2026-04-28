@@ -14,6 +14,20 @@ final class ProjectStore {
     private(set) var groups: [ProjectGroup] = []
 
     private let storeURL: URL
+    /// Serial queue used to encode + atomic-write the JSON off the main
+    /// thread. Mutations on main schedule a save here with a small debounce
+    /// so a burst of changes (drag-reorder, smart-rename, etc.) collapses
+    /// into a single fsync.
+    private let saveQueue = DispatchQueue(label: "com.fabio.AgenticIDE.ProjectStore.save",
+                                          qos: .utility)
+    @ObservationIgnored
+    private var pendingSave: DispatchWorkItem?
+    /// Debounce window between mutation and the actual write. Long enough to
+    /// coalesce realistic bursts; short enough that a crash within the window
+    /// only loses the most recent change.
+    private let saveDebounce: DispatchTimeInterval = .milliseconds(120)
+    @ObservationIgnored
+    private var terminationObserver: NSObjectProtocol?
 
     init() {
         let fm = FileManager.default
@@ -25,6 +39,21 @@ final class ProjectStore {
         try? fm.createDirectory(at: dir, withIntermediateDirectories: true)
         self.storeURL = dir.appendingPathComponent("projects.json")
         load()
+        // Flush any pending debounced write on app quit so changes inside the
+        // 120 ms window aren't lost.
+        terminationObserver = NotificationCenter.default.addObserver(
+            forName: NSApplication.willTerminateNotification,
+            object: nil,
+            queue: .main
+        ) { [weak self] _ in
+            self?.flushSync()
+        }
+    }
+
+    deinit {
+        if let terminationObserver {
+            NotificationCenter.default.removeObserver(terminationObserver)
+        }
     }
 
     // MARK: - Project mutations
@@ -159,14 +188,38 @@ final class ProjectStore {
         }
     }
 
+    /// Schedules a debounced background write of the current state. Cheap to
+    /// call repeatedly — bursts collapse into a single fsync. Called from
+    /// every mutation method (the existing call sites still spell it `save`).
     private func save() {
+        pendingSave?.cancel()
+        let snapshot = StoreFile(version: 2, projects: projects, groups: groups)
+        let url = storeURL
+        let log = self.log
+        let work = DispatchWorkItem {
+            Self.write(snapshot, to: url, log: log)
+        }
+        pendingSave = work
+        saveQueue.asyncAfter(deadline: .now() + saveDebounce, execute: work)
+    }
+
+    /// Synchronous write. Used from the app-quit path so changes inside the
+    /// debounce window aren't dropped.
+    func flushSync() {
+        pendingSave?.cancel()
+        pendingSave = nil
+        Self.write(StoreFile(version: 2, projects: projects, groups: groups),
+                   to: storeURL,
+                   log: log)
+    }
+
+    private static func write(_ file: StoreFile, to url: URL, log: Logger) {
         do {
             let encoder = JSONEncoder()
-            encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
+            encoder.outputFormatting = .sortedKeys
             encoder.dateEncodingStrategy = .iso8601
-            let file = StoreFile(version: 2, projects: projects, groups: groups)
             let data = try encoder.encode(file)
-            try data.write(to: storeURL, options: [.atomic])
+            try data.write(to: url, options: [.atomic])
         } catch {
             log.error("Failed to save projects.json: \(error.localizedDescription)")
         }

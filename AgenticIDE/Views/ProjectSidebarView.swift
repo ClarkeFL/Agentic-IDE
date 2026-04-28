@@ -16,6 +16,11 @@ struct ProjectSidebarView: View {
     /// Identifies which drop zone the cursor is currently over, so we can
     /// render a highlight there. Format: "group:<uuid>" or "ungrouped".
     @State private var hoveredDropKey: String?
+    /// Single shared "now" tick fed to every project row's relative-time
+    /// label. Replaces the per-row Timer.publish that used to spin one
+    /// main-runloop timer per visible project.
+    @State private var now: Date = Date()
+    private let nowTick = Timer.publish(every: 30, on: .main, in: .common).autoconnect()
 
     var body: some View {
         VStack(spacing: 0) {
@@ -53,6 +58,13 @@ struct ProjectSidebarView: View {
 
                 SidebarFooterMenu(systemName: "gearshape",
                                   help: "Settings") {
+                    SettingsLink {
+                        Label("Settings…", systemImage: "gearshape")
+                    }
+                    .keyboardShortcut(",", modifiers: [.command])
+
+                    Divider()
+
                     Button {
                         updater.checkForUpdates()
                     } label: {
@@ -63,6 +75,7 @@ struct ProjectSidebarView: View {
             }
             .padding(8)
         }
+        .onReceive(nowTick) { now = $0 }
         .alert("New Group", isPresented: $newGroupAlertShown) {
             TextField("Name", text: $newGroupName)
             Button("Create") {
@@ -206,6 +219,7 @@ struct ProjectSidebarView: View {
         ProjectRow(project: project,
                    session: session,
                    isExpanded: isSelected,
+                   now: now,
                    onSelectTab: { id in session.activeTabId = id },
                    onCloseTab: { id in session.closeTab(id: id) },
                    onRenameTab: { id, newTitle in
@@ -475,15 +489,12 @@ private struct ProjectRow: View {
     let project: Project
     @Bindable var session: ProjectSession
     let isExpanded: Bool
+    /// Shared "now" injected by the sidebar's single timer. Drives the
+    /// relative-time label without each row spinning its own runloop timer.
+    let now: Date
     let onSelectTab: (UUID) -> Void
     let onCloseTab: (UUID) -> Void
     let onRenameTab: (UUID, String) -> Void
-
-    /// Drives a periodic refresh of the relative-time label so it ticks
-    /// without showing seconds. 30s cadence is plenty when our smallest
-    /// unit is "min."
-    @State private var now: Date = Date()
-    private let tick = Timer.publish(every: 30, on: .main, in: .common).autoconnect()
 
     var body: some View {
         VStack(alignment: .leading, spacing: 3) {
@@ -563,7 +574,6 @@ private struct ProjectRow: View {
         }
         .padding(.vertical, 2)
         .animation(.spring(response: 0.40, dampingFraction: 0.85), value: session.tabs.map(\.id))
-        .onReceive(tick) { now = $0 }
     }
 
     private var showChildren: Bool {
