@@ -60,13 +60,21 @@ final class SystemSpeaker: NSObject, Speaker, AVSpeechSynthesizerDelegate {
         isSpeaking = false
     }
 
+    /// Compiled once at first use. NSRegularExpression compilation isn't
+    /// free; rebuilding both patterns on every `speak()` call shows up as
+    /// a noticeable spike when reading long selections.
+    private static let ansiCSIRegex: NSRegularExpression? =
+        try? NSRegularExpression(pattern: "\u{001B}\\[[0-9;?]*[A-Za-z]")
+    private static let collapseWhitespaceRegex: NSRegularExpression? =
+        try? NSRegularExpression(pattern: "[ \\t]{2,}")
+
     /// Strips terminal noise that doesn't read well: ANSI escape sequences,
     /// box-drawing borders, and runs of repeated punctuation like `────`.
     /// Conservative — anything we can't classify stays in.
     private func cleanForSpeech(_ s: String) -> String {
         var out = s
         // ANSI CSI / SGR sequences (ESC [ … letter)
-        if let regex = try? NSRegularExpression(pattern: "\u{001B}\\[[0-9;?]*[A-Za-z]") {
+        if let regex = Self.ansiCSIRegex {
             out = regex.stringByReplacingMatches(in: out,
                                                   range: NSRange(out.startIndex..., in: out),
                                                   withTemplate: "")
@@ -78,7 +86,7 @@ final class SystemSpeaker: NSObject, Speaker, AVSpeechSynthesizerDelegate {
             return Character(scalar)
         })
         // Collapse runs of whitespace.
-        if let ws = try? NSRegularExpression(pattern: "[ \\t]{2,}") {
+        if let ws = Self.collapseWhitespaceRegex {
             out = ws.stringByReplacingMatches(in: out,
                                               range: NSRange(out.startIndex..., in: out),
                                               withTemplate: " ")

@@ -23,16 +23,23 @@ struct ProjectSidebarView: View {
     private let nowTick = Timer.publish(every: 30, on: .main, in: .common).autoconnect()
 
     var body: some View {
-        VStack(spacing: 0) {
+        // Single O(N) bucket of the live project list keyed by groupId so
+        // each section's lookup is O(1) instead of re-filtering the whole
+        // array per group on every body invalidation. `nil` key holds the
+        // ungrouped bucket. Per-render rebuild is cheap; the prior shape
+        // was (G + 1) × N work for G groups + N projects.
+        let projectsByGroup = bucketProjectsByGroup()
+        let ungrouped = projectsByGroup[nil] ?? []
+
+        return VStack(spacing: 0) {
             ScrollView {
                 LazyVStack(alignment: .leading, spacing: 0) {
-                    let ungrouped = projects(in: nil)
                     if !ungrouped.isEmpty || !store.groups.isEmpty {
                         ungroupedSection(projects: ungrouped, hasGroups: !store.groups.isEmpty)
                     }
 
                     ForEach(store.sortedGroups) { group in
-                        groupSection(group)
+                        groupSection(group, projects: projectsByGroup[group.id] ?? [])
                     }
                 }
                 .padding(.horizontal, 6)
@@ -108,8 +115,7 @@ struct ProjectSidebarView: View {
     // MARK: - Subviews
 
     @ViewBuilder
-    private func groupHeader(_ group: ProjectGroup) -> some View {
-        let isEmpty = projects(in: group.id).isEmpty
+    private func groupHeader(_ group: ProjectGroup, isEmpty: Bool) -> some View {
         let isHovered = hoveredGroupId == group.id
 
         HStack(spacing: 2) {
@@ -188,10 +194,9 @@ struct ProjectSidebarView: View {
     }
 
     @ViewBuilder
-    private func groupSection(_ group: ProjectGroup) -> some View {
-        let groupProjects = self.projects(in: group.id)
+    private func groupSection(_ group: ProjectGroup, projects groupProjects: [Project]) -> some View {
         VStack(alignment: .leading, spacing: 2) {
-            groupHeader(group)
+            groupHeader(group, isEmpty: groupProjects.isEmpty)
                 .modifier(DropZoneHighlight(active: hoveredDropKey == "group:\(group.id.uuidString)"))
                 .draggable("group:\(group.id.uuidString)") {
                     Label(group.name, systemImage: "folder.fill.badge.gearshape")
@@ -278,8 +283,16 @@ struct ProjectSidebarView: View {
 
     // MARK: - Actions
 
-    private func projects(in groupId: UUID?) -> [Project] {
-        store.projects.filter { !$0.archived && $0.groupId == groupId }
+    /// One pass over `store.projects` that buckets into `[groupId: [Project]]`.
+    /// Filters out archived rows up front so callers don't re-check. Group
+    /// keys preserve the relative ordering from `store.projects`; the
+    /// section views render this directly without a second sort.
+    private func bucketProjectsByGroup() -> [UUID?: [Project]] {
+        var buckets: [UUID?: [Project]] = [:]
+        for project in store.projects where !project.archived {
+            buckets[project.groupId, default: []].append(project)
+        }
+        return buckets
     }
 
     private func moveProjects(from items: [String], to groupId: UUID?) {
