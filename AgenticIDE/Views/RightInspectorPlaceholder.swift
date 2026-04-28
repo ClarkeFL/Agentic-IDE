@@ -13,7 +13,6 @@ struct RightInspectorView: View {
     @State private var isStatusUnavailable: Bool = false
     @State private var diffText: String = ""
     @State private var isLoadingDiff: Bool = false
-    @State private var pollTask: Task<Void, Never>?
 
     var body: some View {
         VStack(spacing: 0) {
@@ -56,33 +55,33 @@ struct RightInspectorView: View {
     // MARK: - Subviews
 
     private var header: some View {
-        HStack(spacing: 8) {
+        HStack(spacing: 6) {
             Text("CHANGES")
-                .font(.caption.weight(.semibold))
+                .font(.system(size: 11, weight: .semibold))
+                .tracking(0.5)
                 .foregroundStyle(.secondary)
             if !changes.isEmpty {
                 Text("\(changes.count)")
-                    .font(.caption2.monospacedDigit())
+                    .font(.system(size: 10, weight: .semibold).monospacedDigit())
                     .foregroundStyle(.secondary)
-                    .padding(.horizontal, 6)
+                    .padding(.horizontal, 5)
                     .padding(.vertical, 1)
-                    .background(Color.secondary.opacity(0.15), in: Capsule())
+                    .background(Color.secondary.opacity(0.18), in: Capsule())
             }
-            Spacer()
+            Spacer(minLength: 6)
             Button {
                 Task { await refreshStatusOnce() }
             } label: {
                 Image(systemName: "arrow.clockwise")
-                    .font(.caption)
+                    .font(.system(size: 11, weight: .medium))
+                    .foregroundStyle(.secondary)
             }
             .buttonStyle(.borderless)
             .help("Refresh git status")
             .disabled(project == nil)
-            .padding(.trailing, 6)
         }
-        .padding(.leading, Inspector.hPadding)
-        .padding(.trailing, Inspector.hPadding)
-        .frame(height: 34)
+        .padding(.horizontal, Inspector.hPadding)
+        .frame(height: 28)
     }
 
     private var diffHeader: DiffHeader? {
@@ -149,10 +148,10 @@ struct RightInspectorView: View {
         await MainActor.run {
             if let result {
                 isStatusUnavailable = false
-                changes = result
+                if changes != result { changes = result }
             } else {
                 isStatusUnavailable = true
-                changes = []
+                if !changes.isEmpty { changes = [] }
             }
         }
     }
@@ -181,6 +180,16 @@ struct RightInspectorView: View {
 /// gutter so nothing looks dragged left or right of anything else.
 enum Inspector {
     static let hPadding: CGFloat = 14
+}
+
+/// Layout constants for the changed-files tree. `indentStep` is the per-depth
+/// indent; `chevronColumn` is the width reserved for the disclosure chevron
+/// (and the equivalent leading spacer on file rows) so file content at depth
+/// N lands one indent past the parent directory's name — the convention used
+/// by Finder, Xcode, and VS Code.
+private enum Sidebar {
+    static let indentStep: CGFloat = 14
+    static let chevronColumn: CGFloat = 16  // chevron glyph + trailing space
 }
 
 // MARK: - Changed files tree
@@ -295,26 +304,11 @@ private struct ChangedFilesList: View {
     /// default → everything expanded so the full changeset is visible
     /// the moment the inspector opens.
     @State private var collapsed: Set<String> = []
-
-    private var roots: [ChangeNode] { ChangeTree.build(from: changes) }
-
-    /// Tree-walk that respects the current collapsed set. Returns rows in
-    /// display order with their depth, ready for a flat List.
-    private var visibleRows: [TreeRow] {
-        var result: [TreeRow] = []
-        func walk(_ nodes: [ChangeNode], depth: Int) {
-            for node in nodes {
-                result.append(TreeRow(node: node, depth: depth))
-                if node.isDirectory,
-                   !collapsed.contains(node.id),
-                   let kids = node.children {
-                    walk(kids, depth: depth + 1)
-                }
-            }
-        }
-        walk(roots, depth: 0)
-        return result
-    }
+    /// Memoised tree. Rebuilt only when `changes` actually changes; a
+    /// computed property would re-walk the input on every body redraw.
+    @State private var roots: [ChangeNode] = []
+    /// Memoised flat row list. Rebuilt when `roots` or `collapsed` change.
+    @State private var visibleRows: [TreeRow] = []
 
     var body: some View {
         Group {
@@ -326,10 +320,10 @@ private struct ChangedFilesList: View {
                 List(selection: $selectedFile) {
                     ForEach(visibleRows) { row in
                         rowView(for: row)
-                            .listRowInsets(EdgeInsets(top: 3,
+                            .listRowInsets(EdgeInsets(top: 1,
                                                       leading: Inspector.hPadding,
-                                                      bottom: 3,
-                                                      trailing: Inspector.hPadding + 8))
+                                                      bottom: 1,
+                                                      trailing: Inspector.hPadding))
                             .listRowSeparator(.hidden)
                             .listRowBackground(Color.clear)
                     }
@@ -337,20 +331,28 @@ private struct ChangedFilesList: View {
                 .listStyle(.plain)
                 .scrollContentBackground(.hidden)
                 .environment(\.defaultMinListRowHeight, 0)
-                .padding(.top, 8)
+                .padding(.top, 4)
             }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .onAppear {
+            roots = ChangeTree.build(from: changes)
+            rebuildVisibleRows()
+        }
+        .onChange(of: changes) { _, new in
+            roots = ChangeTree.build(from: new)
+            rebuildVisibleRows()
+        }
+        .onChange(of: collapsed) { _, _ in
+            rebuildVisibleRows()
+        }
     }
 
     @ViewBuilder
     private func rowView(for row: TreeRow) -> some View {
         if let change = row.node.change {
-            HStack(spacing: 0) {
-                indentSpacer(depth: row.depth, isFile: true)
-                ChangedFileRow(change: change)
-            }
-            .tag(change.url)
+            ChangedFileRow(change: change, depth: row.depth)
+                .tag(change.url)
         } else {
             DirectoryRow(node: row.node,
                          depth: row.depth,
@@ -359,12 +361,23 @@ private struct ChangedFilesList: View {
         }
     }
 
-    /// One indent level (14pt) per depth. The chevron column on directory
-    /// rows is the same width, so a file at depth N visually sits below
-    /// its parent's name without an extra column. List's own leading
-    /// inset is collapsed via `listRowInsets` so this is the only indent.
-    private func indentSpacer(depth: Int, isFile: Bool) -> some View {
-        Color.clear.frame(width: CGFloat(depth) * 14)
+    /// Tree-walk that respects the current collapsed set. Writes results to
+    /// `visibleRows` State so SwiftUI doesn't re-walk on every body redraw.
+    private func rebuildVisibleRows() {
+        var result: [TreeRow] = []
+        result.reserveCapacity(changes.count + roots.count)
+        func walk(_ nodes: [ChangeNode], depth: Int) {
+            for node in nodes {
+                result.append(TreeRow(node: node, depth: depth))
+                if node.isDirectory,
+                   !collapsed.contains(node.id),
+                   let kids = node.children {
+                    walk(kids, depth: depth + 1)
+                }
+            }
+        }
+        walk(roots, depth: 0)
+        visibleRows = result
     }
 
     private func toggle(_ id: String) {
@@ -402,16 +415,13 @@ private struct DirectoryRow: View {
 
     var body: some View {
         Button(action: toggle) {
-            HStack(spacing: 6) {
-                Color.clear.frame(width: CGFloat(depth) * 14)
-                // Pin chevron to the leading edge of its column so its
-                // pivot point aligns with the leading edge of "CHANGES"
-                // in the header above and with file rows below.
+            HStack(spacing: 0) {
+                Color.clear.frame(width: CGFloat(depth) * Sidebar.indentStep)
                 Image(systemName: "chevron.right")
                     .font(.system(size: 9, weight: .bold))
                     .foregroundStyle(.secondary)
                     .rotationEffect(.degrees(isExpanded ? 90 : 0))
-                    .frame(width: 10, alignment: .leading)
+                    .frame(width: Sidebar.chevronColumn, alignment: .leading)
                 Text(node.name)
                     .font(.system(size: 11, weight: .semibold))
                     .foregroundStyle(.secondary)
@@ -428,27 +438,31 @@ private struct DirectoryRow: View {
     }
 }
 
+/// Compact single-line file row. Status indicator at the leading edge, name
+/// in the middle, +/- stats trailing. Stage state lives in the tooltip and
+/// in the diff-view header — duplicating it as a second line was the main
+/// source of vertical bloat.
 private struct ChangedFileRow: View {
     let change: GitChange
+    let depth: Int
 
     var body: some View {
-        HStack(alignment: .center, spacing: 8) {
-            VStack(alignment: .leading, spacing: 1) {
-                Text(change.displayName)
-                    .font(.system(size: 12))
-                    .foregroundStyle(.primary)
-                    .lineLimit(1)
-                    .truncationMode(.middle)
-                Text(change.stateSubtitle)
-                    .font(.system(size: 9.5, weight: .semibold))
-                    .foregroundStyle(change.status.tint)
-                    .lineLimit(1)
-                    .truncationMode(.tail)
-            }
+        HStack(spacing: 8) {
+            Color.clear.frame(width: CGFloat(depth) * Sidebar.indentStep + Sidebar.chevronColumn)
+            StatusBadge(status: change.status, size: 13)
+                // Outline-only when fully staged (nothing further to commit
+                // from working tree); filled while there are still unstaged
+                // edits. Subtle but reads at a glance.
+                .opacity(change.stageState == .staged ? 0.55 : 1.0)
+            Text(change.displayName)
+                .font(.system(size: 12))
+                .foregroundStyle(.primary)
+                .lineLimit(1)
+                .truncationMode(.middle)
             Spacer(minLength: 6)
             stats
         }
-        .padding(.vertical, 2)
+        .padding(.vertical, 3)
         .help("\(change.stateSubtitle) — \(change.relativePath)")
     }
 
@@ -465,10 +479,8 @@ private struct ChangedFileRow: View {
                         .foregroundStyle(Color(red: 0.90, green: 0.30, blue: 0.30))
                 }
             }
-            .font(.system(size: 9.5, weight: .semibold, design: .monospaced))
+            .font(.system(size: 10, weight: .semibold, design: .monospaced))
             .monospacedDigit()
         }
     }
-
 }
-
