@@ -2,9 +2,9 @@ import SwiftUI
 
 struct EmptyStateView: View {
     var body: some View {
-        VStack(spacing: 12) {
+        VStack(spacing: DS.Space.lg) {
             Image(systemName: "terminal")
-                .font(.system(size: 48, weight: .light))
+                .font(.system(size: DS.Icon.welcome, weight: .light))
                 .foregroundStyle(.secondary)
             Text("Click Run Server, Claude, Codex, or +")
                 .font(.title3)
@@ -19,5 +19,6 @@ struct EmptyStateView: View {
 
 #Preview {
     EmptyStateView()
-        .frame(width: 600, height: 400)
+        .frame(width: DS.Layout.emptyStateSize.width,
+               height: DS.Layout.emptyStateSize.height)
 }

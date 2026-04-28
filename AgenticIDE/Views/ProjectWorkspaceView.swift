@@ -12,13 +12,14 @@ struct ProjectWorkspaceView: View {
         let session = sessions.session(for: project.id)
 
         VStack(spacing: 0) {
+            // TabBarView owns its own trailing divider so the three column
+            // headers (sidebar, workspace, inspector) all draw their dividers
+            // at the same y-coordinate.
             TabBarView(project: project,
                        onLaunch: { ql in launch(ql, in: session) },
                        onLaunchDefaultShell: { launchDefaultShell(in: session) },
                        isSpeaking: speaker.isSpeaking,
                        onSpeakSelection: { speakSelection(in: session) })
-
-            Divider()
 
             ZStack {
                 // Keep every terminal NSView attached to the hierarchy at the

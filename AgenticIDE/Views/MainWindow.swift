@@ -11,6 +11,12 @@ struct MainWindow: View {
     /// MainWindow because no other view needs to read the status today.
     @State private var fda = FullDiskAccessGate()
     @State private var showFDAOnboarding = false
+    /// Flips true after the first onAppear runs the FDA propagation-window
+    /// probe loop. `.onAppear` fires on every scene-restoration / window-
+    /// rebuild, but the 6×250ms re-probe only makes sense once per process
+    /// launch — the propagation window is a fresh-launch race, not a
+    /// re-entry race.
+    @State private var didEvaluateFDA = false
 
     var body: some View {
         PersistentSplitView(
@@ -35,7 +41,10 @@ struct MainWindow: View {
         .navigationTitle(activeProject?.name ?? "Agentic IDE")
         .onAppear {
             restoreSelection()
-            evaluateFullDiskAccess()
+            if !didEvaluateFDA {
+                didEvaluateFDA = true
+                evaluateFullDiskAccess()
+            }
         }
         .onChange(of: selectedProjectId) { _, new in
             currentProjectIdString = new?.uuidString ?? ""
@@ -53,9 +62,9 @@ struct MainWindow: View {
         if let project = activeProject {
             ProjectWorkspaceView(project: project)
         } else if store.projects.filter({ !$0.archived }).isEmpty {
-            VStack(spacing: 12) {
+            VStack(spacing: DS.Space.lg) {
                 Image(systemName: "folder.badge.plus")
-                    .font(.system(size: 48, weight: .light))
+                    .font(.system(size: DS.Icon.welcome, weight: .light))
                     .foregroundStyle(.secondary)
                 Text("Add a project to get started")
                     .font(.title3).foregroundStyle(.secondary)
@@ -64,7 +73,7 @@ struct MainWindow: View {
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
         } else {
-            VStack(spacing: 8) {
+            VStack(spacing: DS.Space.md) {
                 Text("Select a project")
                     .font(.title3).foregroundStyle(.secondary)
             }

@@ -12,7 +12,7 @@ struct SettingsView: View {
             SpeechSettingsView()
                 .tabItem { Label("Speech", systemImage: "speaker.wave.2") }
         }
-        .frame(width: 520, height: 360)
+        .frame(width: DS.Layout.settingsWindowWidth, height: DS.Layout.settingsWindowHeight)
     }
 }
 
@@ -27,7 +27,7 @@ private struct AgentsSettingsView: View {
         Form {
             Section {
                 Toggle(isOn: $claudeDangerous) {
-                    VStack(alignment: .leading, spacing: 2) {
+                    VStack(alignment: .leading, spacing: DS.Space.xxs) {
                         Text("Run Claude with --dangerously-skip-permissions")
                         Text("Claude Code will accept every edit and tool call without asking. Equivalent to clicking \"Allow\" on every prompt.")
                             .font(.caption)
@@ -41,7 +41,7 @@ private struct AgentsSettingsView: View {
 
             Section {
                 Toggle(isOn: $codexDangerous) {
-                    VStack(alignment: .leading, spacing: 2) {
+                    VStack(alignment: .leading, spacing: DS.Space.xxs) {
                         Text("Run Codex with --dangerously-bypass-approvals-and-sandbox")
                         Text("OpenAI Codex CLI will skip approvals and run outside the sandbox. Use only inside trusted projects.")
                             .font(.caption)
@@ -61,7 +61,7 @@ private struct AgentsSettingsView: View {
             }
         }
         .formStyle(.grouped)
-        .padding(.top, 8)
+        .padding(.top, DS.Space.md)
     }
 }
 
@@ -98,7 +98,7 @@ private struct SpeechSettingsView: View {
                     }
                 }
 
-                VStack(alignment: .leading, spacing: 2) {
+                VStack(alignment: .leading, spacing: DS.Space.xxs) {
                     Slider(value: $rate,
                            in: Double(AVSpeechUtteranceMinimumSpeechRate)...Double(AVSpeechUtteranceMaximumSpeechRate))
                     HStack {
@@ -128,6 +128,6 @@ private struct SpeechSettingsView: View {
             }
         }
         .formStyle(.grouped)
-        .padding(.top, 8)
+        .padding(.top, DS.Space.md)
     }
 }

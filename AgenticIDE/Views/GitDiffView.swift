@@ -37,13 +37,32 @@ struct GitDiffView: View {
         .onChange(of: diffText) { _, new in reparse(new) }
     }
 
+    /// Hard cap on the number of rendered rows. SwiftUI's `VStack` is eager
+    /// (we deliberately use it instead of `LazyVStack` so the ScrollView can
+    /// report a real horizontal max-width — see `contentView`). Past this
+    /// many rows, building all the SwiftUI views up front is what makes
+    /// "select a giant changed file" feel laggy. Beyond the cap we render a
+    /// trailing notice; the full diff is one terminal `git diff` away.
+    private static let maxRenderedRows: Int = 2000
+
     private func reparse(_ raw: String) {
         guard !raw.isEmpty else {
             rows = []
             stats = DiffStats()
             return
         }
-        let parsed = DiffParser.parse(raw)
+        var parsed = DiffParser.parse(raw)
+        if parsed.rows.count > Self.maxRenderedRows {
+            let dropped = parsed.rows.count - Self.maxRenderedRows
+            parsed.rows.removeSubrange(Self.maxRenderedRows..<parsed.rows.count)
+            parsed.rows.append(DiffRow(
+                id: -1,
+                kind: .truncated,
+                oldLine: nil,
+                newLine: nil,
+                text: "Diff truncated — \(dropped) more line\(dropped == 1 ? "" : "s") not shown."
+            ))
+        }
         rows = parsed.rows
         stats = parsed.stats
     }
@@ -51,7 +70,7 @@ struct GitDiffView: View {
     // MARK: - States
 
     private var loadingState: some View {
-        VStack(spacing: 6) {
+        VStack(spacing: DS.Space.sm) {
             ProgressView().controlSize(.small)
             Text("Loading diff…")
                 .font(.caption)
@@ -61,9 +80,9 @@ struct GitDiffView: View {
     }
 
     private var emptyState: some View {
-        VStack(spacing: 6) {
+        VStack(spacing: DS.Space.sm) {
             Image(systemName: "doc.text")
-                .font(.system(size: 22, weight: .light))
+                .font(.system(size: DS.Icon.large, weight: .light))
                 .foregroundStyle(.tertiary)
             Text(placeholder)
                 .font(.callout)
@@ -71,7 +90,7 @@ struct GitDiffView: View {
                 .multilineTextAlignment(.center)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
-        .padding(20)
+        .padding(DS.Space.xxl)
     }
 
     @ViewBuilder
@@ -112,13 +131,13 @@ private struct DiffFileHeader: View {
     let stats: DiffStats
 
     var body: some View {
-        HStack(alignment: .center, spacing: 10) {
-            VStack(alignment: .leading, spacing: 2) {
+        HStack(alignment: .center, spacing: DS.Space.lg - 2) {
+            VStack(alignment: .leading, spacing: DS.Space.xxs) {
                 // Filename is the primary signal — pin it to the leading
                 // edge with high layout priority so the path beside/below
                 // takes the truncation hit instead of the filename.
                 Text(header.displayName)
-                    .font(.system(size: 12, weight: .semibold))
+                    .font(DS.Font.bodySemibold)
                     .foregroundStyle(.primary)
                     .lineLimit(1)
                     .truncationMode(.middle)
@@ -126,7 +145,7 @@ private struct DiffFileHeader: View {
 
                 // Path + status on one secondary line, separated by `·`.
                 // Path truncates from the head when narrow ("…tic-IDE/Views").
-                HStack(spacing: 6) {
+                HStack(spacing: DS.Space.sm) {
                     if !header.directory.isEmpty {
                         Text(header.directory)
                             .foregroundStyle(.tertiary)
@@ -140,25 +159,25 @@ private struct DiffFileHeader: View {
                         .lineLimit(1)
                         .layoutPriority(1)
                 }
-                .font(.system(size: 10, weight: .medium))
+                .font(.system(size: DS.FontSize.caption, weight: .medium))
             }
-            Spacer(minLength: 12)
+            Spacer(minLength: DS.Space.lg)
             statsBar
         }
-        .padding(.leading, 14)
-        .padding(.trailing, 22)
-        .padding(.vertical, 8)
+        .padding(.leading, DS.Gutter.inspector)
+        .padding(.trailing, DS.Space.xl + 6)
+        .padding(.vertical, DS.Space.md)
         .background(Color(nsColor: .controlBackgroundColor))
     }
 
     private var statsBar: some View {
-        HStack(spacing: 6) {
+        HStack(spacing: DS.Space.sm) {
             Text("+\(stats.additions)")
                 .foregroundStyle(Color(red: 0.22, green: 0.78, blue: 0.45))
             Text("-\(stats.deletions)")
                 .foregroundStyle(Color(red: 0.90, green: 0.30, blue: 0.30))
         }
-        .font(.system(size: 10.5, weight: .semibold, design: .monospaced))
+        .font(DS.Font.codeHeader)
     }
 }
 
@@ -177,9 +196,26 @@ private struct DiffRowView: View {
             hunkRow
         case .noNewline:
             noNewlineRow
+        case .truncated:
+            truncatedRow
         default:
             contentRow
         }
+    }
+
+    private var truncatedRow: some View {
+        HStack(alignment: .firstTextBaseline, spacing: 0) {
+            blankGutter
+            blankGutter
+            Text(row.text)
+                .font(Self.monoFont.italic())
+                .foregroundStyle(.secondary)
+                .padding(.leading, 6)
+                .padding(.trailing, 12)
+        }
+        .fixedSize(horizontal: true, vertical: false)
+        .padding(.vertical, 4)
+        .background(Color.secondary.opacity(0.08))
     }
 
     private var contentRow: some View {
@@ -283,7 +319,7 @@ private struct DiffRowView: View {
 // MARK: - Parser
 
 struct DiffRow: Identifiable, Hashable {
-    enum Kind { case context, add, remove, hunk, noNewline }
+    enum Kind { case context, add, remove, hunk, noNewline, truncated }
 
     let id: Int
     let kind: Kind

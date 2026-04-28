@@ -17,9 +17,9 @@ struct FullDiskAccessOnboarding: View {
     @State private var didOpenSettings = false
 
     var body: some View {
-        VStack(spacing: 16) {
+        VStack(spacing: DS.Space.xl) {
             Image(systemName: "lock.shield")
-                .font(.system(size: 44, weight: .light))
+                .font(.system(size: DS.Icon.onboarding, weight: .light))
                 .foregroundStyle(.tint)
 
             Text("Grant Full Disk Access")
@@ -29,11 +29,11 @@ struct FullDiskAccessOnboarding: View {
                 .font(.body)
                 .foregroundStyle(.secondary)
                 .multilineTextAlignment(.center)
-                .frame(maxWidth: 420)
+                .frame(maxWidth: DS.Layout.onboardingTextWidth)
 
             statusRow
 
-            HStack(spacing: 8) {
+            HStack(spacing: DS.Space.md) {
                 if didOpenSettings {
                     Button("Restart AgenticIDE") { gate.relaunch() }
                         .keyboardShortcut(.defaultAction)
@@ -46,8 +46,8 @@ struct FullDiskAccessOnboarding: View {
                 }
             }
         }
-        .padding(32)
-        .frame(width: 480)
+        .padding(DS.Space.xxxl)
+        .frame(width: DS.Layout.onboardingWindowWidth)
         .onDisappear { gate.stopPolling() }
     }
 
@@ -60,7 +60,7 @@ struct FullDiskAccessOnboarding: View {
 
     @ViewBuilder
     private var statusRow: some View {
-        HStack(spacing: 6) {
+        HStack(spacing: DS.Space.sm) {
             Image(systemName: gate.status == .granted ? "checkmark.circle.fill" : "circle")
                 .foregroundStyle(gate.status == .granted ? .green : .secondary)
             Text(statusLabel)

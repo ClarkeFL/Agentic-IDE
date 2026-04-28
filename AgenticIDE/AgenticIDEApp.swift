@@ -7,6 +7,7 @@ struct AgenticIDEApp: App {
     @State private var store = ProjectStore()
     @State private var sessions = SessionManager()
     @State private var speaker = SystemSpeaker()
+    @State private var resources = ResourceMonitor()
     @StateObject private var updater = UpdaterManager()
 
     init() {
@@ -19,6 +20,7 @@ struct AgenticIDEApp: App {
                 .environment(store)
                 .environment(sessions)
                 .environment(speaker)
+                .environment(resources)
                 .environmentObject(updater)
                 .frame(minWidth: 900, minHeight: 560)
         }

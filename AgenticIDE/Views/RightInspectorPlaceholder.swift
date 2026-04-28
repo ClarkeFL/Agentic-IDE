@@ -39,9 +39,11 @@ struct RightInspectorView: View {
     }
 
     var body: some View {
+        // `InspectorHeader` owns its own trailing divider so the three
+        // column headers (sidebar, workspace, inspector) draw their
+        // dividers at the same y-coordinate.
         VStack(spacing: 0) {
             header
-            Divider()
             if let project {
                 content(for: project)
             } else {
@@ -125,43 +127,17 @@ struct RightInspectorView: View {
     }
 
     private var header: some View {
-        HStack(spacing: 8) {
-            Picker("Inspector mode", selection: $mode) {
-                Text("Files").tag(InspectorMode.files)
-                Text("Changes").tag(InspectorMode.changes)
-            }
-            .pickerStyle(.segmented)
-            .labelsHidden()
-            .controlSize(.mini)
-            .frame(maxWidth: 160)
-
-            if mode == .changes, !changes.isEmpty {
-                Text("\(changes.count)")
-                    .font(.system(size: 10, weight: .semibold).monospacedDigit())
-                    .foregroundStyle(.secondary)
-                    .padding(.horizontal, 5)
-                    .padding(.vertical, 1)
-                    .background(Color.secondary.opacity(0.18), in: Capsule())
-            }
-            Spacer(minLength: 6)
-            Button {
+        InspectorHeader(
+            mode: $mode,
+            changeCount: changes.count,
+            isRefreshDisabled: project == nil,
+            onRefresh: {
                 switch mode {
-                case .changes:
-                    Task { await refreshStatusOnce() }
-                case .files:
-                    filesRefreshToken &+= 1
+                case .changes: Task { await refreshStatusOnce() }
+                case .files:   filesRefreshToken &+= 1
                 }
-            } label: {
-                Image(systemName: "arrow.clockwise")
-                    .font(.system(size: 11, weight: .medium))
-                    .foregroundStyle(.secondary)
             }
-            .buttonStyle(.borderless)
-            .help(mode == .changes ? "Refresh git status" : "Reload file tree")
-            .disabled(project == nil)
-        }
-        .padding(.horizontal, Inspector.hPadding)
-        .frame(height: 28)
+        )
     }
 
     private var diffHeader: DiffHeader? {
@@ -191,9 +167,9 @@ struct RightInspectorView: View {
     }
 
     private var emptyProjectState: some View {
-        VStack(spacing: 8) {
+        VStack(spacing: DS.Space.md) {
             Image(systemName: "doc.text.magnifyingglass")
-                .font(.system(size: 28, weight: .light))
+                .font(.system(size: DS.Icon.display, weight: .light))
                 .foregroundStyle(.tertiary)
             Text("No project selected")
                 .font(.callout)
@@ -252,22 +228,10 @@ struct RightInspectorView: View {
     }
 }
 
-/// Single source of truth for horizontal inset across the inspector — the
-/// header, the list rows, and the diff content all line up to the same
-/// gutter so nothing looks dragged left or right of anything else.
-enum Inspector {
-    static let hPadding: CGFloat = 14
-}
-
-/// Layout constants for the changed-files tree. `indentStep` is the per-depth
-/// indent; `chevronColumn` is the width reserved for the disclosure chevron
-/// (and the equivalent leading spacer on file rows) so file content at depth
-/// N lands one indent past the parent directory's name — the convention used
-/// by Finder, Xcode, and VS Code.
-private enum Sidebar {
-    static let indentStep: CGFloat = 14
-    static let chevronColumn: CGFloat = 16  // chevron glyph + trailing space
-}
+// Inspector layout metrics now live in `DesignTokens.swift` (DS.Gutter,
+// DS.Tree, DS.Control). Removing the local enums forces every reader to
+// consume the app-wide tokens — no more drift between this file and the
+// rest of the chrome.
 
 // MARK: - Changed files tree
 
@@ -398,9 +362,9 @@ private struct ChangedFilesList: View {
                     ForEach(visibleRows) { row in
                         rowView(for: row)
                             .listRowInsets(EdgeInsets(top: 1,
-                                                      leading: Inspector.hPadding,
+                                                      leading: DS.Gutter.inspector,
                                                       bottom: 1,
-                                                      trailing: Inspector.hPadding))
+                                                      trailing: DS.Gutter.inspectorTrailing))
                             .listRowSeparator(.hidden)
                             .listRowBackground(Color.clear)
                     }
@@ -408,7 +372,7 @@ private struct ChangedFilesList: View {
                 .listStyle(.plain)
                 .scrollContentBackground(.hidden)
                 .environment(\.defaultMinListRowHeight, 0)
-                .padding(.top, 4)
+                .padding(.top, DS.Space.xs)
             }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -468,9 +432,9 @@ private struct ChangedFilesList: View {
     }
 
     private func centered(_ text: String, systemImage: String) -> some View {
-        VStack(spacing: 6) {
+        VStack(spacing: DS.Space.sm) {
             Image(systemName: systemImage)
-                .font(.system(size: 22, weight: .light))
+                .font(.system(size: DS.Icon.large, weight: .light))
                 .foregroundStyle(.tertiary)
             Text(text)
                 .font(.caption)
@@ -493,14 +457,14 @@ private struct DirectoryRow: View {
     var body: some View {
         Button(action: toggle) {
             HStack(spacing: 0) {
-                Color.clear.frame(width: CGFloat(depth) * Sidebar.indentStep)
+                Color.clear.frame(width: CGFloat(depth) * DS.Tree.indentStep)
                 Image(systemName: "chevron.right")
-                    .font(.system(size: 9, weight: .bold))
+                    .font(.system(size: DS.Icon.micro, weight: .bold))
                     .foregroundStyle(.secondary)
                     .rotationEffect(.degrees(isExpanded ? 90 : 0))
-                    .frame(width: Sidebar.chevronColumn, alignment: .leading)
+                    .frame(width: DS.Tree.chevronColumn, alignment: .leading)
                 Text(node.name)
-                    .font(.system(size: 11, weight: .semibold))
+                    .font(DS.Font.sectionCaps)
                     .foregroundStyle(.secondary)
                     .textCase(.uppercase)
                     .tracking(0.4)
@@ -511,7 +475,7 @@ private struct DirectoryRow: View {
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
-        .padding(.vertical, 2)
+        .padding(.vertical, DS.Space.xxs)
     }
 }
 
@@ -524,29 +488,29 @@ private struct ChangedFileRow: View {
     let depth: Int
 
     var body: some View {
-        HStack(spacing: 8) {
-            Color.clear.frame(width: CGFloat(depth) * Sidebar.indentStep + Sidebar.chevronColumn)
+        HStack(spacing: DS.Space.sm) {
+            Color.clear.frame(width: CGFloat(depth) * DS.Tree.indentStep + DS.Tree.chevronColumn)
             StatusBadge(status: change.status, size: 13)
                 // Outline-only when fully staged (nothing further to commit
                 // from working tree); filled while there are still unstaged
                 // edits. Subtle but reads at a glance.
                 .opacity(change.stageState == .staged ? 0.55 : 1.0)
             Text(change.displayName)
-                .font(.system(size: 12))
+                .font(DS.Font.body)
                 .foregroundStyle(.primary)
                 .lineLimit(1)
                 .truncationMode(.middle)
-            Spacer(minLength: 6)
+            Spacer(minLength: DS.Space.sm)
             stats
         }
-        .padding(.vertical, 3)
+        .padding(.vertical, DS.Space.xs)
         .help("\(change.stateSubtitle) — \(change.relativePath)")
     }
 
     @ViewBuilder
     private var stats: some View {
         if change.additions > 0 || change.deletions > 0 {
-            HStack(spacing: 4) {
+            HStack(spacing: DS.Space.xs) {
                 if change.additions > 0 {
                     Text("+\(change.additions)")
                         .foregroundStyle(Color(red: 0.22, green: 0.78, blue: 0.45))
@@ -556,8 +520,7 @@ private struct ChangedFileRow: View {
                         .foregroundStyle(Color(red: 0.90, green: 0.30, blue: 0.30))
                 }
             }
-            .font(.system(size: 10, weight: .semibold, design: .monospaced))
-            .monospacedDigit()
+            .font(DS.Font.stats)
         }
     }
 }
@@ -675,9 +638,9 @@ private struct ProjectFilesList: View {
                     ForEach(visibleRows) { row in
                         rowView(for: row)
                             .listRowInsets(EdgeInsets(top: 1,
-                                                      leading: Inspector.hPadding,
+                                                      leading: DS.Gutter.inspector,
                                                       bottom: 1,
-                                                      trailing: Inspector.hPadding))
+                                                      trailing: DS.Gutter.inspectorTrailing))
                             .listRowSeparator(.hidden)
                             .listRowBackground(Color.clear)
                     }
@@ -685,7 +648,7 @@ private struct ProjectFilesList: View {
                 .listStyle(.plain)
                 .scrollContentBackground(.hidden)
                 .environment(\.defaultMinListRowHeight, 0)
-                .padding(.top, 4)
+                .padding(.top, DS.Space.xs)
             }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -782,9 +745,9 @@ private struct ProjectFilesList: View {
     }
 
     private func centered(_ text: String, systemImage: String) -> some View {
-        VStack(spacing: 6) {
+        VStack(spacing: DS.Space.sm) {
             Image(systemName: systemImage)
-                .font(.system(size: 22, weight: .light))
+                .font(.system(size: DS.Icon.large, weight: .light))
                 .foregroundStyle(.tertiary)
             Text(text)
                 .font(.caption)
@@ -805,7 +768,7 @@ private struct FileDirectoryRow: View {
     var body: some View {
         Button(action: toggle) {
             HStack(spacing: 0) {
-                Color.clear.frame(width: CGFloat(depth) * Sidebar.indentStep)
+                Color.clear.frame(width: CGFloat(depth) * DS.Tree.indentStep)
                 Group {
                     if isLoading {
                         ProgressView()
@@ -813,18 +776,18 @@ private struct FileDirectoryRow: View {
                             .scaleEffect(0.55)
                     } else {
                         Image(systemName: "chevron.right")
-                            .font(.system(size: 9, weight: .bold))
+                            .font(.system(size: DS.Icon.micro, weight: .bold))
                             .foregroundStyle(.secondary)
                             .rotationEffect(.degrees(isExpanded ? 90 : 0))
                     }
                 }
-                .frame(width: Sidebar.chevronColumn, alignment: .leading)
+                .frame(width: DS.Tree.chevronColumn, alignment: .leading)
                 Image(systemName: isExpanded ? "folder.fill" : "folder")
-                    .font(.system(size: 11))
+                    .font(DS.Font.footnote)
                     .foregroundStyle(.secondary)
-                    .frame(width: 16, alignment: .leading)
+                    .frame(width: DS.Tree.iconColumn, alignment: .leading)
                 Text(node.name)
-                    .font(.system(size: 12, weight: .medium))
+                    .font(DS.Font.bodyMedium)
                     .foregroundStyle(.primary)
                     .lineLimit(1)
                     .truncationMode(.middle)
@@ -833,7 +796,7 @@ private struct FileDirectoryRow: View {
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
-        .padding(.vertical, 2)
+        .padding(.vertical, DS.Space.xxs)
     }
 }
 
@@ -843,19 +806,19 @@ private struct FileLeafRow: View {
 
     var body: some View {
         HStack(spacing: 0) {
-            Color.clear.frame(width: CGFloat(depth) * Sidebar.indentStep + Sidebar.chevronColumn)
+            Color.clear.frame(width: CGFloat(depth) * DS.Tree.indentStep + DS.Tree.chevronColumn)
             Image(systemName: "doc")
-                .font(.system(size: 11))
+                .font(DS.Font.footnote)
                 .foregroundStyle(.secondary)
-                .frame(width: 16, alignment: .leading)
+                .frame(width: DS.Tree.iconColumn, alignment: .leading)
             Text(node.name)
-                .font(.system(size: 12))
+                .font(DS.Font.body)
                 .foregroundStyle(.primary)
                 .lineLimit(1)
                 .truncationMode(.middle)
             Spacer(minLength: 0)
         }
-        .padding(.vertical, 3)
+        .padding(.vertical, DS.Space.xs)
         .help(node.url.path)
     }
 }
@@ -892,7 +855,7 @@ private struct FilePreviewPane: View {
                 placeholder("Select a file above to view its contents.",
                             systemImage: "doc.text")
             case .loading:
-                VStack(spacing: 6) {
+                VStack(spacing: DS.Space.sm) {
                     ProgressView().controlSize(.small)
                     Text("Loading…")
                         .font(.caption)
@@ -902,10 +865,11 @@ private struct FilePreviewPane: View {
             case .text:
                 ScrollView([.vertical, .horizontal], showsIndicators: true) {
                     Text(content)
-                        .font(.system(size: 11.5, design: .monospaced))
+                        .font(DS.Font.codeBody)
                         .textSelection(.enabled)
-                        .padding(.horizontal, Inspector.hPadding)
-                        .padding(.vertical, 8)
+                        .padding(.leading, DS.Gutter.inspector)
+                        .padding(.trailing, DS.Gutter.inspectorTrailing)
+                        .padding(.vertical, DS.Space.md)
                         .frame(maxWidth: .infinity, alignment: .leading)
                 }
                 .background(Color(nsColor: .textBackgroundColor).opacity(0.35))
@@ -927,9 +891,9 @@ private struct FilePreviewPane: View {
     }
 
     private func placeholder(_ text: String, systemImage: String) -> some View {
-        VStack(spacing: 6) {
+        VStack(spacing: DS.Space.sm) {
             Image(systemName: systemImage)
-                .font(.system(size: 22, weight: .light))
+                .font(.system(size: DS.Icon.large, weight: .light))
                 .foregroundStyle(.tertiary)
             Text(text)
                 .font(.callout)
@@ -937,7 +901,7 @@ private struct FilePreviewPane: View {
                 .multilineTextAlignment(.center)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
-        .padding(20)
+        .padding(DS.Space.xxl)
     }
 
     private func load(_ url: URL?) async {
