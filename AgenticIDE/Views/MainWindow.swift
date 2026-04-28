@@ -11,6 +11,12 @@ struct MainWindow: View {
     /// MainWindow because no other view needs to read the status today.
     @State private var fda = FullDiskAccessGate()
     @State private var showFDAOnboarding = false
+    /// Flips true after the first onAppear runs the FDA propagation-window
+    /// probe loop. `.onAppear` fires on every scene-restoration / window-
+    /// rebuild, but the 6×250ms re-probe only makes sense once per process
+    /// launch — the propagation window is a fresh-launch race, not a
+    /// re-entry race.
+    @State private var didEvaluateFDA = false
 
     var body: some View {
         PersistentSplitView(
@@ -26,7 +32,7 @@ struct MainWindow: View {
                     .environment(sessions)
             },
             trailing: {
-                RightInspectorView(project: activeProject)
+                RightInspectorView(project: fileAccessProject)
                     .environment(store)
                     .environment(sessions)
             }
@@ -35,7 +41,10 @@ struct MainWindow: View {
         .navigationTitle(activeProject?.name ?? "Agentic IDE")
         .onAppear {
             restoreSelection()
-            evaluateFullDiskAccess()
+            if !didEvaluateFDA {
+                didEvaluateFDA = true
+                evaluateFullDiskAccess()
+            }
         }
         .onChange(of: selectedProjectId) { _, new in
             currentProjectIdString = new?.uuidString ?? ""
@@ -53,9 +62,9 @@ struct MainWindow: View {
         if let project = activeProject {
             ProjectWorkspaceView(project: project)
         } else if store.projects.filter({ !$0.archived }).isEmpty {
-            VStack(spacing: 12) {
+            VStack(spacing: DS.Space.lg) {
                 Image(systemName: "folder.badge.plus")
-                    .font(.system(size: 48, weight: .light))
+                    .font(.system(size: DS.Icon.welcome, weight: .light))
                     .foregroundStyle(.secondary)
                 Text("Add a project to get started")
                     .font(.title3).foregroundStyle(.secondary)
@@ -64,7 +73,7 @@ struct MainWindow: View {
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
         } else {
-            VStack(spacing: 8) {
+            VStack(spacing: DS.Space.md) {
                 Text("Select a project")
                     .font(.title3).foregroundStyle(.secondary)
             }
@@ -77,13 +86,40 @@ struct MainWindow: View {
         return store.projects.first(where: { $0.id == id && !$0.archived })
     }
 
+    /// Project handed to file-touching subviews (the right inspector's
+    /// git-status poll, file listing, etc). Returns `nil` while the FDA
+    /// onboarding sheet is up so the inspector doesn't immediately fire
+    /// per-folder TCC prompts (Documents / Desktop / Downloads) on top
+    /// of our own sheet — competing dialogs were the visible bug.
+    private var fileAccessProject: Project? {
+        if fda.status == .denied && !fda.skippedThisBuild { return nil }
+        return activeProject
+    }
+
     /// Re-probes FDA on appear and shows the onboarding sheet when the user
     /// hasn't been granted access and hasn't already skipped this build.
     /// Cheap to call repeatedly — the probe is just a `FileHandle` open.
+    ///
+    /// When the app is relaunched right after the user toggled FDA in System
+    /// Settings, TCC sometimes hasn't propagated the new grant to our just-
+    /// spawned process by the time the first probe runs — the result is the
+    /// onboarding sheet showing again on a freshly-permitted launch. A short
+    /// re-probe loop covers the propagation window so we don't bother the
+    /// user a second time.
     private func evaluateFullDiskAccess() {
         fda.refresh()
-        if fda.status == .denied && !fda.skippedThisBuild {
-            showFDAOnboarding = true
+        guard fda.status != .granted else { return }
+        if fda.skippedThisBuild { return }
+
+        Task { @MainActor in
+            for _ in 0..<6 {
+                try? await Task.sleep(nanoseconds: 250_000_000)
+                fda.refresh()
+                if fda.status == .granted { return }
+            }
+            if fda.status == .denied && !fda.skippedThisBuild {
+                showFDAOnboarding = true
+            }
         }
     }
 

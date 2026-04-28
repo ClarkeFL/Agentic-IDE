@@ -1,0 +1,18 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<!--
+	  Required for local Debug builds signed with the self-signed
+	  "AgenticIDE Dev" identity. Xcode auto-generates AgenticIDE.debug.dylib
+	  during incremental builds and signs it ad-hoc — different signing
+	  identity than the main binary, which under hardened runtime causes
+	  "different Team IDs" library-load rejection at launch. Disabling
+	  library validation lets the main binary load the differently-signed
+	  helper dylib. Has no effect on Release builds (which are ad-hoc end
+	  to end and don't trip the same check).
+	-->
+	<key>com.apple.security.cs.disable-library-validation</key>
+	<true/>
+</dict>
+</plist>

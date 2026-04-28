@@ -16,29 +16,66 @@ struct ProjectSidebarView: View {
     /// Identifies which drop zone the cursor is currently over, so we can
     /// render a highlight there. Format: "group:<uuid>" or "ungrouped".
     @State private var hoveredDropKey: String?
+    /// Single shared "now" tick fed to every project row's relative-time
+    /// label. Replaces the per-row Timer.publish that used to spin one
+    /// main-runloop timer per visible project.
+    @State private var now: Date = Date()
+    private let nowTick = Timer.publish(every: 30, on: .main, in: .common).autoconnect()
 
     var body: some View {
-        VStack(spacing: 0) {
+        // Single O(N) bucket of the live project list keyed by groupId so
+        // each section's lookup is O(1) instead of re-filtering the whole
+        // array per group on every body invalidation. `nil` key holds the
+        // ungrouped bucket. Per-render rebuild is cheap; the prior shape
+        // was (G + 1) × N work for G groups + N projects.
+        let projectsByGroup = bucketProjectsByGroup()
+        let ungrouped = projectsByGroup[nil] ?? []
+
+        let visibleCount = store.projects.filter { !$0.archived }.count
+
+        return VStack(spacing: 0) {
+            // Top strip — locked to the same height as the tab bar and the
+            // inspector header so the three columns share one baseline.
+            PaneHeader(leadingPadding: DS.Space.lg,
+                       trailingPadding: DS.Space.md) {
+                PaneTitle("Projects", count: visibleCount)
+            }
+
+            // `.scrollIndicators(.hidden)` alone doesn't reclaim the
+            // trailing scroller gutter on macOS — the underlying NSScrollView
+            // is left in `.legacy` style if the user's system setting is
+            // "Always show scrollbars", so it inset its document view by
+            // ~15pt on the right regardless. The `OverlayScrollerStyle`
+            // view below introspects up to the enclosing NSScrollView and
+            // forces `.overlay`, which is what eliminates the asymmetric
+            // gap between the blue project tiles and the sidebar's right
+            // border.
             ScrollView {
                 LazyVStack(alignment: .leading, spacing: 0) {
-                    let ungrouped = projects(in: nil)
                     if !ungrouped.isEmpty || !store.groups.isEmpty {
                         ungroupedSection(projects: ungrouped, hasGroups: !store.groups.isEmpty)
                     }
 
                     ForEach(store.sortedGroups) { group in
-                        groupSection(group)
+                        groupSection(group, projects: projectsByGroup[group.id] ?? [])
                     }
                 }
-                .padding(.horizontal, 6)
-                .padding(.top, 8)
-                .padding(.bottom, 8)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .padding(.horizontal, DS.Gutter.sidebar)
+                .padding(.top, DS.Space.md)
+                .padding(.bottom, DS.Space.md)
+                .background(OverlayScrollerStyle())
             }
+            .scrollIndicators(.hidden)
             .background(.clear)
             .animation(.easeOut(duration: 0.12), value: hoveredDropKey)
 
             Divider()
-            HStack(spacing: 6) {
+            // System CPU + memory readout — sits between the project list
+            // and the action buttons so it's always visible without
+            // crowding the buttons themselves.
+            ResourceBar()
+            HStack(spacing: DS.Space.sm) {
                 SidebarFooterButton(label: "Add Project",
                                     systemName: "plus",
                                     fillsWidth: true,
@@ -51,18 +88,20 @@ struct ProjectSidebarView: View {
                                     help: "New Group",
                                     action: startNewGroup)
 
-                SidebarFooterMenu(systemName: "gearshape",
-                                  help: "Settings") {
-                    Button {
-                        updater.checkForUpdates()
-                    } label: {
-                        Label("Check for Updates…", systemImage: "arrow.triangle.2.circlepath")
-                    }
+                // Direct-action update button — no dropdown. Settings stays
+                // reachable via ⌘, and the standard "AgenticIDE → Settings…"
+                // menu-bar item, so we don't lose access by removing the
+                // gear menu from this footer.
+                SidebarFooterButton(label: "Update",
+                                    systemName: "arrow.triangle.2.circlepath",
+                                    fillsWidth: false,
+                                    help: "Check for Updates",
+                                    action: { updater.checkForUpdates() })
                     .disabled(!updater.canCheckForUpdates)
-                }
             }
-            .padding(8)
+            .padding(DS.Space.md)
         }
+        .onReceive(nowTick) { now = $0 }
         .alert("New Group", isPresented: $newGroupAlertShown) {
             TextField("Name", text: $newGroupName)
             Button("Create") {
@@ -95,15 +134,23 @@ struct ProjectSidebarView: View {
     // MARK: - Subviews
 
     @ViewBuilder
-    private func groupHeader(_ group: ProjectGroup) -> some View {
-        let isEmpty = projects(in: group.id).isEmpty
+    private func groupHeader(_ group: ProjectGroup, isEmpty: Bool) -> some View {
         let isHovered = hoveredGroupId == group.id
 
-        HStack(spacing: 2) {
+        // Section-cap style: small uppercase tracked label, secondary colour.
+        // Matches the inspector file-tree directory headers ("LIB/COMPONENTS",
+        // "ROUTES") so the whole app shares one visual language for "this is
+        // a section label, not a row." The label sits on its own visual tier
+        // so project names below it read clearly as the primary content.
+        HStack(spacing: DS.Space.xxs) {
             Text(group.name)
-                .font(.subheadline.weight(.semibold))
-                .foregroundStyle(.primary)
-            Spacer(minLength: 4)
+                .font(DS.Font.sectionCaps)
+                .foregroundStyle(.secondary)
+                .textCase(.uppercase)
+                .tracking(0.6)
+                .lineLimit(1)
+                .truncationMode(.tail)
+            Spacer(minLength: DS.Space.xs)
 
             // Always present in the layout (opacity gated) so hover doesn't reflow the row.
             SidebarIconButton(systemName: "square.and.pencil",
@@ -124,10 +171,14 @@ struct ProjectSidebarView: View {
             .allowsHitTesting(isHovered)
             .transaction { $0.animation = nil }
         }
-        .frame(minHeight: 22)
-        .padding(.leading, 6)
-        .padding(.trailing, 8)
-        .padding(.bottom, isEmpty ? 4 : 10)
+        // Trailing padding matches `projectRowItem`'s horizontal inset
+        // (DS.Space.sm) so the pencil/trash buttons sit on the same vertical
+        // line as the right edge of the project tiles below.
+        .frame(minHeight: DS.Control.standard)
+        .padding(.leading, DS.Space.sm)
+        .padding(.trailing, DS.Space.sm)
+        .padding(.top, DS.Space.xs)
+        .padding(.bottom, isEmpty ? DS.Space.xs : DS.Space.xs)
         .contentShape(Rectangle())
         .onHover { inside in
             if inside {
@@ -151,20 +202,31 @@ struct ProjectSidebarView: View {
 
     @ViewBuilder
     private func ungroupedSection(projects: [Project], hasGroups: Bool) -> some View {
-        VStack(alignment: .leading, spacing: 2) {
+        VStack(alignment: .leading, spacing: DS.Space.xxs) {
+            // Same section-cap visual treatment as `groupHeader` so all the
+            // section labels read as one tier ("UNGROUPED", "WORK",
+            // "FLIPPEDIT", "SIDE PROJECTS"). Earlier this header used the
+            // old subheadline-semibold-primary style and looked like a
+            // project name competing with the rows.
             Text(hasGroups ? "Ungrouped" : "Projects")
-                .font(.subheadline.weight(.semibold))
-                .foregroundStyle(.primary)
-                .padding(.trailing, 8)
-                .padding(.leading, 6)
-                .padding(.bottom, projects.isEmpty ? 4 : 8)
+                .font(DS.Font.sectionCaps)
+                .foregroundStyle(.secondary)
+                .textCase(.uppercase)
+                .tracking(0.6)
+                .lineLimit(1)
+                .truncationMode(.tail)
+                .padding(.leading, DS.Space.sm)
+                .padding(.trailing, DS.Space.sm)
+                .padding(.top, DS.Space.xs)
+                .padding(.bottom, projects.isEmpty ? DS.Space.xs : DS.Space.xs)
+                .frame(maxWidth: .infinity, alignment: .leading)
                 .modifier(DropZoneHighlight(active: hoveredDropKey == "ungrouped"))
 
             ForEach(projects) { project in
                 projectRowItem(project)
             }
         }
-        .padding(.bottom, 12)
+        .padding(.bottom, DS.Space.md)
         .dropDestination(for: String.self) { items, _ in
             let projectIds = items.filter { !$0.hasPrefix("group:") }
             moveProjects(from: projectIds, to: nil)
@@ -175,22 +237,21 @@ struct ProjectSidebarView: View {
     }
 
     @ViewBuilder
-    private func groupSection(_ group: ProjectGroup) -> some View {
-        let groupProjects = self.projects(in: group.id)
-        VStack(alignment: .leading, spacing: 2) {
-            groupHeader(group)
+    private func groupSection(_ group: ProjectGroup, projects groupProjects: [Project]) -> some View {
+        VStack(alignment: .leading, spacing: DS.Space.xxs) {
+            groupHeader(group, isEmpty: groupProjects.isEmpty)
                 .modifier(DropZoneHighlight(active: hoveredDropKey == "group:\(group.id.uuidString)"))
                 .draggable("group:\(group.id.uuidString)") {
                     Label(group.name, systemImage: "folder.fill.badge.gearshape")
-                        .padding(6)
-                        .background(.thinMaterial, in: RoundedRectangle(cornerRadius: 6))
+                        .padding(DS.Space.sm)
+                        .background(.thinMaterial, in: RoundedRectangle(cornerRadius: DS.Radius.lg))
                 }
 
             ForEach(groupProjects) { project in
                 projectRowItem(project)
             }
         }
-        .padding(.bottom, 12)
+        .padding(.bottom, DS.Space.md)
         .dropDestination(for: String.self) { items, _ in
             handleSectionDrop(items, targetGroupId: group.id)
         } isTargeted: { entering in
@@ -206,6 +267,7 @@ struct ProjectSidebarView: View {
         ProjectRow(project: project,
                    session: session,
                    isExpanded: isSelected,
+                   now: now,
                    onSelectTab: { id in session.activeTabId = id },
                    onCloseTab: { id in session.closeTab(id: id) },
                    onRenameTab: { id, newTitle in
@@ -215,10 +277,16 @@ struct ProjectSidebarView: View {
                        session.tabs[idx].title = trimmed
                        session.markDirty()
                    })
-            .padding(.horizontal, 6)
-            .padding(.vertical, 4)
+            .padding(.horizontal, DS.Space.sm)
+            .padding(.vertical, DS.Space.xs)
+            // Force the padded view to claim the parent's full width before
+            // the background draws, so the blue tile spans edge-to-edge of
+            // the sidebar's content area (gutter on both sides matches).
+            // Without this, the tile sized to its natural content width and
+            // left a wider empty strip on the right than the left.
+            .frame(maxWidth: .infinity, alignment: .leading)
             .background(
-                RoundedRectangle(cornerRadius: 6, style: .continuous)
+                RoundedRectangle(cornerRadius: DS.Radius.lg, style: .continuous)
                     .fill(isSelected ? Color.accentColor.opacity(0.22) : .clear)
             )
             .contentShape(Rectangle())
@@ -229,8 +297,8 @@ struct ProjectSidebarView: View {
             }
             .draggable(project.id.uuidString) {
                 Label(project.name, systemImage: "folder.fill")
-                    .padding(6)
-                    .background(.thinMaterial, in: RoundedRectangle(cornerRadius: 6))
+                    .padding(DS.Space.sm)
+                    .background(.thinMaterial, in: RoundedRectangle(cornerRadius: DS.Radius.lg))
             }
             .contextMenu {
                 Button("Reveal in Finder") {
@@ -264,8 +332,16 @@ struct ProjectSidebarView: View {
 
     // MARK: - Actions
 
-    private func projects(in groupId: UUID?) -> [Project] {
-        store.projects.filter { !$0.archived && $0.groupId == groupId }
+    /// One pass over `store.projects` that buckets into `[groupId: [Project]]`.
+    /// Filters out archived rows up front so callers don't re-check. Group
+    /// keys preserve the relative ordering from `store.projects`; the
+    /// section views render this directly without a second sort.
+    private func bucketProjectsByGroup() -> [UUID?: [Project]] {
+        var buckets: [UUID?: [Project]] = [:]
+        for project in store.projects where !project.archived {
+            buckets[project.groupId, default: []].append(project)
+        }
+        return buckets
     }
 
     private func moveProjects(from items: [String], to groupId: UUID?) {
@@ -345,7 +421,7 @@ private struct DropZoneHighlight: ViewModifier {
                         .frame(width: 3)
                         .padding(.vertical, 2)
                         .opacity(active ? 1 : 0)
-                    RoundedRectangle(cornerRadius: 4, style: .continuous)
+                    RoundedRectangle(cornerRadius: DS.Radius.sm, style: .continuous)
                         .fill(Color.accentColor.opacity(active ? 0.16 : 0.0))
                 }
             }
@@ -364,27 +440,28 @@ private struct SidebarFooterButton: View {
 
     var body: some View {
         Button(action: action) {
-            HStack(spacing: 6) {
+            HStack(spacing: DS.Space.sm) {
                 Image(systemName: systemName)
-                    .font(.system(size: 12, weight: .semibold))
+                    .font(DS.Font.bodySemibold)
                 if fillsWidth {
                     Text(label)
-                        .font(.system(size: 12, weight: .medium))
+                        .font(DS.Font.bodyMedium)
                 }
                 if fillsWidth {
                     Spacer(minLength: 0)
                 }
             }
-            .padding(.horizontal, fillsWidth ? 8 : 0)
-            .padding(.vertical, 5)
+            .padding(.horizontal, fillsWidth ? DS.Space.md : 0)
+            .padding(.vertical, DS.Space.xs + 1)
             .frame(maxWidth: fillsWidth ? .infinity : nil, alignment: .leading)
-            .frame(width: fillsWidth ? nil : 26, height: fillsWidth ? nil : 26)
+            .frame(width: fillsWidth ? nil : DS.Control.large,
+                   height: fillsWidth ? nil : DS.Control.large)
             .background(
-                RoundedRectangle(cornerRadius: 6, style: .continuous)
+                RoundedRectangle(cornerRadius: DS.Radius.lg, style: .continuous)
                     .fill(Color.primary.opacity(isPressed ? 0.16 : (isHovered ? 0.10 : 0.04)))
             )
             .overlay(
-                RoundedRectangle(cornerRadius: 6, style: .continuous)
+                RoundedRectangle(cornerRadius: DS.Radius.lg, style: .continuous)
                     .strokeBorder(Color.primary.opacity(isHovered ? 0.18 : 0.10), lineWidth: 0.5)
             )
             .contentShape(Rectangle())
@@ -415,14 +492,14 @@ private struct SidebarFooterMenu<MenuContent: View>: View {
             content()
         } label: {
             Image(systemName: systemName)
-                .font(.system(size: 12, weight: .semibold))
-                .frame(width: 26, height: 26)
+                .font(DS.Font.bodySemibold)
+                .frame(width: DS.Control.large, height: DS.Control.large)
                 .background(
-                    RoundedRectangle(cornerRadius: 6, style: .continuous)
+                    RoundedRectangle(cornerRadius: DS.Radius.lg, style: .continuous)
                         .fill(Color.primary.opacity(isHovered ? 0.10 : 0.04))
                 )
                 .overlay(
-                    RoundedRectangle(cornerRadius: 6, style: .continuous)
+                    RoundedRectangle(cornerRadius: DS.Radius.lg, style: .continuous)
                         .strokeBorder(Color.primary.opacity(isHovered ? 0.18 : 0.10), lineWidth: 0.5)
                 )
                 .contentShape(Rectangle())
@@ -435,33 +512,37 @@ private struct SidebarFooterMenu<MenuContent: View>: View {
     }
 }
 
+/// Trailing-anchored hover icon used on group headers. The glyph sits at the
+/// **right edge of its frame** (alignment: .trailing) so its visible right
+/// edge lines up with the right edge of the project tiles below — without
+/// that anchor the glyph naturally centres in a 22pt button and ends up
+/// floating ~4pt to the left of the tiles' blue border.
+///
+/// Visibility is gated by the parent row's hover state (opacity 0/1), so the
+/// button doesn't need its own hover background — that was making the
+/// alignment harder to reason about for no UX gain.
 private struct SidebarIconButton: View {
     let systemName: String
     let help: String
     let enabled: Bool
     let action: () -> Void
 
-    @State private var isHovered = false
     @State private var isPressed = false
 
     var body: some View {
         Button(action: action) {
             Image(systemName: systemName)
-                .font(.system(size: 12, weight: .semibold))
-                .foregroundStyle(enabled ? Color.primary : Color.primary.opacity(0.35))
-                .frame(width: 22, height: 22)
-                .background(
-                    RoundedRectangle(cornerRadius: 5, style: .continuous)
-                        .fill(Color.primary.opacity(enabled && isHovered ? (isPressed ? 0.18 : 0.12) : 0.0))
-                )
+                .font(DS.Font.bodySemibold)
+                .foregroundStyle(enabled ? Color.secondary : Color.primary.opacity(0.35))
+                .frame(width: DS.Control.compact,
+                       height: DS.Control.compact,
+                       alignment: .trailing)
                 .contentShape(Rectangle())
                 .scaleEffect(isPressed ? 0.94 : 1.0)
-                .animation(.easeOut(duration: 0.08), value: isHovered)
                 .animation(.easeOut(duration: 0.08), value: isPressed)
         }
         .buttonStyle(.plain)
         .disabled(!enabled)
-        .onHover { isHovered = $0 }
         .simultaneousGesture(
             DragGesture(minimumDistance: 0)
                 .onChanged { _ in if enabled { isPressed = true } }
@@ -475,24 +556,21 @@ private struct ProjectRow: View {
     let project: Project
     @Bindable var session: ProjectSession
     let isExpanded: Bool
+    /// Shared "now" injected by the sidebar's single timer. Drives the
+    /// relative-time label without each row spinning its own runloop timer.
+    let now: Date
     let onSelectTab: (UUID) -> Void
     let onCloseTab: (UUID) -> Void
     let onRenameTab: (UUID, String) -> Void
 
-    /// Drives a periodic refresh of the relative-time label so it ticks
-    /// without showing seconds. 30s cadence is plenty when our smallest
-    /// unit is "min."
-    @State private var now: Date = Date()
-    private let tick = Timer.publish(every: 30, on: .main, in: .common).autoconnect()
-
     var body: some View {
-        VStack(alignment: .leading, spacing: 3) {
-            HStack(spacing: 6) {
+        VStack(alignment: .leading, spacing: DS.Space.xs) {
+            HStack(spacing: DS.Space.sm) {
                 if !session.tabs.isEmpty {
                     Image(systemName: "chevron.right")
-                        .font(.system(size: 9, weight: .bold))
+                        .font(.system(size: DS.Icon.micro, weight: .bold))
                         .foregroundStyle(.secondary)
-                        .frame(width: 10)
+                        .frame(width: DS.Tree.chevronColumn)
                         .rotationEffect(.degrees(isExpanded ? 90 : 0))
                 }
                 Image(systemName: "folder.fill")
@@ -510,7 +588,7 @@ private struct ProjectRow: View {
                    let info = TerminalStatusBadge.info(for: aggregate) {
                     Circle()
                         .fill(info.color)
-                        .frame(width: 7, height: 7)
+                        .frame(width: 7, height: 7) // status dot — keep tight
                         .help(info.label)
                 }
             }
@@ -520,7 +598,7 @@ private struct ProjectRow: View {
             // children. The status indicator used to live here too; it's now
             // promoted into the title row so the dot stays visible (and right-
             // aligned to the title) regardless of whether this line renders.
-            HStack(spacing: 6) {
+            HStack(spacing: DS.Space.sm) {
                 if !session.tabs.isEmpty {
                     Label(tabCountLabel, systemImage: "rectangle.stack")
                         .labelStyle(.titleAndIcon)
@@ -540,30 +618,49 @@ private struct ProjectRow: View {
                         .font(.caption2)
                         .foregroundStyle(.tertiary)
                 }
+                // Forces the HStack — and therefore the parent VStack — to
+                // claim the full proposed width. Without it the summary line
+                // stops at its content and the VStack reports a natural width
+                // shorter than the parent, which is what was making the
+                // outer blue tile end before the sidebar's right edge.
+                Spacer(minLength: 0)
             }
 
-            // Expanded children — terminal rows under this project. We always
-            // render the container but collapse it to height 0 when not
-            // expanded so the row animates as a single unit (no fade-over of
-            // the project title during collapse).
-            VStack(spacing: 1) {
-                ForEach(session.tabs) { tab in
-                    TerminalChildRow(tab: tab,
-                                     isActive: session.activeTabId == tab.id,
-                                     onSelect: { onSelectTab(tab.id) },
-                                     onClose: { onCloseTab(tab.id) },
-                                     onRename: { newName in onRenameTab(tab.id, newName) })
+            // Terminal children — only inserted into the layout when shown.
+            // Conditional rendering (vs the old `.frame(maxHeight: 0)`)
+            // means the parent VStack doesn't reserve its `spacing` slot
+            // when collapsed, so the blue tile's top/bottom padding stay
+            // symmetric.
+            //
+            // Horizontal inset is small + symmetric: just enough to read
+            // as nested under the project, not so much that the inner blue
+            // row is dwarfed inside the outer one. Aligns roughly with
+            // where the title text sits (folder-icon column) for a clean
+            // vertical edge running down the tile.
+            if showChildren {
+                VStack(spacing: 1) {
+                    ForEach(session.tabs) { tab in
+                        TerminalChildRow(tab: tab,
+                                         isActive: session.activeTabId == tab.id,
+                                         onSelect: { onSelectTab(tab.id) },
+                                         onClose: { onCloseTab(tab.id) },
+                                         onRename: { newName in onRenameTab(tab.id, newName) })
+                    }
                 }
+                // Asymmetric on purpose: a clear hierarchy indent on the
+                // leading side (so the row reads as a child of the project)
+                // and a small breathing-room inset on the trailing side so
+                // the row's blue tile doesn't bleed into the outer tile's
+                // border. Roughly aligns with where the title text begins
+                // (chevron + folder-icon column).
+                .padding(.leading, DS.Space.lg + 2)
+                .padding(.trailing, DS.Space.xs)
+                .transition(.opacity.combined(with: .move(edge: .top)))
             }
-            .padding(.top, isExpanded ? 6 : 0)
-            .padding(.leading, 14)
-            .frame(maxHeight: showChildren ? .infinity : 0, alignment: .top)
-            .opacity(showChildren ? 1 : 0)
-            .clipped()
         }
-        .padding(.vertical, 2)
+        .padding(.vertical, DS.Space.xxs)
         .animation(.spring(response: 0.40, dampingFraction: 0.85), value: session.tabs.map(\.id))
-        .onReceive(tick) { now = $0 }
+        .animation(.easeInOut(duration: 0.18), value: isExpanded)
     }
 
     private var showChildren: Bool {
@@ -612,6 +709,11 @@ private struct TerminalChildRow: View {
     @State private var isEditing = false
     @State private var draftName: String = ""
     @State private var pulseOpacity: Double = 1.0
+    /// Guards against stacking `repeatForever` animations on the same
+    /// property when both `.onAppear` and `.onChange(of: tab.status)` would
+    /// otherwise call `withAnimation` in quick succession (a working tab's
+    /// row reappearing after a project switch is the common trigger).
+    @State private var isPulsing: Bool = false
     @FocusState private var nameFieldFocused: Bool
 
     var body: some View {
@@ -619,7 +721,7 @@ private struct TerminalChildRow: View {
         // trailing spacer so the title doesn't shift when the close button
         // appears on hover. The close button is overlaid on top so its taps
         // aren't fighting the row's onTapGesture for select/rename.
-        HStack(spacing: 6) {
+        HStack(spacing: DS.Space.sm) {
             // Status dot replaces the generic terminal glyph when something
             // interesting is happening (working / completed /
             // failed) — keeps the row at the same height but communicates
@@ -627,48 +729,48 @@ private struct TerminalChildRow: View {
             if let info = TerminalStatusBadge.info(for: tab.status) {
                 Circle()
                     .fill(info.color)
-                    .frame(width: 7, height: 7)
-                    .frame(width: 14)
+                    .frame(width: 7, height: 7) // status dot — keep tight
+                    .frame(width: DS.Tree.iconColumn - 2)
                     .opacity(tab.status == .working ? pulseOpacity : 1.0)
                     .help(info.label)
             } else {
                 Image(systemName: "terminal")
-                    .font(.system(size: 11, weight: .medium))
+                    .font(DS.Font.control)
                     .foregroundStyle(.secondary)
-                    .frame(width: 14)
+                    .frame(width: DS.Tree.iconColumn - 2)
             }
 
             if isEditing {
                 TextField("", text: $draftName)
                     .textFieldStyle(.plain)
-                    .font(.system(size: 12, weight: isActive ? .semibold : .regular))
+                    .font(.system(size: DS.FontSize.body, weight: isActive ? .semibold : .regular))
                     .focused($nameFieldFocused)
                     .onSubmit(commitRename)
                     .onExitCommand { isEditing = false }
             } else {
-                HStack(spacing: 5) {
+                HStack(spacing: DS.Space.xs + 1) {
                     if let info = TerminalStatusBadge.info(for: tab.status) {
                         Text(info.label)
-                            .font(.system(size: 12, weight: .semibold))
+                            .font(DS.Font.bodySemibold)
                             .foregroundStyle(info.color)
                             .lineLimit(1)
                     }
                     Text(tab.title)
-                        .font(.system(size: 12, weight: isActive ? .semibold : .regular))
+                        .font(.system(size: DS.FontSize.body, weight: isActive ? .semibold : .regular))
                         .foregroundStyle(isActive ? .primary : .secondary)
                         .lineLimit(1)
                 }
             }
 
-            Spacer(minLength: 4)
+            Spacer(minLength: DS.Space.xs)
             // Reserve close-button space so layout doesn't reflow on hover.
-            Color.clear.frame(width: 18, height: 16)
+            Color.clear.frame(width: DS.Control.compact, height: DS.Control.badge)
         }
-        .padding(.horizontal, 6)
-        .padding(.vertical, 3)
-        .frame(minHeight: 22)
+        .padding(.horizontal, DS.Space.sm)
+        .padding(.vertical, DS.Space.xs)
+        .frame(minHeight: DS.Control.standard)
         .background(
-            RoundedRectangle(cornerRadius: 5, style: .continuous)
+            RoundedRectangle(cornerRadius: DS.Radius.md, style: .continuous)
                 .fill(isActive
                       ? Color.accentColor.opacity(0.22)
                       : (isHovered ? Color.primary.opacity(0.06) : .clear))
@@ -682,17 +784,17 @@ private struct TerminalChildRow: View {
             // accident; opacity is tied to the same state for the visual.
             Button(action: onClose) {
                 Image(systemName: "xmark")
-                    .font(.system(size: 9, weight: .bold))
+                    .font(.system(size: DS.Icon.micro, weight: .bold))
                     .foregroundStyle(.secondary)
-                    .frame(width: 16, height: 16)
+                    .frame(width: DS.Control.badge, height: DS.Control.badge)
                     .background(
-                        RoundedRectangle(cornerRadius: 4, style: .continuous)
+                        RoundedRectangle(cornerRadius: DS.Radius.sm, style: .continuous)
                             .fill(Color.primary.opacity(0.10))
                     )
                     .contentShape(Rectangle())
             }
             .buttonStyle(.plain)
-            .padding(.trailing, 7)
+            .padding(.trailing, DS.Space.sm + 1)
             .opacity(isHovered && !isEditing ? 1 : 0)
             .allowsHitTesting(isHovered && !isEditing)
             .help("Close terminal")
@@ -704,22 +806,12 @@ private struct TerminalChildRow: View {
             Button("Close", role: .destructive) { onClose() }
         }
         .onChange(of: tab.status) { _, newValue in
-            if newValue == .working {
-                withAnimation(.easeInOut(duration: 0.9).repeatForever(autoreverses: true)) {
-                    pulseOpacity = 0.35
-                }
-            } else {
-                withAnimation(.easeInOut(duration: 0.2)) { pulseOpacity = 1.0 }
-            }
+            updatePulse(working: newValue == .working)
         }
         .onAppear {
             // Re-establish the pulse if the tab was already working when the
             // row appeared (e.g. after switching between projects).
-            if tab.status == .working {
-                withAnimation(.easeInOut(duration: 0.9).repeatForever(autoreverses: true)) {
-                    pulseOpacity = 0.35
-                }
-            }
+            updatePulse(working: tab.status == .working)
         }
     }
 
@@ -734,6 +826,22 @@ private struct TerminalChildRow: View {
         if !trimmed.isEmpty { onRename(trimmed) }
         isEditing = false
     }
+
+    /// Single entry point for starting/stopping the working-state pulse.
+    /// Idempotent — repeated calls with the same `working` value short-
+    /// circuit so a re-render of an already-pulsing row doesn't add
+    /// another `repeatForever` animation onto `pulseOpacity`.
+    private func updatePulse(working: Bool) {
+        guard working != isPulsing else { return }
+        isPulsing = working
+        if working {
+            withAnimation(.easeInOut(duration: 0.9).repeatForever(autoreverses: true)) {
+                pulseOpacity = 0.35
+            }
+        } else {
+            withAnimation(.easeInOut(duration: 0.2)) { pulseOpacity = 1.0 }
+        }
+    }
 }
 
 /// Small `● Label` indicator used on collapsed project rows so the user can
@@ -745,10 +853,10 @@ struct TerminalStatusBadge: View {
 
     var body: some View {
         if let info = Self.info(for: status) {
-            HStack(spacing: 4) {
+            HStack(spacing: DS.Space.xs) {
                 Circle()
                     .fill(info.color)
-                    .frame(width: 6, height: 6)
+                    .frame(width: DS.Space.sm, height: DS.Space.sm)
                 Text(info.label)
                     .font(.caption2.weight(.semibold))
                     .foregroundStyle(info.color)
@@ -776,5 +884,34 @@ struct TerminalStatusBadge: View {
         case .failed:
             return Info(label: "Failed", color: Color(red: 0.92, green: 0.36, blue: 0.36))
         }
+    }
+}
+
+/// Walks up the AppKit hierarchy to the enclosing `NSScrollView` and forces
+/// its scroller style to `.overlay`. SwiftUI's `.scrollIndicators(.hidden)`
+/// only hides the bar; it doesn't switch the underlying `NSScrollView` out
+/// of `.legacy` mode if the user's system setting is "Always show scroll
+/// bars". In `.legacy` mode the document view is inset on the trailing
+/// side by the scroller width (~15pt), which is exactly the asymmetric gap
+/// we were seeing on the right side of the project tiles.
+private struct OverlayScrollerStyle: NSViewRepresentable {
+    func makeNSView(context: Context) -> NSView {
+        let view = NSView(frame: .zero)
+        // Defer to the next run loop so the view is in the hierarchy and
+        // `enclosingScrollView` actually returns something.
+        DispatchQueue.main.async { Self.apply(to: view) }
+        return view
+    }
+
+    func updateNSView(_ nsView: NSView, context: Context) {
+        DispatchQueue.main.async { Self.apply(to: nsView) }
+    }
+
+    private static func apply(to view: NSView) {
+        guard let scrollView = view.enclosingScrollView else { return }
+        scrollView.scrollerStyle = .overlay
+        scrollView.autohidesScrollers = true
+        scrollView.verticalScroller?.scrollerStyle = .overlay
+        scrollView.horizontalScroller?.scrollerStyle = .overlay
     }
 }

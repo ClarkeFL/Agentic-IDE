@@ -5,15 +5,24 @@ import SwiftUI
 /// only handles attachment to the SwiftUI tree.
 struct GhosttyTerminal: NSViewRepresentable {
     let view: GhosttyTerminalView
+    /// True when this tab is the one the user is currently looking at.
+    /// Inactive tabs mark their surface occluded (Ghostty stops painting)
+    /// and hide their metal layer (CoreAnimation stops compositing) so a
+    /// stack of background AI streams doesn't burn GPU/CPU rendering
+    /// frames the user can't see.
+    let isActive: Bool
 
     func makeNSView(context: Context) -> GhosttyTerminalView {
-        DispatchQueue.main.async { [weak view] in
-            view?.window?.makeFirstResponder(view)
+        if isActive {
+            DispatchQueue.main.async { [weak view] in
+                view?.window?.makeFirstResponder(view)
+            }
         }
+        view.setOccluded(!isActive)
         return view
     }
 
     func updateNSView(_ nsView: GhosttyTerminalView, context: Context) {
-        // Stateless. The view manages its own state.
+        nsView.setOccluded(!isActive)
     }
 }

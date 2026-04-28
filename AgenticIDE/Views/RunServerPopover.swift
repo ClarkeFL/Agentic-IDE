@@ -18,7 +18,7 @@ struct RunServerPopover: View {
     }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 10) {
+        VStack(alignment: .leading, spacing: DS.Space.lg - 2) {
             Text("Set the Run Server command for this project")
                 .font(.headline)
             Text("Runs in the project root via your login shell.")
@@ -35,8 +35,8 @@ struct RunServerPopover: View {
                     .disabled(draft.trimmingCharacters(in: .whitespaces).isEmpty)
             }
         }
-        .padding(16)
-        .frame(width: 360)
+        .padding(DS.Space.xl)
+        .frame(width: DS.Layout.runServerPopoverWidth)
     }
 
     private func commit() {

@@ -10,34 +10,50 @@ struct TabBarView: View {
     @State private var runServerEditTarget: QuickLaunch?
 
     var body: some View {
-        ScrollView(.horizontal, showsIndicators: false) {
-            HStack(spacing: 6) {
-                ForEach(project.quickLaunches) { ql in
-                    QuickLaunchButton(ql: ql) {
-                        if ql.command.isEmpty {
-                            runServerEditTarget = ql
-                        } else {
-                            onLaunch(ql)
+        // Locked to `DS.Control.header` so the tab bar shares its top + bottom
+        // edges with the sidebar `PaneHeader` and the inspector header.
+        //
+        // The launch buttons live inside a horizontal `ScrollView` (so a
+        // long quick-launch list doesn't push the speaker off-screen). The
+        // speaker, however, must sit outside that scroller — `Spacer` inside
+        // a horizontal scroll-view collapses to zero because the scroller
+        // sizes to its content, so the only way to right-align the speaker
+        // is to anchor it to the outer `HStack` that fills the pane width.
+        VStack(spacing: 0) {
+            HStack(spacing: 0) {
+                ScrollView(.horizontal, showsIndicators: false) {
+                    HStack(spacing: DS.Space.sm) {
+                        ForEach(project.quickLaunches) { ql in
+                            QuickLaunchButton(ql: ql) {
+                                if ql.command.isEmpty {
+                                    runServerEditTarget = ql
+                                } else {
+                                    onLaunch(ql)
+                                }
+                            }
+                            .popover(item: Binding(
+                                get: { runServerEditTarget?.id == ql.id ? runServerEditTarget : nil },
+                                set: { runServerEditTarget = $0 }
+                            )) { target in
+                                RunServerPopover(initialCommand: target.command,
+                                                 onSave: { newCmd in
+                                                     var updated = target
+                                                     updated.command = newCmd
+                                                     onLaunch(updated)
+                                                     runServerEditTarget = nil
+                                                 },
+                                                 onCancel: { runServerEditTarget = nil })
+                            }
                         }
-                    }
-                    .popover(item: Binding(
-                        get: { runServerEditTarget?.id == ql.id ? runServerEditTarget : nil },
-                        set: { runServerEditTarget = $0 }
-                    )) { target in
-                        RunServerPopover(initialCommand: target.command,
-                                         onSave: { newCmd in
-                                             var updated = target
-                                             updated.command = newCmd
-                                             onLaunch(updated)
-                                             runServerEditTarget = nil
-                                         },
-                                         onCancel: { runServerEditTarget = nil })
-                    }
-                }
 
-                InlineIconButton(systemName: "plus",
-                                 help: "New shell tab",
-                                 action: onLaunchDefaultShell)
+                        InlineIconButton(systemName: "plus",
+                                         help: "New shell tab",
+                                         action: onLaunchDefaultShell)
+                    }
+                    .padding(.leading, DS.Space.lg - 2)
+                    .padding(.trailing, DS.Space.sm)
+                    .frame(height: DS.Control.header)
+                }
 
                 Spacer(minLength: 0)
 
@@ -46,9 +62,10 @@ struct TabBarView: View {
                                     ? "Stop speaking (⇧⌘.)"
                                     : "Speak selection (⇧⌘S)",
                                  action: onSpeakSelection)
+                    .padding(.trailing, DS.Space.lg - 2)
             }
-            .padding(.horizontal, 10)
-            .padding(.vertical, 6)
+            .frame(height: DS.Control.header)
+            Divider()
         }
         .background(.regularMaterial)
     }
@@ -75,15 +92,15 @@ private struct QuickLaunchButton: View {
 
     var body: some View {
         Button(action: action) {
-            HStack(spacing: 5) {
-                quickLaunchIcon(name: ql.icon, size: 12)
+            HStack(spacing: DS.Space.xs + 1) {
+                quickLaunchIcon(name: ql.icon, size: DS.FontSize.body)
                 Text(ql.label)
-                    .font(.system(size: 12, weight: .medium))
+                    .font(DS.Font.bodyMedium)
             }
-            .padding(.horizontal, 6)
-            .padding(.vertical, 3)
+            .padding(.horizontal, DS.Space.sm)
+            .padding(.vertical, DS.Space.xs)
             .background(
-                RoundedRectangle(cornerRadius: 5, style: .continuous)
+                RoundedRectangle(cornerRadius: DS.Radius.md, style: .continuous)
                     .fill(Color.primary.opacity(isPressed ? 0.14 : (isHovered ? 0.08 : 0.0)))
             )
             .contentShape(Rectangle())
@@ -142,10 +159,10 @@ private struct InlineIconButton: View {
     var body: some View {
         Button(action: action) {
             Image(systemName: systemName)
-                .font(.system(size: 12, weight: .semibold))
-                .frame(width: 22, height: 22)
+                .font(DS.Font.bodySemibold)
+                .frame(width: DS.Control.standard, height: DS.Control.standard)
                 .background(
-                    RoundedRectangle(cornerRadius: 5, style: .continuous)
+                    RoundedRectangle(cornerRadius: DS.Radius.md, style: .continuous)
                         .fill(Color.primary.opacity(isPressed ? 0.14 : (isHovered ? 0.08 : 0.0)))
                 )
                 .contentShape(Rectangle())

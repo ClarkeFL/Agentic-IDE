@@ -16,19 +16,30 @@
 
 ## Working with git
 
-The user's global `CLAUDE.md` forbids direct commits to `main`. Project-specific
-addendum: **also never push tags directly that haven't gone through main via PR**.
-The release workflow runs on tag push, and a tag pointing at an unreviewed commit
-would skip review. Concretely:
+**This repo uses `dev` as the integration branch.** Per the global `CLAUDE.md`
+"check for `dev` first" rule, all normal work commits to `dev` and pushes to
+`origin/dev`. `main` is reserved for releases — only release-merges and the
+release tag commits land there. Project-specific addendum: **also never push
+tags directly that haven't gone through `main` via the `dev` → `main` PR**.
+The release workflow runs on tag push, and a tag pointing at an unreviewed
+commit would skip review. Concretely:
 
 ```
-# always
-git checkout -b feat/<short-name>
-# … commit, push, gh pr create
-gh pr merge <n> --merge --delete-branch
+# normal work — every session
+git checkout dev && git pull
+# … edit, commit, push to dev
+git push origin dev
+
+# at release time only
+gh pr create --base main --head dev --title "release: vX.Y.Z"
+gh pr merge <n> --merge   # do NOT delete dev
 git checkout main && git pull
-git tag v0.X.Y && git push origin v0.X.Y    # only after merge
+git tag v0.X.Y && git push origin v0.X.Y
 ```
+
+Only fall back to a `feat/<short-name>` branch if a change genuinely needs
+isolation from `dev` (e.g. an experiment that may be abandoned). The default is
+to commit straight to `dev`.
 
 If a `gh pr merge` action gets denied by a permission gate, **stop and ask the
 user** — don't try to bypass with raw push or rebase tricks.

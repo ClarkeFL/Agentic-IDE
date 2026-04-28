@@ -1,3 +1,4 @@
+import AppKit
 import Foundation
 import Observation
 import OSLog
@@ -17,6 +18,23 @@ final class SessionManager {
     private var sessions: [UUID: ProjectSession] = [:]
     private var pendingSnapshots: [UUID: SessionSnapshot] = [:]
     private let storeURL: URL
+    /// Serial queue used to encode + atomic-write sessions.json off the main
+    /// thread. The hot path here is `markDirty()` from smart-rename, which
+    /// fires on every Enter key in the terminal — debouncing + bg encode
+    /// keeps that off the typing-latency budget.
+    private let saveQueue = DispatchQueue(label: "com.fabio.AgenticIDE.SessionManager.save",
+                                          qos: .utility)
+    @ObservationIgnored
+    private var pendingSave: DispatchWorkItem?
+    /// Debounce window before the encode + write fires.
+    private let saveDebounce: DispatchTimeInterval = .milliseconds(120)
+    /// Hash of the most recently written blob. Skipped when the next snapshot
+    /// hashes the same — most `markDirty()` calls reflect transient state
+    /// changes that don't actually alter what we'd serialise.
+    @ObservationIgnored
+    private var lastWrittenHash: Int = 0
+    @ObservationIgnored
+    private var terminationObserver: NSObjectProtocol?
 
     init() {
         let fm = FileManager.default
@@ -28,6 +46,19 @@ final class SessionManager {
         try? fm.createDirectory(at: dir, withIntermediateDirectories: true)
         self.storeURL = dir.appendingPathComponent("sessions.json")
         loadSnapshots()
+        terminationObserver = NotificationCenter.default.addObserver(
+            forName: NSApplication.willTerminateNotification,
+            object: nil,
+            queue: .main
+        ) { [weak self] _ in
+            self?.flushSync()
+        }
+    }
+
+    deinit {
+        if let terminationObserver {
+            NotificationCenter.default.removeObserver(terminationObserver)
+        }
     }
 
     func session(for projectId: UUID) -> ProjectSession {
@@ -39,9 +70,9 @@ final class SessionManager {
             // Re-spawn each saved tab. New PIDs but the same logical tab.
             for tabSnap in snapshot.tabs {
                 let cwd = tabSnap.workingDirectoryPath.map { URL(fileURLWithPath: $0) }
-                let cfg = SurfaceConfig(command: tabSnap.command,
+                let cfg = SurfaceConfig(command: PtyService.commandEnsuringTerminalBootstrap(tabSnap.command),
                                         workingDirectory: cwd,
-                                        env: [:])
+                                        env: PtyService.terminalEnvironment())
                 let tab = TerminalTab(id: tabSnap.id, title: tabSnap.title, config: cfg)
                 s.tabs.append(tab)
             }
@@ -66,10 +97,41 @@ final class SessionManager {
 
     // MARK: - Persistence
 
-    /// Flushes the current state of every loaded session (plus any not-yet-
-    /// activated pending snapshots) to disk. Called from ProjectSession's
-    /// saveHook on every mutation.
+    /// Schedules a debounced background write of the current state. Cheap to
+    /// call — bursts of `markDirty()` from smart-rename collapse into one
+    /// fsync, and snapshots that hash identical to the last write are
+    /// skipped entirely.
     func save() {
+        let snapshot = currentSnapshot()
+        let hash = snapshot.contentHash
+        // Skip if nothing the encoder would emit has changed. activeTabId
+        // didSet still fires saveHook when tabs reshuffle (e.g. closeTab's
+        // pre-removal active reassignment) but the persisted shape is the
+        // same as what we'd write next tick.
+        if hash == lastWrittenHash { return }
+
+        pendingSave?.cancel()
+        let url = storeURL
+        let log = self.log
+        let work = DispatchWorkItem { [weak self] in
+            Self.write(snapshot, to: url, log: log)
+            self?.lastWrittenHash = hash
+        }
+        pendingSave = work
+        saveQueue.asyncAfter(deadline: .now() + saveDebounce, execute: work)
+    }
+
+    /// Synchronous flush of the current snapshot. Used from app-quit so any
+    /// pending debounced write isn't dropped.
+    func flushSync() {
+        pendingSave?.cancel()
+        pendingSave = nil
+        let snapshot = currentSnapshot()
+        Self.write(snapshot, to: storeURL, log: log)
+        lastWrittenHash = snapshot.contentHash
+    }
+
+    private func currentSnapshot() -> [SessionSnapshot] {
         var all: [SessionSnapshot] = []
         for (projectId, session) in sessions {
             let tabs = session.tabs.map { tab in
@@ -89,11 +151,15 @@ final class SessionManager {
         for (id, snap) in pendingSnapshots where !all.contains(where: { $0.projectId == id }) {
             all.append(snap)
         }
+        return all
+    }
+
+    private static func write(_ all: [SessionSnapshot], to url: URL, log: Logger) {
         do {
             let encoder = JSONEncoder()
-            encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
+            encoder.outputFormatting = .sortedKeys
             let data = try encoder.encode(all)
-            try data.write(to: storeURL, options: [.atomic])
+            try data.write(to: url, options: [.atomic])
         } catch {
             log.error("Failed to save sessions.json: \(error.localizedDescription)")
         }
@@ -125,4 +191,27 @@ struct TabSnapshot: Codable {
     var title: String
     var command: String?
     var workingDirectoryPath: String?
+}
+
+extension Array where Element == SessionSnapshot {
+    /// Stable hash of the persisted shape. Used by `SessionManager.save()` to
+    /// skip writes when a `markDirty()` call doesn't actually change anything
+    /// the encoder would emit. Order-sensitive but the source dictionary
+    /// iteration is stable enough for our purposes — a false miss just means
+    /// one redundant write, never lost data.
+    var contentHash: Int {
+        var hasher = Hasher()
+        for snap in self {
+            hasher.combine(snap.projectId)
+            hasher.combine(snap.activeTabId)
+            hasher.combine(snap.tabs.count)
+            for tab in snap.tabs {
+                hasher.combine(tab.id)
+                hasher.combine(tab.title)
+                hasher.combine(tab.command)
+                hasher.combine(tab.workingDirectoryPath)
+            }
+        }
+        return hasher.finalize()
+    }
 }

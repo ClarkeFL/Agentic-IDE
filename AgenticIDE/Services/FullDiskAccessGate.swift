@@ -72,12 +72,16 @@ final class FullDiskAccessGate {
         NSWorkspace.shared.open(url)
     }
 
-    /// Polls FDA status every 1.5s until granted (then auto-stops). Used
+    /// Polls FDA status every 0.3s until granted (then auto-stops). Used
     /// while the onboarding sheet is on screen and the user is over in
-    /// Settings flipping the toggle.
+    /// Settings flipping the toggle. Tight cadence matters — the moment
+    /// the user flips the toggle, System Settings shows its own "Quit &
+    /// Reopen" prompt; we want to detect the grant and self-relaunch
+    /// before they have time to click that button (which is silently
+    /// refused while our modal sheet is still up).
     func startPolling() {
         stopPolling()
-        pollTimer = Timer.scheduledTimer(withTimeInterval: 1.5, repeats: true) { [weak self] _ in
+        pollTimer = Timer.scheduledTimer(withTimeInterval: 0.3, repeats: true) { [weak self] _ in
             Task { @MainActor in
                 guard let self else { return }
                 self.refresh()
@@ -102,22 +106,45 @@ final class FullDiskAccessGate {
     /// Required after the user grants FDA — TCC only consults the granted-
     /// services list at process launch, so the running PID won't see the
     /// new permission.
+    ///
+    /// Goes through `NSWorkspace.openApplication`, *not* `Process` running
+    /// `/usr/bin/open -n`. The latter makes our process the responsible
+    /// parent in TCC's eyes; on ad-hoc-signed dev builds, the new instance
+    /// then loses its TCC inheritance the moment we exit, and the Full Disk
+    /// Access toggle for AgenticIDE in System Settings reverts to off.
+    /// `openApplication` routes through LaunchServices and launchd, which
+    /// is the only relaunch path that keeps TCC associations intact for a
+    /// non-Developer-ID-signed build.
     func relaunch() {
-        let bundlePath = Bundle.main.bundlePath
-        let task = Process()
-        task.launchPath = "/usr/bin/open"
-        // -n forces a new instance even if AgenticIDE is already running.
-        task.arguments = ["-n", bundlePath]
-        do {
-            try task.run()
-        } catch {
-            log.error("relaunch failed: \(error.localizedDescription, privacy: .public)")
-            return
+        let bundleURL = Bundle.main.bundleURL
+        let config = NSWorkspace.OpenConfiguration()
+        config.createsNewApplicationInstance = true
+        config.activates = true
+
+        // Dismiss sheets so termination isn't refused (see
+        // applicationShouldTerminate in AppDelegate for the matching
+        // safety belt).
+        for window in NSApp.windows {
+            if let sheet = window.attachedSheet { window.endSheet(sheet) }
         }
-        // Defer terminate so `open` has a moment to fork off cleanly. Without
-        // the dispatch hop the parent can exit before launchd has accepted
-        // the spawn request, which on rare occasions leaves no app running.
-        DispatchQueue.main.async { NSApp.terminate(nil) }
+
+        NSWorkspace.shared.openApplication(at: bundleURL, configuration: config) { _, error in
+            // Wait for the new instance to be up before tearing ourselves
+            // down so the user never sees a moment with no app running.
+            if let error {
+                Task { @MainActor [weak self] in
+                    self?.log.error("relaunch failed: \(error.localizedDescription, privacy: .public)")
+                }
+                return
+            }
+            DispatchQueue.main.async { NSApp.terminate(nil) }
+            // Hard-exit safety net on a *background* queue. A mid-
+            // termination main runloop can stall main-queue dispatches and
+            // skip our exit, leaving the old process alongside the new one.
+            DispatchQueue.global(qos: .userInitiated).asyncAfter(deadline: .now() + 0.6) {
+                exit(0)
+            }
+        }
     }
 
     /// Coarse build-identity stamp — bundle version + executable mtime.

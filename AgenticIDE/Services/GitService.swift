@@ -50,17 +50,22 @@ enum GitService {
         return result
     }
 
-    /// Cheap newline count via mmap. For very large files this is still
-    /// O(file size) but reads sequentially through pages, no heap alloc
-    /// for the contents. Returns 0 if the file is missing or binary-ish.
+    /// Cheap newline count via mmap. Capped at `maxScanBytes` so a
+    /// pathological untracked file (multi-GB log, mistakenly-committed
+    /// asset, etc.) can't pin the git queue scanning bytes during a 5s
+    /// status poll. When the cap is hit the count is a lower bound; the
+    /// inspector renders `+N` and any over-budget tail is ignored.
+    private static let maxScanBytes: Int = 1 << 20  // 1 MiB
     private static func countLines(at url: URL) -> Int {
         guard let data = try? Data(contentsOf: url, options: [.alwaysMapped]) else { return 0 }
         if data.isEmpty { return 0 }
+        let scanLen = Swift.min(data.count, maxScanBytes)
         var count = 0
-        data.withUnsafeBytes { buffer in
-            for byte in buffer where byte == 0x0A { count += 1 }
+        data.withUnsafeBytes { (raw: UnsafeRawBufferPointer) in
+            let bytes = raw.bindMemory(to: UInt8.self)
+            for i in 0..<scanLen where bytes[i] == 0x0A { count += 1 }
         }
-        if data.last != 0x0A { count += 1 }
+        if data.count <= maxScanBytes && data.last != 0x0A { count += 1 }
         return count
     }
 
@@ -84,6 +89,12 @@ enum GitService {
 
     /// Runs `/usr/bin/git` with the given args. Returns stdout as a string,
     /// or nil on launch failure / non-zero exit (unless `allowNonZeroExit`).
+    ///
+    /// Both pipes are drained on background queues *while* the child runs so
+    /// neither stdout nor stderr can fill its 64 KiB pipe buffer and block
+    /// git from exiting. The previous shape (`waitUntilExit` then read
+    /// stdout) deadlocked on diffs larger than the pipe buffer because the
+    /// child blocked writing while we blocked waiting for it to exit.
     private static func run(args: [String],
                             in cwd: URL,
                             allowNonZeroExit: Bool = false) async -> String? {
@@ -99,21 +110,37 @@ enum GitService {
                 process.standardOutput = stdout
                 process.standardError = stderr
 
+                let outBuf = AtomicData()
+                let errBuf = AtomicData()
+                let drainGroup = DispatchGroup()
+                drainGroup.enter()
+                drainGroup.enter()
+                drainQueue.async {
+                    outBuf.set(stdout.fileHandleForReading.readDataToEndOfFile())
+                    drainGroup.leave()
+                }
+                drainQueue.async {
+                    errBuf.set(stderr.fileHandleForReading.readDataToEndOfFile())
+                    drainGroup.leave()
+                }
+
                 do {
                     try process.run()
                 } catch {
+                    // The drain reads will return immediately on the closed
+                    // pipes; wait so we don't leak the dispatch_group.
+                    drainGroup.wait()
                     log.error("git launch failed: \(error.localizedDescription)")
                     continuation.resume(returning: nil)
                     return
                 }
                 process.waitUntilExit()
+                drainGroup.wait()
 
-                let outData = stdout.fileHandleForReading.readDataToEndOfFile()
-                let output = String(data: outData, encoding: .utf8) ?? ""
+                let output = String(data: outBuf.get(), encoding: .utf8) ?? ""
 
                 if process.terminationStatus != 0 && !allowNonZeroExit {
-                    let errData = stderr.fileHandleForReading.readDataToEndOfFile()
-                    let err = String(data: errData, encoding: .utf8) ?? ""
+                    let err = String(data: errBuf.get(), encoding: .utf8) ?? ""
                     log.debug("git \(args.joined(separator: " "), privacy: .public) exited \(process.terminationStatus): \(err, privacy: .public)")
                     continuation.resume(returning: nil)
                     return
@@ -121,6 +148,26 @@ enum GitService {
                 continuation.resume(returning: output)
             }
         }
+    }
+
+    /// Concurrent queue for the per-process stdout/stderr drains. Two reads
+    /// per `run()` invocation, both short-lived; a concurrent queue lets
+    /// many in-flight git invocations drain in parallel without one waiting
+    /// behind another's stderr read.
+    private static let drainQueue = DispatchQueue(label: "com.fabio.AgenticIDE.git.drain",
+                                                  qos: .userInitiated,
+                                                  attributes: .concurrent)
+
+    /// Tiny lock-protected `Data` slot. The drain closures run on the
+    /// concurrent `drainQueue` and the result is read back on the calling
+    /// thread after a `DispatchGroup.wait()`; the lock is just to satisfy
+    /// the formal happens-before rule (the wait already provides the
+    /// synchronization in practice).
+    private final class AtomicData {
+        private var value: Data = Data()
+        private let lock = NSLock()
+        func set(_ d: Data) { lock.lock(); value = d; lock.unlock() }
+        func get() -> Data { lock.lock(); defer { lock.unlock() }; return value }
     }
 
     /// Parses `git status --porcelain=v2` output into [GitChange]. Spec:
