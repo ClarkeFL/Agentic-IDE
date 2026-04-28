@@ -26,7 +26,7 @@ struct MainWindow: View {
                     .environment(sessions)
             },
             trailing: {
-                RightInspectorView(project: activeProject)
+                RightInspectorView(project: fileAccessProject)
                     .environment(store)
                     .environment(sessions)
             }
@@ -75,6 +75,16 @@ struct MainWindow: View {
     private var activeProject: Project? {
         guard let id = selectedProjectId else { return nil }
         return store.projects.first(where: { $0.id == id && !$0.archived })
+    }
+
+    /// Project handed to file-touching subviews (the right inspector's
+    /// git-status poll, file listing, etc). Returns `nil` while the FDA
+    /// onboarding sheet is up so the inspector doesn't immediately fire
+    /// per-folder TCC prompts (Documents / Desktop / Downloads) on top
+    /// of our own sheet — competing dialogs were the visible bug.
+    private var fileAccessProject: Project? {
+        if fda.status == .denied && !fda.skippedThisBuild { return nil }
+        return activeProject
     }
 
     /// Re-probes FDA on appear and shows the onboarding sheet when the user
