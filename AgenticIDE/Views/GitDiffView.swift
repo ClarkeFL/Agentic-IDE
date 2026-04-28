@@ -13,6 +13,16 @@ struct GitDiffView: View {
     let placeholder: String
     let header: DiffHeader?
 
+    /// Memoised parse result. The parser walks the entire diff and
+    /// allocates a `DiffRow` per line; for a 5k-line diff that's a
+    /// non-trivial chunk of work, and a computed property would re-run it
+    /// every time the parent view invalidates (selection changes in the
+    /// changes list, status poll fires, scroll, …). Holding the rows in
+    /// `@State` and refreshing only on `.onChange(of: diffText)` keeps
+    /// body redraws cheap.
+    @State private var rows: [DiffRow] = []
+    @State private var stats: DiffStats = DiffStats()
+
     var body: some View {
         Group {
             if isLoading {
@@ -23,6 +33,19 @@ struct GitDiffView: View {
                 contentView
             }
         }
+        .onAppear { reparse(diffText) }
+        .onChange(of: diffText) { _, new in reparse(new) }
+    }
+
+    private func reparse(_ raw: String) {
+        guard !raw.isEmpty else {
+            rows = []
+            stats = DiffStats()
+            return
+        }
+        let parsed = DiffParser.parse(raw)
+        rows = parsed.rows
+        stats = parsed.stats
     }
 
     // MARK: - States
@@ -53,25 +76,18 @@ struct GitDiffView: View {
 
     @ViewBuilder
     private var contentView: some View {
-        let parsed = DiffParser.parse(diffText)
         VStack(spacing: 0) {
             if let header {
-                DiffFileHeader(header: header, stats: parsed.stats)
+                DiffFileHeader(header: header, stats: stats)
                 Divider()
             }
-            // GeometryReader gives each row a `minLineWidth` so short rows
-            // (and their colored backgrounds) stretch across the viewport
-            // while long rows extend past it and trigger horizontal scroll.
-            // The explicit maxHeight: .infinity is critical — without it,
-            // GeometryReader collapses to zero height inside a VStack and
-            // the ScrollView gets no viewport to scroll within.
             // Single ScrollView with both axes + eager VStack so the content
             // reports its real maximum width up front. LazyVStack measures
             // only currently-rendered rows, which kept the content reported
             // as ≈ viewport width — no horizontal overflow → no h-scroll.
             ScrollView([.vertical, .horizontal], showsIndicators: true) {
                 VStack(alignment: .leading, spacing: 0) {
-                    ForEach(parsed.rows) { row in
+                    ForEach(rows) { row in
                         DiffRowView(row: row)
                     }
                 }
