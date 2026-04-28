@@ -60,6 +60,9 @@ final class GhosttyTerminalView: NSView, NSTextInputClient {
     }
 
     private func commonInit() {
+        // Layer-hosting (custom layer assigned via `self.layer =`): AppKit
+        // does NOT auto-resize the layer when the view's frame changes.
+        // We sync `layer.frame` ourselves in `setFrameSize` / `layout`.
         wantsLayer = true
         let metalLayer = CAMetalLayer()
         metalLayer.device = MTLCreateSystemDefaultDevice()
@@ -67,6 +70,7 @@ final class GhosttyTerminalView: NSView, NSTextInputClient {
         metalLayer.framebufferOnly = false
         metalLayer.contentsScale = NSScreen.main?.backingScaleFactor ?? 2.0
         metalLayer.masksToBounds = true
+        metalLayer.frame = bounds
         self.layer = metalLayer
         self.layerContentsRedrawPolicy = .duringViewResize
         self.autoresizingMask = [.width, .height]
@@ -137,7 +141,10 @@ final class GhosttyTerminalView: NSView, NSTextInputClient {
         let scale = window?.backingScaleFactor ?? 2.0
         let widthPx = UInt32(max(1, bounds.width * scale))
         let heightPx = UInt32(max(1, bounds.height * scale))
-        (layer as? CAMetalLayer)?.drawableSize = CGSize(width: CGFloat(widthPx), height: CGFloat(heightPx))
+        if let metalLayer = layer as? CAMetalLayer {
+            metalLayer.frame = bounds
+            metalLayer.drawableSize = CGSize(width: CGFloat(widthPx), height: CGFloat(heightPx))
+        }
         if let surface {
             ghostty_surface_set_size(surface, widthPx, heightPx)
             ghostty_surface_refresh(surface)
@@ -158,7 +165,14 @@ final class GhosttyTerminalView: NSView, NSTextInputClient {
         let scale = window?.backingScaleFactor ?? 2.0
         let widthPx = UInt32(max(1, newSize.width * scale))
         let heightPx = UInt32(max(1, newSize.height * scale))
-        (layer as? CAMetalLayer)?.drawableSize = CGSize(width: CGFloat(widthPx), height: CGFloat(heightPx))
+        if let metalLayer = layer as? CAMetalLayer {
+            // Layer-hosting view: we own layer sizing. Without this the layer
+            // keeps its pre-resize frame, drawing past the new view bounds —
+            // visible as terminal text overflowing into the right inspector
+            // when the window is shrunk.
+            metalLayer.frame = NSRect(origin: .zero, size: newSize)
+            metalLayer.drawableSize = CGSize(width: CGFloat(widthPx), height: CGFloat(heightPx))
+        }
         if let surface {
             ghostty_surface_set_size(surface, widthPx, heightPx)
             // Kick a paint. Without this, when SwiftUI sizes us *after* the
