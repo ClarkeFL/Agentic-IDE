@@ -1,45 +1,75 @@
+import AppKit
 import SwiftUI
 
-/// Right column: top half lists changed files (`git status --porcelain=v2`),
-/// bottom half renders the unified diff for the selected one. Re-fetches the
-/// status while visible (3 s poll) and re-fetches the diff whenever the user
-/// picks a different file. There's no UI for staging — the spec is explicit
-/// about diff *view* only; use a terminal tab for any git command.
+/// Right column: a two-mode inspector. **Changes** shows git status (top)
+/// + the unified diff for the selected file (bottom), polled every 5 s while
+/// the window is on screen (paused when the app is inactive or fully
+/// occluded). **Files** shows the project's file tree (top) + a text preview
+/// of the selected file (bottom), loaded lazily per directory. The mode
+/// toggle lives in the header. There's no UI for staging — the spec is
+/// explicit about diff *view* only; use a terminal tab for any git command.
 struct RightInspectorView: View {
     let project: Project?
 
+    @State private var mode: InspectorMode = .changes
+
+    // Changes-mode state
     @State private var changes: [GitChange] = []
     @State private var selectedFile: URL?
     @State private var isStatusUnavailable: Bool = false
     @State private var diffText: String = ""
     @State private var isLoadingDiff: Bool = false
+    /// Whether the app currently has any visible (non-occluded) window.
+    /// Driven by `NSApplication.didChangeOcclusionStateNotification`. When
+    /// false the git-status poll pauses so a hidden window stops shelling
+    /// out twice per status interval.
+    @State private var isAppVisible: Bool = NSApp?.occlusionState.contains(.visible) ?? true
+    @Environment(\.scenePhase) private var scenePhase
+
+    // Files-mode state — kept separate so flipping modes doesn't trample
+    // either pane's selection.
+    @State private var selectedProjectFile: URL?
+    /// Bumped manually to force the file-tree view to re-walk the root.
+    @State private var filesRefreshToken: Int = 0
+
+    /// Whether the inspector should run its expensive periodic work (git
+    /// status). False when the app is inactive or fully occluded.
+    private var pollingEnabled: Bool {
+        scenePhase == .active && isAppVisible
+    }
 
     var body: some View {
         VStack(spacing: 0) {
             header
             Divider()
             if let project {
-                ChangedFilesList(
-                    changes: changes,
-                    selectedFile: $selectedFile,
-                    isStatusUnavailable: isStatusUnavailable,
-                    projectPath: project.path
-                )
-                .frame(minHeight: 100, idealHeight: 220)
-                Divider()
-                diffSection(project: project)
-                    .frame(maxHeight: .infinity)
+                content(for: project)
             } else {
                 emptyProjectState
             }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .background(Color(nsColor: .controlBackgroundColor))
-        .task(id: project?.id) {
-            await startPolling()
+        // Reset per-project state on switch — done via .onChange so
+        // visibility flips don't clear the stored changeset.
+        .onChange(of: project?.id) { _, _ in
+            changes = []
+            selectedFile = nil
+            diffText = ""
+            isStatusUnavailable = false
         }
-        .onChange(of: selectedFile) { _, newValue in
-            Task { await refreshDiff(for: newValue) }
+        // Polling task. Composite id restarts the loop on project switch
+        // and on visibility changes (active + non-occluded), and cancels
+        // it on disappear.
+        .task(id: PollingKey(projectId: project?.id, enabled: pollingEnabled)) {
+            await runStatusPoll()
+        }
+        // Running the diff fetch as a `.task(id:)` lets SwiftUI cancel an
+        // in-flight refresh when the user picks a different file —
+        // otherwise a slow `git diff` from selection N could land after
+        // selection N+1 and overwrite the pane with stale content.
+        .task(id: selectedFile) {
+            await refreshDiff(for: selectedFile)
         }
         .onChange(of: changes) { _, _ in
             // If the selected file disappears from the change list (user
@@ -50,17 +80,62 @@ struct RightInspectorView: View {
                 diffText = ""
             }
         }
+        .onReceive(NotificationCenter.default.publisher(
+            for: NSApplication.didChangeOcclusionStateNotification
+        )) { _ in
+            isAppVisible = NSApp?.occlusionState.contains(.visible) ?? true
+        }
+    }
+
+    /// Composite key that drives `.task(id:)` for the status poll. The poll
+    /// task restarts when the project changes (so the per-project reset
+    /// runs from a known idle state) or when the app's visibility flips —
+    /// flipping `enabled` from false → true resumes polling immediately
+    /// instead of waiting out the previous sleep.
+    private struct PollingKey: Hashable {
+        let projectId: UUID?
+        let enabled: Bool
     }
 
     // MARK: - Subviews
 
+    @ViewBuilder
+    private func content(for project: Project) -> some View {
+        switch mode {
+        case .changes:
+            ChangedFilesList(
+                changes: changes,
+                selectedFile: $selectedFile,
+                isStatusUnavailable: isStatusUnavailable,
+                projectPath: project.path
+            )
+            .frame(minHeight: 100, idealHeight: 220)
+            Divider()
+            diffSection(project: project)
+                .frame(maxHeight: .infinity)
+        case .files:
+            ProjectFilesList(projectPath: project.path,
+                             selectedFile: $selectedProjectFile,
+                             refreshToken: filesRefreshToken)
+                .frame(minHeight: 100, idealHeight: 220)
+            Divider()
+            FilePreviewPane(file: selectedProjectFile)
+                .frame(maxHeight: .infinity)
+        }
+    }
+
     private var header: some View {
-        HStack(spacing: 6) {
-            Text("CHANGES")
-                .font(.system(size: 11, weight: .semibold))
-                .tracking(0.5)
-                .foregroundStyle(.secondary)
-            if !changes.isEmpty {
+        HStack(spacing: 8) {
+            Picker("Inspector mode", selection: $mode) {
+                Text("Files").tag(InspectorMode.files)
+                Text("Changes").tag(InspectorMode.changes)
+            }
+            .pickerStyle(.segmented)
+            .labelsHidden()
+            .controlSize(.mini)
+            .frame(maxWidth: 160)
+
+            if mode == .changes, !changes.isEmpty {
                 Text("\(changes.count)")
                     .font(.system(size: 10, weight: .semibold).monospacedDigit())
                     .foregroundStyle(.secondary)
@@ -70,14 +145,19 @@ struct RightInspectorView: View {
             }
             Spacer(minLength: 6)
             Button {
-                Task { await refreshStatusOnce() }
+                switch mode {
+                case .changes:
+                    Task { await refreshStatusOnce() }
+                case .files:
+                    filesRefreshToken &+= 1
+                }
             } label: {
                 Image(systemName: "arrow.clockwise")
                     .font(.system(size: 11, weight: .medium))
                     .foregroundStyle(.secondary)
             }
             .buttonStyle(.borderless)
-            .help("Refresh git status")
+            .help(mode == .changes ? "Refresh git status" : "Reload file tree")
             .disabled(project == nil)
         }
         .padding(.horizontal, Inspector.hPadding)
@@ -124,19 +204,16 @@ struct RightInspectorView: View {
 
     // MARK: - Status polling
 
-    /// Drives a 3-second poll for `git status` while the inspector is on
-    /// screen and a project is active. Cancelled on disappear / project
-    /// switch via `.task(id:)` semantics.
-    private func startPolling() async {
-        // Reset per-project state on switch.
-        changes = []
-        selectedFile = nil
-        diffText = ""
-        isStatusUnavailable = false
+    /// Drives a 5-second poll for `git status` while the inspector is on
+    /// screen, the app is active, and the window isn't fully occluded.
+    /// Cancelled on disappear / project switch / visibility change via
+    /// `.task(id:)` semantics.
+    private func runStatusPoll() async {
         guard project != nil else { return }
+        guard pollingEnabled else { return }
         await refreshStatusOnce()
         while !Task.isCancelled {
-            try? await Task.sleep(nanoseconds: 3_000_000_000)
+            try? await Task.sleep(nanoseconds: 5_000_000_000)
             if Task.isCancelled { break }
             await refreshStatusOnce()
         }
@@ -482,5 +559,445 @@ private struct ChangedFileRow: View {
             .font(.system(size: 10, weight: .semibold, design: .monospaced))
             .monospacedDigit()
         }
+    }
+}
+
+// MARK: - Inspector mode
+
+enum InspectorMode: Hashable {
+    case files
+    case changes
+}
+
+// MARK: - File tree
+
+/// One entry in the project file tree. Directories know whether they have
+/// loaded their children yet (nil ≠ empty); files always have `children == nil`.
+private struct FileNode: Identifiable, Hashable {
+    let id: String           // full filesystem path — stable across rebuilds
+    let url: URL
+    let name: String
+    let isDirectory: Bool
+}
+
+/// Loader + filter for project files. Skips well-known noise dirs and
+/// generated-package extensions so the tree stays useful on real repos
+/// without needing a full `.gitignore` parser.
+private enum FileBrowser {
+    /// Names dropped wholesale. Conservative — only entries that are almost
+    /// always generated/cache content, never user source.
+    static let ignoredNames: Set<String> = [
+        ".git", ".svn", ".hg", ".DS_Store",
+        "node_modules", ".build", ".swiftpm",
+        "DerivedData", "xcuserdata", "__pycache__",
+        ".next", ".turbo", ".cache"
+    ]
+
+    /// Path-extension suffixes treated as opaque packages (so the user
+    /// doesn't drill into `*.xcodeproj`'s pbxproj internals).
+    static let ignoredExtensions: Set<String> = [
+        "xcodeproj", "xcworkspace"
+    ]
+
+    static func shouldShow(_ url: URL) -> Bool {
+        let name = url.lastPathComponent
+        if ignoredNames.contains(name) { return false }
+        if ignoredExtensions.contains(url.pathExtension) { return false }
+        return true
+    }
+
+    /// Background-thread directory listing. Returns sorted nodes
+    /// (directories first, alphabetical within each kind). Returns an
+    /// empty array on permission / IO errors — callers can't usefully
+    /// distinguish "empty dir" from "couldn't read", so we collapse both.
+    static func list(_ url: URL) async -> [FileNode] {
+        await Task.detached(priority: .userInitiated) {
+            let fm = FileManager.default
+            let keys: [URLResourceKey] = [.isDirectoryKey]
+            guard let entries = try? fm.contentsOfDirectory(
+                at: url,
+                includingPropertiesForKeys: keys,
+                options: []
+            ) else {
+                return []
+            }
+            return entries
+                .filter(shouldShow)
+                .map { entry -> FileNode in
+                    let isDir = (try? entry.resourceValues(forKeys: [.isDirectoryKey]).isDirectory) ?? false
+                    return FileNode(
+                        id: entry.path,
+                        url: entry,
+                        name: entry.lastPathComponent,
+                        isDirectory: isDir
+                    )
+                }
+                .sorted { lhs, rhs in
+                    if lhs.isDirectory != rhs.isDirectory { return lhs.isDirectory }
+                    return lhs.name.localizedCaseInsensitiveCompare(rhs.name) == .orderedAscending
+                }
+        }.value
+    }
+}
+
+private struct FileTreeRow: Identifiable, Hashable {
+    let node: FileNode
+    let depth: Int
+    var id: String { node.id }
+}
+
+/// Lazy-loading file tree. Root is fetched on appear / project change;
+/// child directories are fetched the first time they're expanded and then
+/// cached. Mirrors `ChangedFilesList`'s flat-rows-from-collapsed-set
+/// pattern so animations and keyboard navigation feel identical.
+private struct ProjectFilesList: View {
+    let projectPath: URL
+    @Binding var selectedFile: URL?
+    /// Bumped by the inspector header's refresh button — invalidates the
+    /// cache and re-walks the root.
+    let refreshToken: Int
+
+    @State private var rootNodes: [FileNode] = []
+    @State private var childrenCache: [String: [FileNode]] = [:]
+    @State private var expanded: Set<String> = []
+    @State private var loading: Set<String> = []
+    @State private var isLoadingRoot: Bool = false
+    @State private var visibleRows: [FileTreeRow] = []
+
+    var body: some View {
+        Group {
+            if isLoadingRoot && rootNodes.isEmpty {
+                centered("Loading…", systemImage: "folder")
+            } else if rootNodes.isEmpty {
+                centered("Folder is empty", systemImage: "folder")
+            } else {
+                List(selection: $selectedFile) {
+                    ForEach(visibleRows) { row in
+                        rowView(for: row)
+                            .listRowInsets(EdgeInsets(top: 1,
+                                                      leading: Inspector.hPadding,
+                                                      bottom: 1,
+                                                      trailing: Inspector.hPadding))
+                            .listRowSeparator(.hidden)
+                            .listRowBackground(Color.clear)
+                    }
+                }
+                .listStyle(.plain)
+                .scrollContentBackground(.hidden)
+                .environment(\.defaultMinListRowHeight, 0)
+                .padding(.top, 4)
+            }
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .task(id: TaskKey(path: projectPath, token: refreshToken)) {
+            await loadRoot()
+        }
+        .onChange(of: rootNodes) { _, _ in rebuildVisibleRows() }
+        .onChange(of: expanded) { _, _ in rebuildVisibleRows() }
+        .onChange(of: childrenCache) { _, _ in rebuildVisibleRows() }
+    }
+
+    /// Composite id so `.task(id:)` re-fires when either the project path
+    /// changes (project switch) OR the manual refresh token bumps.
+    private struct TaskKey: Hashable {
+        let path: URL
+        let token: Int
+    }
+
+    @ViewBuilder
+    private func rowView(for row: FileTreeRow) -> some View {
+        if row.node.isDirectory {
+            FileDirectoryRow(
+                node: row.node,
+                depth: row.depth,
+                isExpanded: expanded.contains(row.node.id),
+                isLoading: loading.contains(row.node.id),
+                toggle: { toggle(row.node) }
+            )
+        } else {
+            FileLeafRow(node: row.node, depth: row.depth)
+                .tag(row.node.url)
+        }
+    }
+
+    // MARK: - State updates
+
+    private func loadRoot() async {
+        await MainActor.run {
+            isLoadingRoot = true
+            childrenCache = [:]
+            loading = []
+        }
+        let nodes = await FileBrowser.list(projectPath)
+        await MainActor.run {
+            rootNodes = nodes
+            isLoadingRoot = false
+        }
+    }
+
+    private func toggle(_ node: FileNode) {
+        if expanded.contains(node.id) {
+            withAnimation(.easeInOut(duration: 0.18)) {
+                _ = expanded.remove(node.id)
+            }
+            return
+        }
+        // Expand. If we haven't loaded this directory yet, kick off a load
+        // and only insert into `expanded` once the children are in the
+        // cache — keeps the row from flashing "empty" on slow disks.
+        if childrenCache[node.id] != nil {
+            withAnimation(.easeInOut(duration: 0.18)) {
+                _ = expanded.insert(node.id)
+            }
+            return
+        }
+        loading.insert(node.id)
+        Task {
+            let children = await FileBrowser.list(node.url)
+            await MainActor.run {
+                childrenCache[node.id] = children
+                loading.remove(node.id)
+                withAnimation(.easeInOut(duration: 0.18)) {
+                    _ = expanded.insert(node.id)
+                }
+            }
+        }
+    }
+
+    private func rebuildVisibleRows() {
+        var result: [FileTreeRow] = []
+        result.reserveCapacity(rootNodes.count)
+        func walk(_ nodes: [FileNode], depth: Int) {
+            for node in nodes {
+                result.append(FileTreeRow(node: node, depth: depth))
+                if node.isDirectory,
+                   expanded.contains(node.id),
+                   let kids = childrenCache[node.id] {
+                    walk(kids, depth: depth + 1)
+                }
+            }
+        }
+        walk(rootNodes, depth: 0)
+        visibleRows = result
+    }
+
+    private func centered(_ text: String, systemImage: String) -> some View {
+        VStack(spacing: 6) {
+            Image(systemName: systemImage)
+                .font(.system(size: 22, weight: .light))
+                .foregroundStyle(.tertiary)
+            Text(text)
+                .font(.caption)
+                .foregroundStyle(.secondary)
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .padding()
+    }
+}
+
+private struct FileDirectoryRow: View {
+    let node: FileNode
+    let depth: Int
+    let isExpanded: Bool
+    let isLoading: Bool
+    let toggle: () -> Void
+
+    var body: some View {
+        Button(action: toggle) {
+            HStack(spacing: 0) {
+                Color.clear.frame(width: CGFloat(depth) * Sidebar.indentStep)
+                Group {
+                    if isLoading {
+                        ProgressView()
+                            .controlSize(.mini)
+                            .scaleEffect(0.55)
+                    } else {
+                        Image(systemName: "chevron.right")
+                            .font(.system(size: 9, weight: .bold))
+                            .foregroundStyle(.secondary)
+                            .rotationEffect(.degrees(isExpanded ? 90 : 0))
+                    }
+                }
+                .frame(width: Sidebar.chevronColumn, alignment: .leading)
+                Image(systemName: isExpanded ? "folder.fill" : "folder")
+                    .font(.system(size: 11))
+                    .foregroundStyle(.secondary)
+                    .frame(width: 16, alignment: .leading)
+                Text(node.name)
+                    .font(.system(size: 12, weight: .medium))
+                    .foregroundStyle(.primary)
+                    .lineLimit(1)
+                    .truncationMode(.middle)
+                Spacer(minLength: 0)
+            }
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .padding(.vertical, 2)
+    }
+}
+
+private struct FileLeafRow: View {
+    let node: FileNode
+    let depth: Int
+
+    var body: some View {
+        HStack(spacing: 0) {
+            Color.clear.frame(width: CGFloat(depth) * Sidebar.indentStep + Sidebar.chevronColumn)
+            Image(systemName: "doc")
+                .font(.system(size: 11))
+                .foregroundStyle(.secondary)
+                .frame(width: 16, alignment: .leading)
+            Text(node.name)
+                .font(.system(size: 12))
+                .foregroundStyle(.primary)
+                .lineLimit(1)
+                .truncationMode(.middle)
+            Spacer(minLength: 0)
+        }
+        .padding(.vertical, 3)
+        .help(node.url.path)
+    }
+}
+
+// MARK: - File preview
+
+/// Bottom pane for Files mode. Reads up to `maxBytes` of the selected file
+/// and renders as monospace text. Refuses anything that doesn't decode as
+/// UTF-8 (treated as binary) and anything bigger than the cap (treated as
+/// "open externally"). The 512KB cap matches what most editors use as the
+/// "this might be a generated file, syntax-highlight cautiously" threshold.
+private struct FilePreviewPane: View {
+    let file: URL?
+
+    private nonisolated static let maxBytes: Int = 512 * 1024
+
+    @State private var content: String = ""
+    @State private var state: PreviewState = .empty
+    @State private var loadedFile: URL?
+
+    private enum PreviewState: Equatable {
+        case empty
+        case loading
+        case text
+        case binary
+        case tooLarge(Int)
+        case ioError
+    }
+
+    var body: some View {
+        Group {
+            switch state {
+            case .empty:
+                placeholder("Select a file above to view its contents.",
+                            systemImage: "doc.text")
+            case .loading:
+                VStack(spacing: 6) {
+                    ProgressView().controlSize(.small)
+                    Text("Loading…")
+                        .font(.caption)
+                        .foregroundStyle(.tertiary)
+                }
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+            case .text:
+                ScrollView([.vertical, .horizontal], showsIndicators: true) {
+                    Text(content)
+                        .font(.system(size: 11.5, design: .monospaced))
+                        .textSelection(.enabled)
+                        .padding(.horizontal, Inspector.hPadding)
+                        .padding(.vertical, 8)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                }
+                .background(Color(nsColor: .textBackgroundColor).opacity(0.35))
+            case .binary:
+                placeholder("Binary file — preview not available.",
+                            systemImage: "doc.zipper")
+            case .tooLarge(let bytes):
+                placeholder("File is \(formatBytes(bytes)) — too large to preview.",
+                            systemImage: "doc.text.magnifyingglass")
+            case .ioError:
+                placeholder("Couldn't read this file.",
+                            systemImage: "exclamationmark.triangle")
+            }
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .task(id: file) {
+            await load(file)
+        }
+    }
+
+    private func placeholder(_ text: String, systemImage: String) -> some View {
+        VStack(spacing: 6) {
+            Image(systemName: systemImage)
+                .font(.system(size: 22, weight: .light))
+                .foregroundStyle(.tertiary)
+            Text(text)
+                .font(.callout)
+                .foregroundStyle(.secondary)
+                .multilineTextAlignment(.center)
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .padding(20)
+    }
+
+    private func load(_ url: URL?) async {
+        guard let url else {
+            await MainActor.run {
+                state = .empty
+                content = ""
+                loadedFile = nil
+            }
+            return
+        }
+        if loadedFile == url, state != .empty { return }
+        await MainActor.run { state = .loading }
+        let result = await Self.read(url)
+        await MainActor.run {
+            loadedFile = url
+            switch result {
+            case .text(let s):
+                content = s
+                state = .text
+            case .binary:
+                content = ""
+                state = .binary
+            case .tooLarge(let bytes):
+                content = ""
+                state = .tooLarge(bytes)
+            case .ioError:
+                content = ""
+                state = .ioError
+            }
+        }
+    }
+
+    private enum ReadResult {
+        case text(String)
+        case binary
+        case tooLarge(Int)
+        case ioError
+    }
+
+    private static func read(_ url: URL) async -> ReadResult {
+        await Task.detached(priority: .userInitiated) {
+            let fm = FileManager.default
+            guard let attrs = try? fm.attributesOfItem(atPath: url.path),
+                  let size = attrs[.size] as? Int else {
+                return ReadResult.ioError
+            }
+            if size > maxBytes { return .tooLarge(size) }
+            guard let data = try? Data(contentsOf: url) else { return .ioError }
+            // Reject anything with embedded NULs — fastest cheap heuristic
+            // for "binary" before paying for a UTF-8 decode attempt.
+            if data.contains(0) { return .binary }
+            guard let text = String(data: data, encoding: .utf8) else { return .binary }
+            return .text(text)
+        }.value
+    }
+
+    private func formatBytes(_ bytes: Int) -> String {
+        let formatter = ByteCountFormatter()
+        formatter.countStyle = .file
+        return formatter.string(fromByteCount: Int64(bytes))
     }
 }
