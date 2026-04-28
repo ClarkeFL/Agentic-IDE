@@ -106,31 +106,44 @@ final class FullDiskAccessGate {
     /// Required after the user grants FDA — TCC only consults the granted-
     /// services list at process launch, so the running PID won't see the
     /// new permission.
+    ///
+    /// Goes through `NSWorkspace.openApplication`, *not* `Process` running
+    /// `/usr/bin/open -n`. The latter makes our process the responsible
+    /// parent in TCC's eyes; on ad-hoc-signed dev builds, the new instance
+    /// then loses its TCC inheritance the moment we exit, and the Full Disk
+    /// Access toggle for AgenticIDE in System Settings reverts to off.
+    /// `openApplication` routes through LaunchServices and launchd, which
+    /// is the only relaunch path that keeps TCC associations intact for a
+    /// non-Developer-ID-signed build.
     func relaunch() {
-        let bundlePath = Bundle.main.bundlePath
-        let task = Process()
-        task.launchPath = "/usr/bin/open"
-        // -n forces a new instance even if AgenticIDE is already running.
-        task.arguments = ["-n", bundlePath]
-        do {
-            try task.run()
-        } catch {
-            log.error("relaunch failed: \(error.localizedDescription, privacy: .public)")
-            return
-        }
-        // Dismiss any sheets so the standard terminate path can complete —
-        // sheets refuse termination silently and that's how we end up with
-        // two instances running side by side.
+        let bundleURL = Bundle.main.bundleURL
+        let config = NSWorkspace.OpenConfiguration()
+        config.createsNewApplicationInstance = true
+        config.activates = true
+
+        // Dismiss sheets so termination isn't refused (see
+        // applicationShouldTerminate in AppDelegate for the matching
+        // safety belt).
         for window in NSApp.windows {
             if let sheet = window.attachedSheet { window.endSheet(sheet) }
         }
-        DispatchQueue.main.async { NSApp.terminate(nil) }
-        // Hard-exit safety net on a *background* queue. Putting it on the
-        // main queue means a mid-termination main runloop can stall the
-        // dispatch and the old process never dies — exactly the bug the
-        // user reported when clicking Restart with the FDA sheet up.
-        DispatchQueue.global(qos: .userInitiated).asyncAfter(deadline: .now() + 0.6) {
-            exit(0)
+
+        NSWorkspace.shared.openApplication(at: bundleURL, configuration: config) { _, error in
+            // Wait for the new instance to be up before tearing ourselves
+            // down so the user never sees a moment with no app running.
+            if let error {
+                Task { @MainActor [weak self] in
+                    self?.log.error("relaunch failed: \(error.localizedDescription, privacy: .public)")
+                }
+                return
+            }
+            DispatchQueue.main.async { NSApp.terminate(nil) }
+            // Hard-exit safety net on a *background* queue. A mid-
+            // termination main runloop can stall main-queue dispatches and
+            // skip our exit, leaving the old process alongside the new one.
+            DispatchQueue.global(qos: .userInitiated).asyncAfter(deadline: .now() + 0.6) {
+                exit(0)
+            }
         }
     }
 
