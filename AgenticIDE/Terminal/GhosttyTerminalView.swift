@@ -162,6 +162,14 @@ final class GhosttyTerminalView: NSView, NSTextInputClient {
 
     override func setFrameSize(_ newSize: NSSize) {
         super.setFrameSize(newSize)
+        // Skip when detached / transient. SwiftUI calls `setFrameSize(.zero)`
+        // on us when the parent view is removed during a project switch, and
+        // forwarding that to ghostty reflows the scrollback to a 1×1 grid —
+        // every cached line wraps to a single column, and the breakage
+        // persists when we're re-attached. The reattach path
+        // (`viewDidMoveToWindow` → `refreshAfterReattach`) re-syncs the layer
+        // and surface to the real bounds, so we lose nothing by skipping.
+        guard window != nil, newSize.width > 1, newSize.height > 1 else { return }
         let scale = window?.backingScaleFactor ?? 2.0
         let widthPx = UInt32(max(1, newSize.width * scale))
         let heightPx = UInt32(max(1, newSize.height * scale))
