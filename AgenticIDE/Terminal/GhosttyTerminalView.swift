@@ -45,6 +45,23 @@ final class GhosttyTerminalView: NSView, NSTextInputClient {
     /// exit). The owning `TerminalTab` folds these into a `TerminalTabStatus`.
     var onTerminalEvent: ((TerminalEvent) -> Void)?
 
+    /// Cursor Ghostty has asked us to display. Driven by
+    /// `GHOSTTY_ACTION_MOUSE_SHAPE`. Defaults to I-beam (text editing) so the
+    /// terminal feels right before any process changes it. Mutating the value
+    /// invalidates the cursor rects so AppKit picks up the new cursor on the
+    /// next mouse move.
+    private var currentCursor: NSCursor = .iBeam {
+        didSet {
+            guard oldValue !== currentCursor else { return }
+            window?.invalidateCursorRects(for: self)
+        }
+    }
+
+    /// URL of the link currently under the cursor, if any. Set by
+    /// `GHOSTTY_ACTION_MOUSE_OVER_LINK`. Reserved for future tooltip / status
+    /// bar use; the actual cursor change comes through `MOUSE_SHAPE`.
+    private(set) var hoveredLinkURL: String?
+
     init(config: SurfaceConfig) {
         self.config = config
         super.init(frame: .zero)
@@ -109,6 +126,46 @@ final class GhosttyTerminalView: NSView, NSTextInputClient {
     override var isFlipped: Bool { false }
     override var canBecomeKeyView: Bool { true }
     override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
+
+    override func resetCursorRects() {
+        addCursorRect(bounds, cursor: currentCursor)
+    }
+
+    /// Maps a Ghostty mouse-shape request to the closest NSCursor and pushes
+    /// it as the view's active cursor. The most important case is `POINTER`,
+    /// which Ghostty fires while the mouse is over a clickable URL — without
+    /// this the cursor stays as I-beam and links don't *feel* clickable.
+    func applyMouseShape(_ shape: ghostty_action_mouse_shape_e) {
+        currentCursor = Self.nsCursor(for: shape)
+    }
+
+    /// Stores the URL of the link the mouse is currently over, or nil to
+    /// clear. Currently unused beyond keeping the state — wired now so a
+    /// future hover-tooltip / status-bar consumer has the data without
+    /// another action-callback round trip.
+    func setHoveredLink(_ url: String?) {
+        hoveredLinkURL = url
+    }
+
+    private static func nsCursor(for shape: ghostty_action_mouse_shape_e) -> NSCursor {
+        switch shape {
+        case GHOSTTY_MOUSE_SHAPE_DEFAULT: return .arrow
+        case GHOSTTY_MOUSE_SHAPE_POINTER: return .pointingHand
+        case GHOSTTY_MOUSE_SHAPE_TEXT: return .iBeam
+        case GHOSTTY_MOUSE_SHAPE_VERTICAL_TEXT: return .iBeamCursorForVerticalLayout
+        case GHOSTTY_MOUSE_SHAPE_CROSSHAIR, GHOSTTY_MOUSE_SHAPE_CELL: return .crosshair
+        case GHOSTTY_MOUSE_SHAPE_CONTEXT_MENU: return .contextualMenu
+        case GHOSTTY_MOUSE_SHAPE_COPY: return .dragCopy
+        case GHOSTTY_MOUSE_SHAPE_ALIAS: return .dragLink
+        case GHOSTTY_MOUSE_SHAPE_NOT_ALLOWED, GHOSTTY_MOUSE_SHAPE_NO_DROP:
+            return .operationNotAllowed
+        case GHOSTTY_MOUSE_SHAPE_GRAB: return .openHand
+        case GHOSTTY_MOUSE_SHAPE_GRABBING, GHOSTTY_MOUSE_SHAPE_MOVE: return .closedHand
+        case GHOSTTY_MOUSE_SHAPE_COL_RESIZE: return .resizeLeftRight
+        case GHOSTTY_MOUSE_SHAPE_ROW_RESIZE: return .resizeUpDown
+        default: return .arrow
+        }
+    }
 
     override func viewDidMoveToWindow() {
         super.viewDidMoveToWindow()
