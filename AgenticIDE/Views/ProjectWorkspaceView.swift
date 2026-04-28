@@ -4,6 +4,7 @@ import SwiftUI
 struct ProjectWorkspaceView: View {
     @Environment(ProjectStore.self) private var store
     @Environment(SessionManager.self) private var sessions
+    @Environment(SystemSpeaker.self) private var speaker
 
     let project: Project
 
@@ -13,7 +14,9 @@ struct ProjectWorkspaceView: View {
         VStack(spacing: 0) {
             TabBarView(project: project,
                        onLaunch: { ql in launch(ql, in: session) },
-                       onLaunchDefaultShell: { launchDefaultShell(in: session) })
+                       onLaunchDefaultShell: { launchDefaultShell(in: session) },
+                       isSpeaking: speaker.isSpeaking,
+                       onSpeakSelection: { speakSelection(in: session) })
 
             Divider()
 
@@ -36,6 +39,25 @@ struct ProjectWorkspaceView: View {
             .frame(maxWidth: .infinity, maxHeight: .infinity)
             .clipped()
         }
+        .onReceive(NotificationCenter.default.publisher(for: .speakSelection)) { _ in
+            speakSelection(in: session)
+        }
+        .onChange(of: session.activeTabId) { _, _ in
+            // Tab switch — stop any in-progress speech so we don't read
+            // stale text aloud while the user is on a new terminal.
+            speaker.stop()
+        }
+    }
+
+    /// If something is already speaking, treat the button/hotkey as Stop.
+    /// Otherwise read the active tab's selection (or fall back to the visible
+    /// grid contents — see `readSpeakable`). No-op when nothing is selected
+    /// and no project is active.
+    private func speakSelection(in session: ProjectSession) {
+        if speaker.isSpeaking { speaker.stop(); return }
+        guard let tab = session.activeTab,
+              let text = tab.view.readSelection() else { return }
+        speaker.speak(text)
     }
 
     // MARK: - Launching

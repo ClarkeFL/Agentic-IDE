@@ -4,6 +4,8 @@ struct TabBarView: View {
     let project: Project
     let onLaunch: (QuickLaunch) -> Void
     let onLaunchDefaultShell: () -> Void
+    let isSpeaking: Bool
+    let onSpeakSelection: () -> Void
 
     @State private var runServerEditTarget: QuickLaunch?
 
@@ -36,6 +38,14 @@ struct TabBarView: View {
                 InlineIconButton(systemName: "plus",
                                  help: "New shell tab",
                                  action: onLaunchDefaultShell)
+
+                Spacer(minLength: 0)
+
+                InlineIconButton(systemName: isSpeaking ? "stop.circle.fill" : "speaker.wave.2",
+                                 help: isSpeaking
+                                    ? "Stop speaking (⇧⌘.)"
+                                    : "Speak selection (⇧⌘S)",
+                                 action: onSpeakSelection)
             }
             .padding(.horizontal, 10)
             .padding(.vertical, 6)

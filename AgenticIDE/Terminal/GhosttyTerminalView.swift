@@ -438,15 +438,23 @@ final class GhosttyTerminalView: NSView, NSTextInputClient {
     // MARK: - Edit menu
 
     @objc func copy(_ sender: Any?) {
-        guard let surface else { return }
-        var text = ghostty_text_s()
-        let ok = ghostty_surface_read_selection(surface, &text)
-        guard ok, let ptr = text.text else { return }
-        let s = String(cString: ptr)
-        ghostty_surface_free_text(surface, &text)
+        guard let s = readSelection() else { return }
         let pb = NSPasteboard.general
         pb.clearContents()
         pb.setString(s, forType: .string)
+    }
+
+    /// Returns the user's current selection as plain text, or nil if there is
+    /// no selection. Used by `copy:` for clipboard, and by the Speak Selection
+    /// command for TTS.
+    func readSelection() -> String? {
+        guard let surface else { return nil }
+        var text = ghostty_text_s()
+        let ok = ghostty_surface_read_selection(surface, &text)
+        guard ok, let ptr = text.text else { return nil }
+        let s = String(cString: ptr)
+        ghostty_surface_free_text(surface, &text)
+        return s.isEmpty ? nil : s
     }
 
     @objc func paste(_ sender: Any?) {
