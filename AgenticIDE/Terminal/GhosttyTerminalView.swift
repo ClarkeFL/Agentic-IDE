@@ -104,6 +104,7 @@ final class GhosttyTerminalView: NSView, NSTextInputClient {
         metalLayer.device = MTLCreateSystemDefaultDevice()
         metalLayer.pixelFormat = .bgra8Unorm
         metalLayer.framebufferOnly = false
+        metalLayer.isOpaque = false
         metalLayer.contentsScale = NSScreen.main?.backingScaleFactor ?? 2.0
         metalLayer.masksToBounds = true
         metalLayer.frame = bounds
@@ -182,7 +183,10 @@ final class GhosttyTerminalView: NSView, NSTextInputClient {
         if let metal = layer as? CAMetalLayer, metal.isHidden == occluded {
             return
         }
-        ghostty_surface_set_occlusion(surface, occluded)
+        // Ghostty's C function name says "occlusion", but the boolean it
+        // accepts is `visible`. Passing `occluded` freezes a tab as soon as
+        // it becomes visible again.
+        ghostty_surface_set_occlusion(surface, !occluded)
         if let metal = layer as? CAMetalLayer {
             metal.isHidden = occluded
         }
@@ -205,6 +209,29 @@ final class GhosttyTerminalView: NSView, NSTextInputClient {
         }
         lastRenderDispatchHostTime = now
         return true
+    }
+
+    /// Presents the current terminal frame into the CAMetalLayer. Ghostty
+    /// emits `GHOSTTY_ACTION_RENDER` when the grid/renderer is dirty; because
+    /// AgenticIDE installs an action callback for status tracking, we must
+    /// explicitly draw the surface after handling that action.
+    func drawSurface() {
+        guard let surface, window != nil else { return }
+        if let metal = layer as? CAMetalLayer, metal.isHidden { return }
+        ghostty_surface_draw(surface)
+    }
+
+    private func applyCurrentColorScheme(refresh: Bool = false) {
+        guard let surface else { return }
+        ghostty_surface_set_color_scheme(surface, Self.colorScheme(for: effectiveAppearance))
+        if refresh {
+            ghostty_surface_refresh(surface)
+        }
+    }
+
+    private static func colorScheme(for appearance: NSAppearance) -> ghostty_color_scheme_e {
+        let match = appearance.bestMatch(from: [.darkAqua, .aqua])
+        return match == .darkAqua ? GHOSTTY_COLOR_SCHEME_DARK : GHOSTTY_COLOR_SCHEME_LIGHT
     }
 
     private static func nsCursor(for shape: ghostty_action_mouse_shape_e) -> NSCursor {
@@ -275,6 +302,11 @@ final class GhosttyTerminalView: NSView, NSTextInputClient {
         if let surface {
             ghostty_surface_set_content_scale(surface, scale, scale)
         }
+    }
+
+    override func viewDidChangeEffectiveAppearance() {
+        super.viewDidChangeEffectiveAppearance()
+        applyCurrentColorScheme(refresh: true)
     }
 
     override func setFrameSize(_ newSize: NSSize) {
@@ -369,6 +401,7 @@ final class GhosttyTerminalView: NSView, NSTextInputClient {
             }
             self.surface = s
             ghostty_surface_set_content_scale(s, cfg.scale_factor, cfg.scale_factor)
+            applyCurrentColorScheme()
         }
     }
 

@@ -1,4 +1,5 @@
 import AppKit
+import Darwin
 import Foundation
 import GhosttyKit
 import OSLog
@@ -14,6 +15,7 @@ final class GhosttyApp {
     private let log = Logger(subsystem: "com.fabio.AgenticIDE", category: "GhosttyApp")
 
     private(set) var app: ghostty_app_t?
+    private var tickTimer: Timer?
 
     private init() {}
 
@@ -21,6 +23,7 @@ final class GhosttyApp {
     /// Must be called on the main thread, exactly once, at app startup.
     func bootstrap() {
         guard app == nil else { return }
+        configureGhosttyResourcesEnvironment()
 
         // ghostty_init takes argc/argv. We pass zero args.
         var argv: [UnsafeMutablePointer<CChar>?] = [nil]
@@ -54,17 +57,78 @@ final class GhosttyApp {
             log.error("ghostty_app_new returned nil")
             return
         }
+        ghostty_app_set_color_scheme(newApp, Self.currentColorScheme())
         self.app = newApp
 
-        // No periodic tick. libxev calls `wakeupCallback` from its event
-        // thread whenever a surface has work pending; that hop dispatches
-        // a single `ghostty_app_tick` onto the main runloop. Idle CPU
-        // drops from 60 wake-ups/sec to 0 — a launched-but-idle app no
-        // longer pumps the runloop at all.
+        // Ghostty's embedding API needs the host to keep pumping tick() so
+        // terminal state changes make it through to the Metal renderer. The
+        // wakeup callback below still gives pending work an immediate tick,
+        // but it is not sufficient as the only render driver: typed input and
+        // process output can update the PTY/grid without the CAMetalLayer
+        // presenting until another UI event forces a refresh.
+        let timer = Timer(timeInterval: 1.0 / 60.0, repeats: true) { [weak self] _ in
+            guard let self, let app = self.app else { return }
+            ghostty_app_tick(app)
+        }
+        RunLoop.main.add(timer, forMode: .common)
+        self.tickTimer = timer
+
         log.info("Ghostty app bootstrapped")
     }
 
+    /// The Ghostty C core expects its resources next to a normal Ghostty app
+    /// bundle. Our app embeds libghostty directly, so point it at bundled
+    /// resources when available and fall back to the user's installed Ghostty
+    /// app during local development.
+    private func configureGhosttyResourcesEnvironment() {
+        if let existing = ProcessInfo.processInfo.environment["GHOSTTY_RESOURCES_DIR"],
+           !existing.isEmpty {
+            return
+        }
+        guard let resourcesURL = Self.ghosttyResourcesDirectory() else {
+            log.warning("Ghostty resources directory not found; terminfo, themes, and shell integration may be reduced")
+            return
+        }
+        setenv("GHOSTTY_RESOURCES_DIR", resourcesURL.path, 0)
+        log.info("Using Ghostty resources directory: \(resourcesURL.path, privacy: .public)")
+    }
+
+    private static func ghosttyResourcesDirectory() -> URL? {
+        let candidates = [
+            Bundle.main.resourceURL?.appendingPathComponent("ghostty", isDirectory: true),
+            URL(fileURLWithPath: "/Applications/Ghostty.app/Contents/Resources/ghostty", isDirectory: true)
+        ].compactMap { $0 }
+        return candidates.first(where: isValidGhosttyResourcesDirectory)
+    }
+
+    private static func isValidGhosttyResourcesDirectory(_ url: URL) -> Bool {
+        let fm = FileManager.default
+        var isDirectory: ObjCBool = false
+        let shellIntegrationURL = url.appendingPathComponent("shell-integration", isDirectory: true)
+        guard fm.fileExists(atPath: shellIntegrationURL.path, isDirectory: &isDirectory),
+              isDirectory.boolValue else {
+            return false
+        }
+        isDirectory = false
+        let themesURL = url.appendingPathComponent("themes", isDirectory: true)
+        guard fm.fileExists(atPath: themesURL.path, isDirectory: &isDirectory),
+              isDirectory.boolValue else {
+            return false
+        }
+        isDirectory = false
+        let terminfoURL = url.deletingLastPathComponent().appendingPathComponent("terminfo", isDirectory: true)
+        return fm.fileExists(atPath: terminfoURL.path, isDirectory: &isDirectory) && isDirectory.boolValue
+    }
+
+    private static func currentColorScheme() -> ghostty_color_scheme_e {
+        let appearance = NSApp?.effectiveAppearance ?? NSApplication.shared.effectiveAppearance
+        let match = appearance.bestMatch(from: [.darkAqua, .aqua])
+        return match == .darkAqua ? GHOSTTY_COLOR_SCHEME_DARK : GHOSTTY_COLOR_SCHEME_LIGHT
+    }
+
     func shutdown() {
+        tickTimer?.invalidate()
+        tickTimer = nil
         if let app {
             ghostty_app_free(app)
             self.app = nil
@@ -75,11 +139,8 @@ final class GhosttyApp {
 
     private static let wakeupCallback: ghostty_runtime_wakeup_cb = { userdata in
         // Fired by libxev (off main) whenever a surface has work pending.
-        // We hop to main and call `ghostty_app_tick`. Multiple wakeups in
-        // the same runloop turn coalesce naturally because the dispatched
-        // blocks all run before the next libxev cycle, and a tick with no
-        // pending work is a no-op — so we trade a constant 60Hz timer for
-        // demand-driven ticks that idle at 0 CPU.
+        // We hop to main and call `ghostty_app_tick` so fresh PTY/input work
+        // is processed promptly instead of waiting for the next timer frame.
         guard let userdata else { return }
         let owner = Unmanaged<GhosttyApp>.fromOpaque(userdata).takeUnretainedValue()
         DispatchQueue.main.async {
@@ -147,14 +208,22 @@ final class GhosttyApp {
         case GHOSTTY_ACTION_SHOW_CHILD_EXITED:
             event = .childExited(exitCode: Int(action.action.child_exited.exit_code))
         case GHOSTTY_ACTION_RENDER:
-            // Used as an "is the terminal still actively producing output"
-            // hint so silent moments mid-turn don't drop the working
-            // indicator. TerminalTab applies a gap filter to ignore the
-            // steady cursor-blink renders. We throttle the firehose to
-            // ~20 Hz at the C-callback level so a hot AI stream can't
-            // flood the main queue with per-frame dispatch_async.
-            if !view.shouldDispatchRender() { return true }
-            event = .render
+            // Render actions are the actual paint request. Because this
+            // callback returns true, the host is responsible for presenting
+            // the surface; otherwise the PTY/grid updates but the Metal layer
+            // can stay frozen until another UI event forces a refresh.
+            //
+            // Keep drawing every render action, but throttle the separate
+            // sidebar-status `.render` event so hot streams don't flood the
+            // observation path.
+            let dispatchStatusEvent = view.shouldDispatchRender()
+            DispatchQueue.main.async {
+                view.drawSurface()
+                if dispatchStatusEvent {
+                    view.onTerminalEvent?(.render)
+                }
+            }
+            return true
         default:
             event = nil
         }

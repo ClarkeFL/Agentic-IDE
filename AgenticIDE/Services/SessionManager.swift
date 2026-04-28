@@ -70,9 +70,9 @@ final class SessionManager {
             // Re-spawn each saved tab. New PIDs but the same logical tab.
             for tabSnap in snapshot.tabs {
                 let cwd = tabSnap.workingDirectoryPath.map { URL(fileURLWithPath: $0) }
-                let cfg = SurfaceConfig(command: tabSnap.command,
+                let cfg = SurfaceConfig(command: PtyService.commandEnsuringTerminalBootstrap(tabSnap.command),
                                         workingDirectory: cwd,
-                                        env: [:])
+                                        env: PtyService.terminalEnvironment())
                 let tab = TerminalTab(id: tabSnap.id, title: tabSnap.title, config: cfg)
                 s.tabs.append(tab)
             }
