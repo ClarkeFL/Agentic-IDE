@@ -72,12 +72,16 @@ final class FullDiskAccessGate {
         NSWorkspace.shared.open(url)
     }
 
-    /// Polls FDA status every 1.5s until granted (then auto-stops). Used
+    /// Polls FDA status every 0.3s until granted (then auto-stops). Used
     /// while the onboarding sheet is on screen and the user is over in
-    /// Settings flipping the toggle.
+    /// Settings flipping the toggle. Tight cadence matters — the moment
+    /// the user flips the toggle, System Settings shows its own "Quit &
+    /// Reopen" prompt; we want to detect the grant and self-relaunch
+    /// before they have time to click that button (which is silently
+    /// refused while our modal sheet is still up).
     func startPolling() {
         stopPolling()
-        pollTimer = Timer.scheduledTimer(withTimeInterval: 1.5, repeats: true) { [weak self] _ in
+        pollTimer = Timer.scheduledTimer(withTimeInterval: 0.3, repeats: true) { [weak self] _ in
             Task { @MainActor in
                 guard let self else { return }
                 self.refresh()
