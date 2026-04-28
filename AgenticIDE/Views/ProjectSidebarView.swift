@@ -501,18 +501,26 @@ private struct ProjectRow: View {
                     .font(.body.weight(.medium))
                     .lineLimit(1)
                 Spacer(minLength: 4)
+                // Aggregate-status indicator, only on collapsed rows. When the
+                // project is expanded the per-tab rows below already show
+                // their own dot+label, so a duplicate header indicator just
+                // crowds the title.
+                if !isExpanded,
+                   let aggregate = aggregateStatus,
+                   let info = TerminalStatusBadge.info(for: aggregate) {
+                    Circle()
+                        .fill(info.color)
+                        .frame(width: 7, height: 7)
+                        .help(info.label)
+                }
             }
 
-            // Summary line — always visible regardless of selection so the
-            // row height doesn't shift when expanding/collapsing children.
-            // When the children are collapsed we promote the most-attention-
-            // worthy tab status here so the user can see "AI is working" /
-            // "AI has a question" without having to expand.
+            // Summary line — terminal count + last-activity. Lives below the
+            // title so the row height doesn't shift when expanding/collapsing
+            // children. The status indicator used to live here too; it's now
+            // promoted into the title row so the dot stays visible (and right-
+            // aligned to the title) regardless of whether this line renders.
             HStack(spacing: 6) {
-                if let aggregate = aggregateStatus, !isExpanded {
-                    TerminalStatusBadge(status: aggregate)
-                    Text("·").font(.caption2).foregroundStyle(.tertiary)
-                }
                 if !session.tabs.isEmpty {
                     Label(tabCountLabel, systemImage: "rectangle.stack")
                         .labelStyle(.titleAndIcon)
