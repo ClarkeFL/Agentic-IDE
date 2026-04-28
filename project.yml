@@ -97,6 +97,10 @@ targets:
           # Access, Documents, etc) alive across rebuilds. Run
           # `Scripts/create-dev-signing-cert.sh` once before first build.
           CODE_SIGN_IDENTITY: "AgenticIDE Dev"
+          # The entitlements file disables library validation so the main
+          # binary (signed with AgenticIDE Dev) can load the Xcode-generated
+          # debug helper dylib (signed ad-hoc) under hardened runtime.
+          CODE_SIGN_ENTITLEMENTS: AgenticIDE/AgenticIDE.entitlements
         Release:
           # CI's tag-push workflow has no cert; ad-hoc keeps it building.
           CODE_SIGN_IDENTITY: "-"
