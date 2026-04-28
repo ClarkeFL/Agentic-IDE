@@ -7,6 +7,10 @@ struct MainWindow: View {
     @AppStorage("currentProjectId") private var currentProjectIdString: String = ""
 
     @State private var selectedProjectId: UUID?
+    /// Owns the Full Disk Access probe + onboarding sheet. Local to
+    /// MainWindow because no other view needs to read the status today.
+    @State private var fda = FullDiskAccessGate()
+    @State private var showFDAOnboarding = false
 
     var body: some View {
         PersistentSplitView(
@@ -29,12 +33,18 @@ struct MainWindow: View {
         )
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .navigationTitle(activeProject?.name ?? "Agentic IDE")
-        .onAppear { restoreSelection() }
+        .onAppear {
+            restoreSelection()
+            evaluateFullDiskAccess()
+        }
         .onChange(of: selectedProjectId) { _, new in
             currentProjectIdString = new?.uuidString ?? ""
         }
         .onDrop(of: [.fileURL], isTargeted: nil) { providers in
             handleDrop(providers: providers)
+        }
+        .sheet(isPresented: $showFDAOnboarding) {
+            FullDiskAccessOnboarding(gate: fda, isPresented: $showFDAOnboarding)
         }
     }
 
@@ -65,6 +75,16 @@ struct MainWindow: View {
     private var activeProject: Project? {
         guard let id = selectedProjectId else { return nil }
         return store.projects.first(where: { $0.id == id && !$0.archived })
+    }
+
+    /// Re-probes FDA on appear and shows the onboarding sheet when the user
+    /// hasn't been granted access and hasn't already skipped this build.
+    /// Cheap to call repeatedly — the probe is just a `FileHandle` open.
+    private func evaluateFullDiskAccess() {
+        fda.refresh()
+        if fda.status == .denied && !fda.skippedThisBuild {
+            showFDAOnboarding = true
+        }
     }
 
     private func restoreSelection() {

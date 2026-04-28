@@ -48,6 +48,18 @@ targets:
         SUFeedURL: https://raw.githubusercontent.com/ClarkeFL/Agentic-IDE/main/appcast.xml
         SUEnableAutomaticChecks: true
         SUPublicEDKey: iNkqfiKbf44ySMxWHYdroNzuxe0T6SKyi/CkkqWpzYo=
+        # TCC usage strings. Without these the Documents/Downloads/Desktop
+        # prompts show macOS' generic "would like to access" copy and (worse)
+        # don't reliably persist consent — they re-fire every time the
+        # terminal child process (Claude Code, etc.) reads or writes a file
+        # in those locations. Hardened runtime is on (line 59), so these
+        # keys are required to bridge from the system-default deny.
+        NSDocumentsFolderUsageDescription: AgenticIDE needs access to your Documents folder to open and edit projects you keep there.
+        NSDownloadsFolderUsageDescription: AgenticIDE needs access to your Downloads folder so the terminal and editor can read files you've downloaded.
+        NSDesktopFolderUsageDescription: AgenticIDE needs access to your Desktop so projects and scratch files stored there are visible.
+        # AppleScript / cross-app automation gets used when the terminal asks
+        # macOS to open URLs, reveal files in Finder, etc.
+        NSAppleEventsUsageDescription: AgenticIDE uses Apple Events to open URLs, files, and folders in other apps when you click on them.
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.fabio.AgenticIDE

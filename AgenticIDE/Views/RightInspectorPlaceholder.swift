@@ -82,8 +82,7 @@ struct RightInspectorView: View {
         }
         .padding(.leading, Inspector.hPadding)
         .padding(.trailing, Inspector.hPadding)
-        .padding(.top, 18)
-        .padding(.bottom, 12)
+        .frame(height: 34)
     }
 
     private var diffHeader: DiffHeader? {

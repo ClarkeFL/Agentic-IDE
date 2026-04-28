@@ -1,4 +1,5 @@
 import AppKit
+import Foundation
 import GhosttyKit
 import OSLog
 
@@ -87,16 +88,52 @@ final class GhosttyApp {
     }
 
     private static let actionCallback: ghostty_runtime_action_cb = { _, target, action in
-        // We forward a small subset of surface-scoped events to the owning
-        // GhosttyTerminalView so it can drive its tab's status indicator
-        // (working / awaiting / completed / failed). Everything else — splits,
-        // tabs, fullscreen, etc. — is unimplemented in v1.
+        // Surface-scoped events get forwarded to the owning GhosttyTerminalView.
+        // Three groups handled here:
+        //   1. Direct side-effects (open URL, cursor shape, hover state) — done
+        //      inline before the TerminalEvent mapping.
+        //   2. Status events (progress / bell / command-finished / exit / render)
+        //      — folded into TerminalEvent for the tab's status indicator.
+        //   3. Everything else (splits, tabs, fullscreen, …) — unimplemented.
         guard target.tag == GHOSTTY_TARGET_SURFACE else { return false }
         let surfaceHandle = target.target.surface
         guard let userdata = ghostty_surface_userdata(surfaceHandle) else {
             return false
         }
         let view = Unmanaged<GhosttyTerminalView>.fromOpaque(userdata).takeUnretainedValue()
+
+        switch action.tag {
+        case GHOSTTY_ACTION_OPEN_URL:
+            // Triggered by Ghostty when the user clicks (with the configured
+            // modifier — by default ⌘) a URL it has detected in the grid.
+            // The pointer is only valid for the duration of this callback,
+            // so the string is copied out before dispatching to the main
+            // queue.
+            let info = action.action.open_url
+            guard let urlString = makeString(info.url, length: Int(info.len)),
+                  let url = URL(string: urlString) else {
+                return true
+            }
+            DispatchQueue.main.async { NSWorkspace.shared.open(url) }
+            return true
+        case GHOSTTY_ACTION_MOUSE_SHAPE:
+            // Cursor change requests come through here — most importantly
+            // POINTER while hovering a click-target URL, but also TEXT/CELL
+            // for normal terminal use. Without this the cursor would stay
+            // on whatever AppKit picked at view creation.
+            let shape = action.action.mouse_shape
+            DispatchQueue.main.async { view.applyMouseShape(shape) }
+            return true
+        case GHOSTTY_ACTION_MOUSE_OVER_LINK:
+            // Snapshot the URL (or nil to clear) for any future hover UI.
+            // Cursor doesn't change here — that's MOUSE_SHAPE's job.
+            let info = action.action.mouse_over_link
+            let url = makeString(info.url, length: Int(info.len))
+            DispatchQueue.main.async { view.setHoveredLink(url) }
+            return true
+        default:
+            break
+        }
 
         let event: TerminalEvent?
         switch action.tag {
@@ -121,6 +158,16 @@ final class GhosttyApp {
         guard let event else { return false }
         DispatchQueue.main.async { view.onTerminalEvent?(event) }
         return true
+    }
+
+    /// Copies a Ghostty-supplied (`const char*`, `size_t`) byte buffer into a
+    /// Swift String. Returns nil for null pointer or zero length. The pointer
+    /// is only valid for the duration of the action callback, so callers must
+    /// extract before dispatching async work.
+    private static func makeString(_ ptr: UnsafePointer<CChar>?, length: Int) -> String? {
+        guard let ptr, length > 0 else { return nil }
+        let data = Data(bytes: ptr, count: length)
+        return String(data: data, encoding: .utf8)
     }
 
     private static func progressState(from raw: ghostty_action_progress_report_state_e) -> GhosttyProgressState {
