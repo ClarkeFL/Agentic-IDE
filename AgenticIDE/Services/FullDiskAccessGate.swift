@@ -114,10 +114,15 @@ final class FullDiskAccessGate {
             log.error("relaunch failed: \(error.localizedDescription, privacy: .public)")
             return
         }
-        // Defer terminate so `open` has a moment to fork off cleanly. Without
-        // the dispatch hop the parent can exit before launchd has accepted
-        // the spawn request, which on rare occasions leaves no app running.
+        // Try the normal termination path first so SwiftUI gets a chance to
+        // persist state, but follow up with a hard exit. NSApp.terminate is
+        // routinely refused while a modal sheet is up (which is exactly our
+        // situation — the FDA onboarding sheet is still presented when the
+        // user clicks Restart), and a refused terminate leaves the old PID
+        // running alongside the new one. The 600ms gap is enough for `open`
+        // to hand the spawn off to launchd before we vanish.
         DispatchQueue.main.async { NSApp.terminate(nil) }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.6) { exit(0) }
     }
 
     /// Coarse build-identity stamp — bundle version + executable mtime.
