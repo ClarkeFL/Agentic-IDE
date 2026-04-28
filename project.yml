@@ -65,7 +65,13 @@ targets:
         PRODUCT_BUNDLE_IDENTIFIER: com.fabio.AgenticIDE
         PRODUCT_NAME: AgenticIDE
         ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
-        CODE_SIGN_STYLE: Automatic
+        # Manual signing across both configs. Debug uses the local
+        # self-signed "AgenticIDE Dev" identity (created by
+        # Scripts/create-dev-signing-cert.sh) so the cdhash is anchored to
+        # a stable cert and TCC permissions persist across rebuilds.
+        # Release stays ad-hoc (`-`) so CI / GitHub Actions tag builds
+        # don't need a cert in the runner — until we move to Developer ID.
+        CODE_SIGN_STYLE: Manual
         CODE_SIGN_IDENTITY: "-"
         DEVELOPMENT_TEAM: ""
         ENABLE_HARDENED_RUNTIME: YES
@@ -85,6 +91,15 @@ targets:
           - "MetalKit"
           - "-framework"
           - "IOSurface"
+      configs:
+        Debug:
+          # Stable identity for local dev — keeps TCC grants (Full Disk
+          # Access, Documents, etc) alive across rebuilds. Run
+          # `Scripts/create-dev-signing-cert.sh` once before first build.
+          CODE_SIGN_IDENTITY: "AgenticIDE Dev"
+        Release:
+          # CI's tag-push workflow has no cert; ad-hoc keeps it building.
+          CODE_SIGN_IDENTITY: "-"
     dependencies:
       - framework: Vendor/GhosttyKit.xcframework
         embed: false

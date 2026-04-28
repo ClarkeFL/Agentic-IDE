@@ -77,18 +77,31 @@ struct MainWindow: View {
         return store.projects.first(where: { $0.id == id && !$0.archived })
     }
 
-    /// Probes FDA silently on appear. The onboarding sheet is intentionally
-    /// **not** auto-shown — TCC grants on ad-hoc-signed dev builds are
-    /// unreliable and the relaunch round-trip kept reverting the toggle
-    /// no matter which relaunch API we used (Process, NSWorkspace, even
-    /// System Settings' own "Quit & Reopen" button). macOS will show its
-    /// native per-folder prompt for Documents / Desktop / Downloads as
-    /// projects need access; that path is reliable, granted once per
-    /// folder, and doesn't need a relaunch. Production (Developer-ID-
-    /// signed) builds can re-enable the onboarding flow once stable
-    /// signing makes TCC grants stick.
+    /// Re-probes FDA on appear and shows the onboarding sheet when the user
+    /// hasn't been granted access and hasn't already skipped this build.
+    /// Cheap to call repeatedly — the probe is just a `FileHandle` open.
+    ///
+    /// When the app is relaunched right after the user toggled FDA in System
+    /// Settings, TCC sometimes hasn't propagated the new grant to our just-
+    /// spawned process by the time the first probe runs — the result is the
+    /// onboarding sheet showing again on a freshly-permitted launch. A short
+    /// re-probe loop covers the propagation window so we don't bother the
+    /// user a second time.
     private func evaluateFullDiskAccess() {
         fda.refresh()
+        guard fda.status != .granted else { return }
+        if fda.skippedThisBuild { return }
+
+        Task { @MainActor in
+            for _ in 0..<6 {
+                try? await Task.sleep(nanoseconds: 250_000_000)
+                fda.refresh()
+                if fda.status == .granted { return }
+            }
+            if fda.status == .denied && !fda.skippedThisBuild {
+                showFDAOnboarding = true
+            }
+        }
     }
 
     private func restoreSelection() {
