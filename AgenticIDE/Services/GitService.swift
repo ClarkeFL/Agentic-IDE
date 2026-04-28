@@ -50,17 +50,22 @@ enum GitService {
         return result
     }
 
-    /// Cheap newline count via mmap. For very large files this is still
-    /// O(file size) but reads sequentially through pages, no heap alloc
-    /// for the contents. Returns 0 if the file is missing or binary-ish.
+    /// Cheap newline count via mmap. Capped at `maxScanBytes` so a
+    /// pathological untracked file (multi-GB log, mistakenly-committed
+    /// asset, etc.) can't pin the git queue scanning bytes during a 5s
+    /// status poll. When the cap is hit the count is a lower bound; the
+    /// inspector renders `+N` and any over-budget tail is ignored.
+    private static let maxScanBytes: Int = 1 << 20  // 1 MiB
     private static func countLines(at url: URL) -> Int {
         guard let data = try? Data(contentsOf: url, options: [.alwaysMapped]) else { return 0 }
         if data.isEmpty { return 0 }
+        let scanLen = Swift.min(data.count, maxScanBytes)
         var count = 0
-        data.withUnsafeBytes { buffer in
-            for byte in buffer where byte == 0x0A { count += 1 }
+        data.withUnsafeBytes { (raw: UnsafeRawBufferPointer) in
+            let bytes = raw.bindMemory(to: UInt8.self)
+            for i in 0..<scanLen where bytes[i] == 0x0A { count += 1 }
         }
-        if data.last != 0x0A { count += 1 }
+        if data.count <= maxScanBytes && data.last != 0x0A { count += 1 }
         return count
     }
 

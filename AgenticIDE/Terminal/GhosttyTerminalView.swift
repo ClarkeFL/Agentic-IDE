@@ -171,8 +171,17 @@ final class GhosttyTerminalView: NSView, NSTextInputClient {
     /// compositing it — together that removes the GPU/CPU cost of background
     /// AI streams the user can't see. Re-activating refreshes the surface
     /// so it pops back to current state without waiting for a keystroke.
+    ///
+    /// Early-out when already in the requested state. `updateNSView` fires
+    /// on every parent SwiftUI redraw and calls `setOccluded(!isActive)`
+    /// regardless of whether anything changed; without the guard, every
+    /// workspace redraw paid for a C call + CALayer toggle (and a
+    /// `surface_refresh` when un-occluding) per terminal in the ZStack.
     func setOccluded(_ occluded: Bool) {
         guard let surface else { return }
+        if let metal = layer as? CAMetalLayer, metal.isHidden == occluded {
+            return
+        }
         ghostty_surface_set_occlusion(surface, occluded)
         if let metal = layer as? CAMetalLayer {
             metal.isHidden = occluded

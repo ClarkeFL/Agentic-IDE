@@ -14,7 +14,6 @@ final class GhosttyApp {
     private let log = Logger(subsystem: "com.fabio.AgenticIDE", category: "GhosttyApp")
 
     private(set) var app: ghostty_app_t?
-    private var tickTimer: Timer?
 
     private init() {}
 
@@ -57,21 +56,15 @@ final class GhosttyApp {
         }
         self.app = newApp
 
-        // Drive the app's tick on the main runloop. Ghostty internally uses
-        // libxev; tick() pumps any pending work.
-        let timer = Timer(timeInterval: 1.0 / 60.0, repeats: true) { [weak self] _ in
-            guard let self, let app = self.app else { return }
-            ghostty_app_tick(app)
-        }
-        RunLoop.main.add(timer, forMode: .common)
-        self.tickTimer = timer
-
+        // No periodic tick. libxev calls `wakeupCallback` from its event
+        // thread whenever a surface has work pending; that hop dispatches
+        // a single `ghostty_app_tick` onto the main runloop. Idle CPU
+        // drops from 60 wake-ups/sec to 0 — a launched-but-idle app no
+        // longer pumps the runloop at all.
         log.info("Ghostty app bootstrapped")
     }
 
     func shutdown() {
-        tickTimer?.invalidate()
-        tickTimer = nil
         if let app {
             ghostty_app_free(app)
             self.app = nil
@@ -80,10 +73,18 @@ final class GhosttyApp {
 
     // MARK: - Runtime callbacks
 
-    private static let wakeupCallback: ghostty_runtime_wakeup_cb = { _ in
-        // Wake the runloop so the next tick processes pending work.
+    private static let wakeupCallback: ghostty_runtime_wakeup_cb = { userdata in
+        // Fired by libxev (off main) whenever a surface has work pending.
+        // We hop to main and call `ghostty_app_tick`. Multiple wakeups in
+        // the same runloop turn coalesce naturally because the dispatched
+        // blocks all run before the next libxev cycle, and a tick with no
+        // pending work is a no-op — so we trade a constant 60Hz timer for
+        // demand-driven ticks that idle at 0 CPU.
+        guard let userdata else { return }
+        let owner = Unmanaged<GhosttyApp>.fromOpaque(userdata).takeUnretainedValue()
         DispatchQueue.main.async {
-            // Tick is already on a 60Hz timer; no-op is fine here.
+            guard let handle = owner.app else { return }
+            ghostty_app_tick(handle)
         }
     }
 
