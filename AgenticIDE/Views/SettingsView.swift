@@ -9,6 +9,8 @@ struct SettingsView: View {
         TabView {
             AgentsSettingsView()
                 .tabItem { Label("Agents", systemImage: "sparkles") }
+            HooksSettingsView()
+                .tabItem { Label("Hooks", systemImage: "link") }
             SpeechSettingsView()
                 .tabItem { Label("Speech", systemImage: "speaker.wave.2") }
         }
@@ -62,6 +64,124 @@ private struct AgentsSettingsView: View {
         }
         .formStyle(.grouped)
         .padding(.top, DS.Space.md)
+    }
+}
+
+/// Hook installer panel. Two buttons per agent: install / uninstall, with
+/// the current state surfaced inline so the user can see whether their
+/// `~/.claude/settings.json` (or `~/.codex/hooks.json`) actually has our
+/// entries in it. Hooks are an opt-in — first run after upgrade does not
+/// auto-install. The watcher itself runs unconditionally; it just sees no
+/// status files until hooks are installed.
+private struct HooksSettingsView: View {
+    /// Re-evaluated whenever the view appears or after a button click so
+    /// the row reflects the current on-disk state.
+    @State private var states: [AgentHookInstaller.Agent: AgentHookInstaller.InstallState] = [:]
+    @State private var lastError: String?
+
+    var body: some View {
+        Form {
+            Section {
+                ForEach(AgentHookInstaller.Agent.allCases) { agent in
+                    HookRow(
+                        agent: agent,
+                        state: states[agent] ?? .notInstalled,
+                        onInstall: { perform { try AgentHookInstaller.install(agent) } },
+                        onUninstall: { perform { try AgentHookInstaller.uninstall(agent) } }
+                    )
+                }
+            } header: {
+                Label("Status hooks", systemImage: "link")
+            } footer: {
+                Text("Installs a small lifecycle hook in the agent's config (~/.claude/settings.json, ~/.codex/hooks.json). When the agent starts a turn it writes \"working\" to a status file; when it stops it writes \"completed.\" The sidebar dot updates from those files. Only entries marked `# agenticide-hook` are touched — your other hooks are preserved.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+
+            if let lastError {
+                Section {
+                    Label(lastError, systemImage: "exclamationmark.triangle.fill")
+                        .foregroundStyle(.red)
+                        .font(.callout)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+            }
+        }
+        .formStyle(.grouped)
+        .padding(.top, DS.Space.md)
+        .onAppear { refreshStates() }
+    }
+
+    private func refreshStates() {
+        for agent in AgentHookInstaller.Agent.allCases {
+            states[agent] = AgentHookInstaller.state(for: agent)
+        }
+    }
+
+    /// Wraps the install/uninstall closure so failures surface in the UI
+    /// instead of silently no-op'ing.
+    private func perform(_ work: () throws -> Void) {
+        do {
+            try work()
+            lastError = nil
+        } catch {
+            lastError = error.localizedDescription
+        }
+        refreshStates()
+    }
+}
+
+private struct HookRow: View {
+    let agent: AgentHookInstaller.Agent
+    let state: AgentHookInstaller.InstallState
+    let onInstall: () -> Void
+    let onUninstall: () -> Void
+
+    var body: some View {
+        HStack(alignment: .top, spacing: DS.Space.md) {
+            VStack(alignment: .leading, spacing: DS.Space.xxs) {
+                Text(agent.displayName)
+                    .font(.body.weight(.medium))
+                Text(stateLabel)
+                    .font(.caption)
+                    .foregroundStyle(stateColor)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            Spacer(minLength: DS.Space.md)
+            switch state {
+            case .installed:
+                Button("Uninstall", role: .destructive, action: onUninstall)
+            case .notInstalled:
+                Button("Install", action: onInstall)
+            case .agentNotInstalled:
+                Button("Install", action: onInstall).disabled(true)
+            case .configUnreadable:
+                Button("Install", action: onInstall).disabled(true)
+            }
+        }
+        .padding(.vertical, DS.Space.xxs)
+    }
+
+    private var stateLabel: String {
+        switch state {
+        case .installed:
+            return "Installed at \(agent.configPath)"
+        case .notInstalled:
+            return "Not installed. Click to write hooks into \(agent.configPath)."
+        case .agentNotInstalled:
+            return "\(agent.displayName) is not installed (no \((agent.configPath as NSString).deletingLastPathComponent) directory)."
+        case .configUnreadable:
+            return "\(agent.configPath) exists but isn't valid JSON. Repair or remove it before installing hooks."
+        }
+    }
+
+    private var stateColor: Color {
+        switch state {
+        case .installed: return .green
+        case .notInstalled: return .secondary
+        case .agentNotInstalled, .configUnreadable: return .orange
+        }
     }
 }
 
