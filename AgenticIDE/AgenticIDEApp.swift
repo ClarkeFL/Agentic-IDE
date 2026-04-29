@@ -12,6 +12,11 @@ struct AgenticIDEApp: App {
 
     init() {
         GhosttyApp.shared.bootstrap()
+        // Touch the singleton from the main thread so its DispatchSource is
+        // installed before the first terminal spawns. Lazy init from
+        // TerminalTab.init would also work but might land on a non-main
+        // queue depending on where the first tab is created.
+        _ = AgentStatusWatcher.shared
     }
 
     var body: some Scene {

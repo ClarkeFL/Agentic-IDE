@@ -95,14 +95,27 @@ final class TerminalTab: Identifiable, Hashable {
         self.title = title
         self.command = config.command
         self.workingDirectoryPath = config.workingDirectory?.path
-        self.view = GhosttyTerminalView(config: config)
+        // Inject the surface-id env var so installed agent hooks can write
+        // their status file to the right path. The status directory is
+        // also exported as a hint for hook commands that prefer reading it
+        // from the environment instead of hard-coding ~/Library/...
+        var configWithSurfaceId = config
+        configWithSurfaceId.env["AGENTIDE_SURFACE_ID"] = id.uuidString
+        configWithSurfaceId.env["AGENTIDE_STATUS_DIR"] = AgentStatusWatcher.statusDirectoryURL.path
+        self.view = GhosttyTerminalView(config: configWithSurfaceId)
         self.createdAt = Date()
         self.view.onTerminalEvent = { [weak self] event in
             self?.handle(event)
         }
+        // Register with the watcher so hook-driven status updates can find
+        // this tab by id. Pairs with the unregister call in deinit.
+        AgentStatusWatcher.shared.register(self)
     }
 
-    deinit { pendingCompletion?.cancel() }
+    deinit {
+        pendingCompletion?.cancel()
+        AgentStatusWatcher.shared.unregister(id: id)
+    }
 
     static func == (lhs: TerminalTab, rhs: TerminalTab) -> Bool { lhs.id == rhs.id }
     func hash(into hasher: inout Hasher) { hasher.combine(id) }
