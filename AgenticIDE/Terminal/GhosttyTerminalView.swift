@@ -535,11 +535,15 @@ final class GhosttyTerminalView: NSView, NSTextInputClient {
 
     private func forwardMousePos(_ event: NSEvent) {
         guard let surface else { return }
+        // ghostty_surface_mouse_pos takes POINTS, not pixels — even though
+        // ghostty_surface_set_size takes pixels. Multiplying by the backing
+        // scale here lands the cursor at 2× its real row on retina, so a
+        // selection drag starts ~8 rows below the actual mouse and the
+        // hover hit-test for OSC-8 / auto-detected URLs never matches the
+        // cell under the cursor (links don't feel clickable).
         let local = convert(event.locationInWindow, from: nil)
-        let scale = window?.backingScaleFactor ?? 2.0
-        let x = local.x * scale
-        let y = (bounds.height - local.y) * scale
-        ghostty_surface_mouse_pos(surface, x, y, mods(from: event.modifierFlags))
+        let y = bounds.height - local.y
+        ghostty_surface_mouse_pos(surface, local.x, y, mods(from: event.modifierFlags))
     }
 
     // MARK: - NSTextInputClient
