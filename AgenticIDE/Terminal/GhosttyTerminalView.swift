@@ -297,10 +297,26 @@ final class GhosttyTerminalView: NSView, NSTextInputClient {
 
     override func viewDidChangeBackingProperties() {
         super.viewDidChangeBackingProperties()
+        // Backing scale changed — typically because the window crossed a
+        // display boundary. Updating only `contents_scale` (as we used to)
+        // tells Ghostty about the new DPI but leaves the metal drawable
+        // and the surface's pixel dimensions sized for the *previous*
+        // scale, so the grid renders into a canvas that doesn't match
+        // the point-size view: visible as a cramped terminal pinned to
+        // one corner of the pane after dragging across screens. Re-derive
+        // pixel size from current bounds × new scale and push everything
+        // through together.
         let scale = window?.backingScaleFactor ?? NSScreen.main?.backingScaleFactor ?? 2.0
-        (layer as? CAMetalLayer)?.contentsScale = scale
+        let widthPx = UInt32(max(1, bounds.width * scale))
+        let heightPx = UInt32(max(1, bounds.height * scale))
+        if let metalLayer = layer as? CAMetalLayer {
+            metalLayer.contentsScale = scale
+            metalLayer.drawableSize = CGSize(width: CGFloat(widthPx), height: CGFloat(heightPx))
+        }
         if let surface {
             ghostty_surface_set_content_scale(surface, scale, scale)
+            ghostty_surface_set_size(surface, widthPx, heightPx)
+            ghostty_surface_refresh(surface)
         }
     }
 
