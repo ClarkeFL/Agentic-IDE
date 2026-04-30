@@ -1,15 +1,20 @@
 name: Release
 
-# Trigger: push a tag like `v0.2.0`. The job builds Release, packages an
-# ad-hoc-signed `.zip`, signs the update with Sparkle's Ed25519 key (from
+# Trigger: push a tag like `v0.2.0`. The job builds Release, packages a
+# self-signed `.zip`, signs the update with Sparkle's Ed25519 key (from
 # `SPARKLE_PRIVATE_KEY`), creates a GitHub Release, and updates `appcast.xml`
 # on the default branch so installed copies of the app see the new version.
 #
 # One-time setup expected:
-#   - Repo secret `SPARKLE_PRIVATE_KEY` containing the base64 Ed25519 key
-#     printed by Sparkle's `generate_keys` tool.
-#   - Public key embedded in the app via `INFOPLIST_KEY_SUPublicEDKey`
-#     (set in AgenticIDE.xcodeproj build settings).
+#   - Repo secret `SPARKLE_PRIVATE_KEY`: base64 Ed25519 key from Sparkle's
+#     `generate_keys` tool. Public key is embedded in the app via
+#     `INFOPLIST_KEY_SUPublicEDKey` (set in `project.yml`).
+#   - Repo secret `RELEASE_CERT_P12_BASE64`: base64-encoded PKCS#12
+#     containing the self-signed "AgenticIDE Release" code-signing
+#     identity. Generate with `Scripts/create-release-signing-cert.sh`.
+#     Signing with a stable cert anchors macOS TCC permissions to the cert
+#     instead of the per-build cdhash, so Full Disk Access / Documents /
+#     etc. persist across Sparkle updates.
 #   - `SUFeedURL` in build settings pointing at the appcast URL on this repo.
 
 on:
@@ -52,6 +57,47 @@ jobs:
           echo "tag=$TAG"     >> "$GITHUB_OUTPUT"
           echo "version=$VERSION" >> "$GITHUB_OUTPUT"
 
+      - name: Import release signing cert
+        env:
+          RELEASE_CERT_P12_BASE64: ${{ secrets.RELEASE_CERT_P12_BASE64 }}
+        run: |
+          if [ -z "$RELEASE_CERT_P12_BASE64" ]; then
+            echo "::error::RELEASE_CERT_P12_BASE64 secret is not set — generate one with Scripts/create-release-signing-cert.sh"
+            exit 1
+          fi
+          KEYCHAIN_PATH="$RUNNER_TEMP/build.keychain-db"
+          KEYCHAIN_PASSWORD=$(uuidgen)
+          P12_PATH="$RUNNER_TEMP/release.p12"
+          P12_PASSWORD=release
+          CERT_PEM="$RUNNER_TEMP/release-cert.pem"
+
+          printf '%s' "$RELEASE_CERT_P12_BASE64" | base64 --decode > "$P12_PATH"
+
+          security create-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
+          security set-keychain-settings -lut 21600 "$KEYCHAIN_PATH"
+          security unlock-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
+
+          # Prepend the new keychain to the user search list so codesign finds it.
+          EXISTING=$(security list-keychains -d user | tr -d '"' | tr '\n' ' ')
+          security list-keychains -d user -s "$KEYCHAIN_PATH" $EXISTING
+
+          security import "$P12_PATH" -P "$P12_PASSWORD" -k "$KEYCHAIN_PATH" \
+            -T /usr/bin/codesign -T /usr/bin/security -T /usr/bin/productsign
+
+          # Self-signed certs aren't trusted for code signing by default.
+          # User-level trust on the new keychain is enough — no admin auth needed.
+          openssl pkcs12 -in "$P12_PATH" -nokeys -password "pass:$P12_PASSWORD" -nodes -legacy \
+            | openssl x509 -outform PEM > "$CERT_PEM"
+          security add-trusted-cert -k "$KEYCHAIN_PATH" -p codeSign "$CERT_PEM"
+
+          # Allow codesign + security to use the private key without a UI prompt.
+          security set-key-partition-list -S apple-tool:,apple: -s -k "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
+
+          rm -f "$P12_PATH" "$CERT_PEM"
+
+          echo "Identities visible to codesign in the new keychain:"
+          security find-identity -v -p codesigning "$KEYCHAIN_PATH"
+
       - name: Install XcodeGen
         run: brew install xcodegen
 
@@ -75,8 +121,10 @@ jobs:
             -configuration Release \
             -destination 'platform=macOS' \
             -archivePath build/AgenticIDE.xcarchive \
-            CODE_SIGN_IDENTITY=- \
-            CODE_SIGNING_REQUIRED=NO \
+            CODE_SIGN_STYLE=Manual \
+            CODE_SIGN_IDENTITY="AgenticIDE Release" \
+            CODE_SIGNING_REQUIRED=YES \
+            CODE_SIGNING_ALLOWED=YES \
             MARKETING_VERSION=${{ steps.version.outputs.version }} \
             CURRENT_PROJECT_VERSION=${{ github.run_number }} \
             archive
@@ -86,9 +134,15 @@ jobs:
           mkdir -p build/Export
           cp -R build/AgenticIDE.xcarchive/Products/Applications/AgenticIDE.app build/Export/
 
-      - name: Re-sign ad-hoc (deep) for distribution
+      - name: Verify signature
+        # Sanity check — fails fast if the cert wasn't actually used. The
+        # codesign output should show "Authority=AgenticIDE Release" and
+        # "Sealed Resources" present. With hardened runtime and the
+        # entitlements from project.yml, the binary's Designated Requirement
+        # anchors to the release cert, which is what TCC keys against.
         run: |
-          codesign --force --deep --sign - build/Export/AgenticIDE.app
+          codesign --display --verbose=4 build/Export/AgenticIDE.app 2>&1 | head -40
+          codesign --verify --strict --deep --verbose=2 build/Export/AgenticIDE.app
 
       - name: Package as zip
         run: |

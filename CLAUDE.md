@@ -52,14 +52,18 @@ user** — don't try to bypass with raw push or rebase tricks.
   compares the latter for "is this an upgrade?").
 - The workflow:
   1. Runs on `macos-15` (needed for Xcode 16 to read XcodeGen's pbxproj).
-  2. `brew install xcodegen` → `xcodegen` → `Scripts/fetch-ghosttykit.sh`
-     → `xcodebuild archive` (Release, ad-hoc signed `-`).
-  3. `ditto -c -k` the `.app` into `AgenticIDE-<version>.zip`.
-  4. Signs the zip with Sparkle's `sign_update` using the
+  2. Imports the self-signed "AgenticIDE Release" code-signing identity
+     from the `RELEASE_CERT_P12_BASE64` repo secret into a temporary
+     keychain (see "Code signing" below).
+  3. `brew install xcodegen` → `xcodegen` → `Scripts/fetch-ghosttykit.sh`
+     → `xcodebuild archive` (Release, signed with `AgenticIDE Release`,
+     hardened runtime on).
+  4. `ditto -c -k` the `.app` into `AgenticIDE-<version>.zip`.
+  5. Signs the zip with Sparkle's `sign_update` using the
      `SPARKLE_PRIVATE_KEY` repo secret (Ed25519).
-  5. Updates `appcast.xml` via `Scripts/update-appcast.sh` and commits it
+  6. Updates `appcast.xml` via `Scripts/update-appcast.sh` and commits it
      back to `main` from the workflow.
-  6. Creates a GitHub Release with the zip attached.
+  7. Creates a GitHub Release with the zip attached.
 - `INFOPLIST_KEY_SUFeedURL`, `INFOPLIST_KEY_SUPublicEDKey`,
   `INFOPLIST_KEY_SUEnableAutomaticChecks`, and `ENABLE_HARDENED_RUNTIME` all
   live under the `AgenticIDE` target in `project.yml`. If a session needs to
@@ -97,6 +101,31 @@ user** — don't try to bypass with raw push or rebase tricks.
    git push --delete origin vX.Y.Z
    git tag vX.Y.Z && git push origin vX.Y.Z
    ```
+
+### Code signing
+
+- **Debug**: signed with `"AgenticIDE Dev"`, a self-signed cert in the
+  user's login keychain. Created by `Scripts/create-dev-signing-cert.sh`
+  (run once per dev machine). Stable cert → stable Designated
+  Requirement → TCC grants persist across rebuilds.
+- **Release (CI)**: signed with `"AgenticIDE Release"`, a separate
+  self-signed cert imported from the `RELEASE_CERT_P12_BASE64` repo
+  secret. Generated locally by `Scripts/create-release-signing-cert.sh`,
+  which produces the .p12 and copies the base64 to clipboard for pasting
+  into the secret. Same TCC-stability rationale as Debug, just for
+  shipped builds.
+- **Migrating to a new release cert**: regenerate, replace the secret,
+  and warn users that the next update **cannot be auto-applied by
+  Sparkle** (Sparkle refuses updates with a different Designated
+  Requirement than the installed copy). They must download the .zip from
+  the GitHub release page once and replace `/Applications/AgenticIDE.app`
+  manually. From the next release onward, auto-updates work again. This
+  is also true for the very first release after introducing the
+  self-signed cert (transitioning from ad-hoc).
+- **Local Release builds** stay ad-hoc by default (`project.yml` says
+  `CODE_SIGN_IDENTITY: "-"` for the Release config). CI overrides this
+  on the `xcodebuild` command line. Don't ship a `.zip` built locally —
+  it won't match the cert that's authorized in `appcast.xml`.
 
 ### Sparkle update gotchas
 
