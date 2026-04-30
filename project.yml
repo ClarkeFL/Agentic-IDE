@@ -80,6 +80,15 @@ targets:
         CODE_SIGN_IDENTITY: "-"
         DEVELOPMENT_TEAM: ""
         ENABLE_HARDENED_RUNTIME: YES
+        # Disable library validation in both Debug and Release. Debug needs
+        # this so the main binary (signed "AgenticIDE Dev") can load the
+        # Xcode-generated debug helper dylib (ad-hoc). Release needs it so
+        # the main binary (signed "AgenticIDE Release", empty Team ID
+        # because the cert is self-signed) can load Sparkle.framework's
+        # internals — the SPM-distributed Sparkle xcframework has a
+        # non-empty Team ID baked in, and without this entitlement dyld
+        # rejects the load with "different Team IDs" at launch.
+        CODE_SIGN_ENTITLEMENTS: AgenticIDE/AgenticIDE.entitlements
         ARCHS: arm64
         ONLY_ACTIVE_ARCH: YES
         SWIFT_VERSION: "5.10"
@@ -102,10 +111,6 @@ targets:
           # Access, Documents, etc) alive across rebuilds. Run
           # `Scripts/create-dev-signing-cert.sh` once before first build.
           CODE_SIGN_IDENTITY: "AgenticIDE Dev"
-          # The entitlements file disables library validation so the main
-          # binary (signed with AgenticIDE Dev) can load the Xcode-generated
-          # debug helper dylib (signed ad-hoc) under hardened runtime.
-          CODE_SIGN_ENTITLEMENTS: AgenticIDE/AgenticIDE.entitlements
         Release:
           # Local Release builds stay ad-hoc; CI overrides this to
           # "AgenticIDE Release" via xcodebuild flags after importing the

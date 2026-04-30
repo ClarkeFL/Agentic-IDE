@@ -3,14 +3,18 @@
 <plist version="1.0">
 <dict>
 	<!--
-	  Required for local Debug builds signed with the self-signed
-	  "AgenticIDE Dev" identity. Xcode auto-generates AgenticIDE.debug.dylib
-	  during incremental builds and signs it ad-hoc — different signing
-	  identity than the main binary, which under hardened runtime causes
-	  "different Team IDs" library-load rejection at launch. Disabling
-	  library validation lets the main binary load the differently-signed
-	  helper dylib. Has no effect on Release builds (which are ad-hoc end
-	  to end and don't trip the same check).
+	  Disables hardened-runtime library validation. Applied to both Debug
+	  and Release because the main binary needs to load code signed with a
+	  different (or empty) Team ID than its own:
+	    - Debug: main binary is signed "AgenticIDE Dev", but Xcode
+	      auto-generates AgenticIDE.debug.dylib signed ad-hoc.
+	    - Release (CI): main binary is signed "AgenticIDE Release"
+	      (self-signed, empty Team ID), but Sparkle.framework's prebuilt
+	      SPM xcframework has Sparkle's Team ID baked into its nested
+	      binaries (XPC services, Autoupdate, Updater.app) and xcodebuild
+	      archive does not deep-resign them.
+	  Without this entitlement, dyld rejects the load at launch with
+	  "different Team IDs" and the app crashes immediately.
 	-->
 	<key>com.apple.security.cs.disable-library-validation</key>
 	<true/>
