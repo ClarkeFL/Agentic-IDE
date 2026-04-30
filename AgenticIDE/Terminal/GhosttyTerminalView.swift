@@ -71,6 +71,11 @@ final class GhosttyTerminalView: NSView, NSTextInputClient {
     /// dispatches per-surface action callbacks serially.
     @ObservationIgnored
     private var lastRenderDispatchHostTime: UInt64 = 0
+    /// The window we're currently observing for screen-change notifications.
+    /// Tracked so `viewDidMoveToWindow` can unsubscribe from the previous
+    /// window before subscribing to the new one (AppKit can move a view
+    /// between windows during workspace re-layout).
+    private weak var observedWindow: NSWindow?
     /// Minimum interval between `.render` dispatches in mach-absolute units.
     /// Computed once from `mach_timebase_info` so the comparison stays a
     /// single 64-bit subtract on the hot path.
@@ -118,6 +123,7 @@ final class GhosttyTerminalView: NSView, NSTextInputClient {
     }
 
     deinit {
+        NotificationCenter.default.removeObserver(self)
         if let surface {
             // ghostty_surface_free reaps the PTY child and tears down the
             // renderer, which can take a few hundred ms. Hand the handle off
@@ -254,13 +260,65 @@ final class GhosttyTerminalView: NSView, NSTextInputClient {
         }
     }
 
+    /// Subscribe to `NSWindow.didChangeScreenNotification` for the current
+    /// window. AppKit does NOT reliably fire `viewDidChangeBackingProperties`
+    /// when a window crosses to a screen with the same `backingScaleFactor`
+    /// (e.g. two retina displays at different physical DPIs), even though
+    /// Ghostty's renderer needs to reflow glyphs at the new display's actual
+    /// pixel density — without that reflow the cells render at the previous
+    /// display's DPI and look enlarged or blurry on the new one. Mirrors
+    /// upstream Ghostty's workaround for ghostty-org/ghostty#2731.
+    private func updateScreenObserver() {
+        let nc = NotificationCenter.default
+        if let old = observedWindow {
+            nc.removeObserver(self,
+                              name: NSWindow.didChangeScreenNotification,
+                              object: old)
+        }
+        observedWindow = window
+        if let new = window {
+            nc.addObserver(self,
+                           selector: #selector(windowDidChangeScreen(_:)),
+                           name: NSWindow.didChangeScreenNotification,
+                           object: new)
+        }
+    }
+
+    @objc private func windowDidChangeScreen(_ notification: Notification) {
+        if let surface, let id = currentDisplayID() {
+            // Push the new display ID so Ghostty's CVDisplayLink (when vsync
+            // is enabled) targets the right screen's refresh rate.
+            ghostty_surface_set_display_id(surface, id)
+        }
+        // Force the backing-property resync. If the new screen happens to
+        // share backingScaleFactor with the previous one, AppKit won't call
+        // this for us — but the renderer still needs to know about the
+        // physical DPI change.
+        DispatchQueue.main.async { [weak self] in
+            self?.viewDidChangeBackingProperties()
+        }
+    }
+
+    /// CoreGraphics display ID for the screen the window is currently on, or
+    /// nil if the view isn't attached to a window or the screen has no
+    /// reportable ID. Matches the lookup used by upstream Ghostty's
+    /// `NSScreen.displayID` extension.
+    private func currentDisplayID() -> UInt32? {
+        return window?.screen?
+            .deviceDescription[NSDeviceDescriptionKey("NSScreenNumber")] as? UInt32
+    }
+
     override func viewDidMoveToWindow() {
         super.viewDidMoveToWindow()
+        updateScreenObserver()
         guard window != nil else { return }
         let scale = window?.backingScaleFactor ?? NSScreen.main?.backingScaleFactor ?? 2.0
         (layer as? CAMetalLayer)?.contentsScale = scale
         if let surface {
             ghostty_surface_set_content_scale(surface, scale, scale)
+            if let id = currentDisplayID() {
+                ghostty_surface_set_display_id(surface, id)
+            }
         }
         // After re-attaching to a window the frame may already be the size
         // we want, so AppKit doesn't fire `setFrameSize` and the metal layer
