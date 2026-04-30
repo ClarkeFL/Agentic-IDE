@@ -69,37 +69,37 @@ jobs:
           KEYCHAIN_PASSWORD=$(uuidgen)
           P12_PATH="$RUNNER_TEMP/release.p12"
           P12_PASSWORD=release
-          CERT_PEM="$RUNNER_TEMP/release-cert.pem"
 
           printf '%s' "$RELEASE_CERT_P12_BASE64" | base64 --decode > "$P12_PATH"
 
           security create-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
-          security set-keychain-settings -lut 21600 "$KEYCHAIN_PATH"
+          # No auto-relock — keep the keychain unlocked for the whole job.
+          security set-keychain-settings "$KEYCHAIN_PATH"
           security unlock-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
 
           # Prepend the new keychain to the user search list so codesign finds it.
           EXISTING=$(security list-keychains -d user | tr -d '"' | tr '\n' ' ')
           security list-keychains -d user -s "$KEYCHAIN_PATH" $EXISTING
 
-          security import "$P12_PATH" -P "$P12_PASSWORD" -k "$KEYCHAIN_PATH" \
-            -T /usr/bin/codesign -T /usr/bin/security -T /usr/bin/productsign
+          # -A: any tool can use the private key — equivalent to whitelisting
+          # codesign + security + productsign + xcodebuild + Xcode helpers
+          # without enumerating each one. Combined with set-key-partition-list
+          # below, this avoids the GUI auth prompt that hangs CI.
+          security import "$P12_PATH" -P "$P12_PASSWORD" -k "$KEYCHAIN_PATH" -A
 
-          # Self-signed certs aren't trusted for code signing by default.
-          # Pull the cert out of the freshly-imported keychain via `security`
-          # rather than openssl — macos-15 ships LibreSSL, which doesn't
-          # accept `-legacy` and so can't read the .p12 we generated with
-          # OpenSSL 3's legacy PBE. User-level trust on the new keychain
-          # doesn't require admin auth.
-          security find-certificate -c "AgenticIDE Release" -p "$KEYCHAIN_PATH" > "$CERT_PEM"
-          security add-trusted-cert -k "$KEYCHAIN_PATH" -p codeSign "$CERT_PEM"
+          # Allow codesign to use the private key without a UI prompt.
+          # NOT calling `security add-trusted-cert` — on macos-15 it hangs in
+          # CI waiting for a TouchID/admin prompt that never arrives, even
+          # at user-level trust. Instead we sign by passing --keychain to
+          # codesign explicitly (via OTHER_CODE_SIGN_FLAGS in the build
+          # step), so trust isn't required.
+          security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH" >/dev/null
 
-          # Allow codesign + security to use the private key without a UI prompt.
-          security set-key-partition-list -S apple-tool:,apple: -s -k "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
+          rm -f "$P12_PATH"
 
-          rm -f "$P12_PATH" "$CERT_PEM"
-
-          echo "Identities visible to codesign in the new keychain:"
-          security find-identity -v -p codesigning "$KEYCHAIN_PATH"
+          echo "Identities present in the build keychain:"
+          security find-identity -v "$KEYCHAIN_PATH"
+          echo "KEYCHAIN_PATH=$KEYCHAIN_PATH" >> "$GITHUB_ENV"
 
       - name: Install XcodeGen
         run: brew install xcodegen
@@ -117,6 +117,10 @@ jobs:
         run: xcodebuild -project AgenticIDE.xcodeproj -scheme AgenticIDE -resolvePackageDependencies
 
       - name: Build & archive
+        # OTHER_CODE_SIGN_FLAGS=--keychain points codesign at the temporary
+        # build keychain, so it doesn't need the cert to be trusted at the
+        # user/system level — we skip `security add-trusted-cert` entirely
+        # because that prompt hangs CI on macos-15.
         run: |
           xcodebuild \
             -project AgenticIDE.xcodeproj \
@@ -128,6 +132,7 @@ jobs:
             CODE_SIGN_IDENTITY="AgenticIDE Release" \
             CODE_SIGNING_REQUIRED=YES \
             CODE_SIGNING_ALLOWED=YES \
+            OTHER_CODE_SIGN_FLAGS="--keychain $KEYCHAIN_PATH" \
             MARKETING_VERSION=${{ steps.version.outputs.version }} \
             CURRENT_PROJECT_VERSION=${{ github.run_number }} \
             archive
