@@ -30,11 +30,10 @@ git checkout dev && git pull
 # … edit, commit, push to dev
 git push origin dev
 
-# at release time only
+# at release time only — stay on dev the whole time
 gh pr create --base main --head dev --title "release: vX.Y.Z"
-gh pr merge <n> --merge   # do NOT delete dev
-git checkout main && git pull
-git tag v0.X.Y && git push origin v0.X.Y
+gh pr merge <n> --merge          # do NOT delete dev
+./Scripts/release.sh X.Y.Z       # tags origin/main + pushes tag
 ```
 
 Only fall back to a `feat/<short-name>` branch if a change genuinely needs
@@ -68,13 +67,21 @@ user** — don't try to bypass with raw push or rebase tricks.
 
 ### Cutting a release
 
-1. Confirm `main` is in the state you want to ship.
-2. Decide the version. Patch bumps for fixes, minor for features. Read
-   `git log --oneline <last-tag>..HEAD` to choose.
-3. From `main`:
+1. Merge the `release: vX.Y.Z` PR from `dev` into `main` via
+   `gh pr merge <n> --merge` (do NOT delete `dev`).
+2. Decide the version (already in the PR title). Patch bumps for fixes,
+   minor for features. `git log --oneline <last-tag>..origin/main` if you
+   need to double-check.
+3. **Stay on `dev`** and run:
    ```
-   git pull
-   git tag vX.Y.Z
+   ./Scripts/release.sh X.Y.Z
+   ```
+   The script tags `origin/main` directly (no `git checkout main` needed),
+   pushes the tag, and exits. You never leave `dev`. Manual fallback if the
+   script is unavailable:
+   ```
+   git fetch origin main
+   git tag vX.Y.Z origin/main
    git push origin vX.Y.Z
    ```
 4. Watch the workflow:
