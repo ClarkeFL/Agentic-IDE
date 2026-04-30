@@ -69,8 +69,13 @@ targets:
         # self-signed "AgenticIDE Dev" identity (created by
         # Scripts/create-dev-signing-cert.sh) so the cdhash is anchored to
         # a stable cert and TCC permissions persist across rebuilds.
-        # Release stays ad-hoc (`-`) so CI / GitHub Actions tag builds
-        # don't need a cert in the runner — until we move to Developer ID.
+        # Release defaults to ad-hoc (`-`) here for local builds, but the
+        # GitHub Actions tag-push workflow overrides this on the
+        # xcodebuild command line with CODE_SIGN_IDENTITY="AgenticIDE
+        # Release" — a separate self-signed cert imported from the
+        # RELEASE_CERT_P12_BASE64 repo secret. That gives shipped builds a
+        # stable Designated Requirement so Sparkle updates don't reset
+        # users' TCC grants. Cert generator: Scripts/create-release-signing-cert.sh
         CODE_SIGN_STYLE: Manual
         CODE_SIGN_IDENTITY: "-"
         DEVELOPMENT_TEAM: ""
@@ -102,7 +107,9 @@ targets:
           # debug helper dylib (signed ad-hoc) under hardened runtime.
           CODE_SIGN_ENTITLEMENTS: AgenticIDE/AgenticIDE.entitlements
         Release:
-          # CI's tag-push workflow has no cert; ad-hoc keeps it building.
+          # Local Release builds stay ad-hoc; CI overrides this to
+          # "AgenticIDE Release" via xcodebuild flags after importing the
+          # cert from RELEASE_CERT_P12_BASE64. See .github/workflows/release.yml.
           CODE_SIGN_IDENTITY: "-"
     dependencies:
       - framework: Vendor/GhosttyKit.xcframework
