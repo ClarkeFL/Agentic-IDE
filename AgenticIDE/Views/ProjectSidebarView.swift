@@ -579,17 +579,20 @@ private struct ProjectRow: View {
                     .font(.body.weight(.medium))
                     .lineLimit(1)
                 Spacer(minLength: 4)
-                // Aggregate-status indicator, only on collapsed rows. When the
+                // Per-terminal status dots, only on collapsed rows. When the
                 // project is expanded the per-tab rows below already show
                 // their own dot+label, so a duplicate header indicator just
-                // crowds the title.
-                if !isExpanded,
-                   let aggregate = aggregateStatus,
-                   let info = TerminalStatusBadge.info(for: aggregate) {
-                    Circle()
-                        .fill(info.color)
-                        .frame(width: 7, height: 7) // status dot — keep tight
-                        .help(info.label)
+                // crowds the title. Order matches tab order so the user can
+                // map "third dot is green" to the third terminal in the list.
+                if !isExpanded, !session.tabs.isEmpty {
+                    HStack(spacing: 3) {
+                        ForEach(session.tabs) { tab in
+                            Circle()
+                                .fill(dotColor(for: tab.status))
+                                .frame(width: 7, height: 7) // status dot — keep tight
+                                .help(dotHelp(for: tab))
+                        }
+                    }
                 }
             }
 
@@ -672,15 +675,21 @@ private struct ProjectRow: View {
         return n == 1 ? "1 terminal" : "\(n) terminals"
     }
 
-    /// Highest-priority status across all tabs in this project. Mirrors what
-    /// the user is most likely to want to know about: "is the AI waiting for
-    /// me" wins over "is it still working" wins over "did it just finish".
-    private var aggregateStatus: TerminalTabStatus? {
-        let priority: [TerminalTabStatus] = [.failed, .working, .completed]
-        for s in priority where session.tabs.contains(where: { $0.status == s }) {
-            return s
+    /// Color for one terminal's dot on the collapsed row. Idle tabs fall back
+    /// to a muted neutral so the user can still count "four terminals = four
+    /// dots" — the active-status colours then pop against that baseline.
+    private func dotColor(for status: TerminalTabStatus) -> Color {
+        if let info = TerminalStatusBadge.info(for: status) {
+            return info.color
         }
-        return nil
+        return Color.secondary.opacity(0.45)
+    }
+
+    /// Tooltip for one dot — names the tab so hovering disambiguates which
+    /// terminal a coloured dot belongs to.
+    private func dotHelp(for tab: TerminalTab) -> String {
+        let label = TerminalStatusBadge.info(for: tab.status)?.label ?? "Idle"
+        return "\(tab.title) — \(label)"
     }
 
     /// Minutes/hours/days only — never seconds.
