@@ -286,16 +286,16 @@ final class GhosttyTerminalView: NSView, NSTextInputClient {
 
     @objc private func windowDidChangeScreen(_ notification: Notification) {
         if let surface, let id = currentDisplayID() {
-            // Push the new display ID so Ghostty's CVDisplayLink (when vsync
-            // is enabled) targets the right screen's refresh rate.
             ghostty_surface_set_display_id(surface, id)
         }
-        // Force the backing-property resync. If the new screen happens to
-        // share backingScaleFactor with the previous one, AppKit won't call
-        // this for us — but the renderer still needs to know about the
-        // physical DPI change.
         DispatchQueue.main.async { [weak self] in
             self?.viewDidChangeBackingProperties()
+        }
+        // The window may still be animating into place on the new screen;
+        // a second sync after the move settles catches size changes that
+        // arrive after the first async tick.
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.15) { [weak self] in
+            self?.refreshAfterReattach()
         }
     }
 
@@ -355,20 +355,12 @@ final class GhosttyTerminalView: NSView, NSTextInputClient {
 
     override func viewDidChangeBackingProperties() {
         super.viewDidChangeBackingProperties()
-        // Backing scale changed — typically because the window crossed a
-        // display boundary. Updating only `contents_scale` (as we used to)
-        // tells Ghostty about the new DPI but leaves the metal drawable
-        // and the surface's pixel dimensions sized for the *previous*
-        // scale, so the grid renders into a canvas that doesn't match
-        // the point-size view: visible as a cramped terminal pinned to
-        // one corner of the pane after dragging across screens. Re-derive
-        // pixel size from current bounds × new scale and push everything
-        // through together.
         let scale = window?.backingScaleFactor ?? NSScreen.main?.backingScaleFactor ?? 2.0
         let widthPx = UInt32(max(1, bounds.width * scale))
         let heightPx = UInt32(max(1, bounds.height * scale))
         if let metalLayer = layer as? CAMetalLayer {
             metalLayer.contentsScale = scale
+            metalLayer.frame = bounds
             metalLayer.drawableSize = CGSize(width: CGFloat(widthPx), height: CGFloat(heightPx))
         }
         if let surface {
@@ -381,6 +373,23 @@ final class GhosttyTerminalView: NSView, NSTextInputClient {
     override func viewDidChangeEffectiveAppearance() {
         super.viewDidChangeEffectiveAppearance()
         applyCurrentColorScheme(refresh: true)
+    }
+
+    override func layout() {
+        super.layout()
+        guard window != nil, bounds.width > 1, bounds.height > 1 else { return }
+        let scale = window?.backingScaleFactor ?? 2.0
+        let widthPx = UInt32(max(1, bounds.width * scale))
+        let heightPx = UInt32(max(1, bounds.height * scale))
+        if let metalLayer = layer as? CAMetalLayer {
+            if metalLayer.frame != bounds {
+                metalLayer.frame = bounds
+                metalLayer.drawableSize = CGSize(width: CGFloat(widthPx), height: CGFloat(heightPx))
+            }
+        }
+        if let surface {
+            ghostty_surface_set_size(surface, widthPx, heightPx)
+        }
     }
 
     override func setFrameSize(_ newSize: NSSize) {

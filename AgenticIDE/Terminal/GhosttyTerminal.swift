@@ -24,5 +24,8 @@ struct GhosttyTerminal: NSViewRepresentable {
 
     func updateNSView(_ nsView: GhosttyTerminalView, context: Context) {
         nsView.setOccluded(!isActive)
+        if isActive {
+            nsView.needsLayout = true
+        }
     }
 }
