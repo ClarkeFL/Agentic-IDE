@@ -344,10 +344,12 @@ final class GhosttyTerminalView: NSView, NSTextInputClient {
         let widthPx = UInt32(max(1, bounds.width * scale))
         let heightPx = UInt32(max(1, bounds.height * scale))
         if let metalLayer = layer as? CAMetalLayer {
+            metalLayer.contentsScale = scale
             metalLayer.frame = bounds
             metalLayer.drawableSize = CGSize(width: CGFloat(widthPx), height: CGFloat(heightPx))
         }
         if let surface {
+            ghostty_surface_set_content_scale(surface, scale, scale)
             ghostty_surface_set_size(surface, widthPx, heightPx)
             ghostty_surface_refresh(surface)
         }
@@ -382,12 +384,14 @@ final class GhosttyTerminalView: NSView, NSTextInputClient {
         let widthPx = UInt32(max(1, bounds.width * scale))
         let heightPx = UInt32(max(1, bounds.height * scale))
         if let metalLayer = layer as? CAMetalLayer {
-            if metalLayer.frame != bounds {
+            if metalLayer.frame != bounds || metalLayer.contentsScale != scale {
+                metalLayer.contentsScale = scale
                 metalLayer.frame = bounds
                 metalLayer.drawableSize = CGSize(width: CGFloat(widthPx), height: CGFloat(heightPx))
             }
         }
         if let surface {
+            ghostty_surface_set_content_scale(surface, scale, scale)
             ghostty_surface_set_size(surface, widthPx, heightPx)
         }
     }
@@ -406,20 +410,13 @@ final class GhosttyTerminalView: NSView, NSTextInputClient {
         let widthPx = UInt32(max(1, newSize.width * scale))
         let heightPx = UInt32(max(1, newSize.height * scale))
         if let metalLayer = layer as? CAMetalLayer {
-            // Layer-hosting view: we own layer sizing. Without this the layer
-            // keeps its pre-resize frame, drawing past the new view bounds —
-            // visible as terminal text overflowing into the right inspector
-            // when the window is shrunk.
+            metalLayer.contentsScale = scale
             metalLayer.frame = NSRect(origin: .zero, size: newSize)
             metalLayer.drawableSize = CGSize(width: CGFloat(widthPx), height: CGFloat(heightPx))
         }
         if let surface {
+            ghostty_surface_set_content_scale(surface, scale, scale)
             ghostty_surface_set_size(surface, widthPx, heightPx)
-            // Kick a paint. Without this, when SwiftUI sizes us *after* the
-            // viewDidMoveToWindow async tick already ran on stale (zero)
-            // bounds, the surface ends up at the right size with no request
-            // to repaint and the metal layer keeps showing its pre-detach
-            // frame until the user types.
             ghostty_surface_refresh(surface)
         }
     }
