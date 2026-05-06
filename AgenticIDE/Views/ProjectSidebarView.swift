@@ -315,6 +315,22 @@ struct ProjectSidebarView: View {
                     .background(.thinMaterial, in: RoundedRectangle(cornerRadius: DS.Radius.lg))
             }
             .contextMenu {
+                if let ide = ExternalIDEService.preferredIDE() {
+                    Button("Open in \(ide.displayName)") {
+                        ExternalIDEService.open(project.path, in: ide)
+                    }
+                }
+                let installed = ExternalIDEService.installedIDEs()
+                if installed.count > 1 {
+                    Menu("Open in...") {
+                        ForEach(installed) { ide in
+                            Button(ide.displayName) {
+                                ExternalIDEService.open(project.path, in: ide)
+                            }
+                        }
+                    }
+                }
+                Divider()
                 Button("Reveal in Finder") {
                     NSWorkspace.shared.activateFileViewerSelecting([project.path])
                 }

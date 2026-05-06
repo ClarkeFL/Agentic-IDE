@@ -16,6 +16,8 @@ enum AppSettings {
         /// AVSpeechUtterance.rate (0.0…1.0). Missing falls back to the SDK
         /// default (`AVSpeechUtteranceDefaultSpeechRate`).
         static let speechRate = "speech.rate"
+        /// Bundle identifier of the user's preferred external IDE/editor.
+        static let preferredIDE = "editor.preferredIDE"
     }
 
     static var claudeDangerousSkipPermissions: Bool {

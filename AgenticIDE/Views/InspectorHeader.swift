@@ -16,17 +16,16 @@ struct InspectorHeader: View {
     let changeCount: Int
     let isRefreshDisabled: Bool
     let onRefresh: () -> Void
+    /// URL to open — the selected file when one is picked, otherwise the
+    /// project root. `nil` disables the button.
+    let openTarget: URL?
 
     var body: some View {
-        // Same shape as the sidebar `PaneHeader` and the workspace
-        // `TabBarView`: fixed `DS.Control.header` height, regular-material
-        // background, trailing divider. This is what makes the three column
-        // tops draw as one continuous toolbar instead of three separate
-        // strips at slightly different heights.
         VStack(spacing: 0) {
             HStack(alignment: .center, spacing: DS.Space.md) {
                 InspectorModeToggle(mode: $mode, changeCount: changeCount)
                 Spacer(minLength: 0)
+                OpenInIDEButton(target: openTarget)
                 InspectorIconButton(
                     systemImage: "arrow.clockwise",
                     help: mode == .changes ? "Refresh git status" : "Reload file tree",
@@ -107,6 +106,115 @@ struct InspectorModeToggle: View {
             .contentShape(RoundedRectangle(cornerRadius: DS.Radius.sm, style: .continuous))
         }
         .buttonStyle(.plain)
+    }
+}
+
+/// Split button: left side opens the target in the preferred IDE, right
+/// chevron drops a menu of all installed editors. Reads the preference from
+/// `@AppStorage` so it stays in sync with the Settings > Editor picker.
+struct OpenInIDEButton: View {
+    let target: URL?
+
+    @AppStorage(AppSettings.Keys.preferredIDE)
+    private var preferredIDERaw: String = ""
+
+    @State private var installed: [ExternalIDE] = []
+    @State private var isMainHovered = false
+    @State private var isMainPressed = false
+    @State private var isChevronHovered = false
+
+    private var preferred: ExternalIDE? {
+        if let ide = ExternalIDE(rawValue: preferredIDERaw),
+           installed.contains(ide) { return ide }
+        return installed.first
+    }
+
+    private var isEnabled: Bool { target != nil && preferred != nil }
+    private var slot: CGFloat { DS.Control.compact + 4 }
+
+    var body: some View {
+        HStack(spacing: 0) {
+            Button {
+                guard let target, let ide = preferred else { return }
+                ExternalIDEService.open(target, in: ide)
+            } label: {
+                HStack(spacing: DS.Space.xs) {
+                    Image(systemName: preferred?.systemImage ?? "curlybraces")
+                        .font(.system(size: DS.Icon.small, weight: .medium))
+                    Text(preferred?.displayName ?? "Editor")
+                        .font(DS.Font.control)
+                        .lineLimit(1)
+                }
+                .foregroundStyle(isEnabled
+                    ? (isMainPressed ? .primary : (isMainHovered ? .primary : .secondary))
+                    : .tertiary)
+                .padding(.horizontal, DS.Space.sm)
+                .frame(height: slot)
+                .background(
+                    RoundedRectangle(cornerRadius: DS.Radius.sm, style: .continuous)
+                        .fill(Color.primary.opacity(
+                            isMainPressed ? 0.14 : (isMainHovered ? 0.08 : 0)))
+                )
+                .contentShape(Rectangle())
+                .scaleEffect(isMainPressed ? 0.97 : 1.0)
+            }
+            .buttonStyle(.plain)
+            .disabled(!isEnabled)
+            .onHover { isMainHovered = $0 }
+            .simultaneousGesture(
+                DragGesture(minimumDistance: 0)
+                    .onChanged { _ in if isEnabled { isMainPressed = true } }
+                    .onEnded { _ in isMainPressed = false }
+            )
+            .help(target != nil
+                  ? "Open in \(preferred?.displayName ?? "editor")"
+                  : "Select a file to open")
+            .animation(.easeOut(duration: 0.08), value: isMainHovered)
+            .animation(.easeOut(duration: 0.08), value: isMainPressed)
+
+            Divider()
+                .frame(height: DS.Icon.small)
+                .opacity(isMainHovered || isChevronHovered ? 0 : 1)
+
+            Menu {
+                ForEach(installed) { ide in
+                    Button {
+                        guard let target else { return }
+                        preferredIDERaw = ide.rawValue
+                        ExternalIDEService.open(target, in: ide)
+                    } label: {
+                        if ide == preferred {
+                            Label(ide.displayName, systemImage: "checkmark")
+                        } else {
+                            Text(ide.displayName)
+                        }
+                    }
+                }
+            } label: {
+                Image(systemName: "chevron.down")
+                    .font(.system(size: 8, weight: .bold))
+                    .foregroundStyle(isEnabled
+                        ? (isChevronHovered ? .primary : .secondary)
+                        : .tertiary)
+                    .frame(width: DS.Control.compact, height: slot)
+                    .background(
+                        RoundedRectangle(cornerRadius: DS.Radius.sm, style: .continuous)
+                            .fill(Color.primary.opacity(isChevronHovered ? 0.08 : 0))
+                    )
+                    .contentShape(Rectangle())
+            }
+            .menuStyle(.borderlessButton)
+            .menuIndicator(.hidden)
+            .fixedSize()
+            .disabled(target == nil || installed.isEmpty)
+            .onHover { isChevronHovered = $0 }
+            .animation(.easeOut(duration: 0.08), value: isChevronHovered)
+        }
+        .background(
+            RoundedRectangle(cornerRadius: DS.Radius.sm, style: .continuous)
+                .fill(Color.primary.opacity(0.06))
+        )
+        .onAppear { installed = ExternalIDEService.installedIDEs() }
     }
 }
 
