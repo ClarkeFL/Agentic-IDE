@@ -76,6 +76,11 @@ final class GhosttyTerminalView: NSView, NSTextInputClient {
     /// window before subscribing to the new one (AppKit can move a view
     /// between windows during workspace re-layout).
     private weak var observedWindow: NSWindow?
+    /// True while a screen transition is in progress. Guards `layout()` from
+    /// sending intermediate scale/size values to Ghostty — `layout()` fires
+    /// with stale bounds during the transition and can clobber the correct
+    /// values that `syncSurfaceToCurrentScreen` will set.
+    private var isTransitioningScreen = false
     /// Minimum interval between `.render` dispatches in mach-absolute units.
     /// Computed once from `mach_timebase_info` so the comparison stays a
     /// single 64-bit subtract on the hot path.
@@ -101,19 +106,7 @@ final class GhosttyTerminalView: NSView, NSTextInputClient {
     }
 
     private func commonInit() {
-        // Layer-hosting (custom layer assigned via `self.layer =`): AppKit
-        // does NOT auto-resize the layer when the view's frame changes.
-        // We sync `layer.frame` ourselves in `setFrameSize` / `layout`.
-        wantsLayer = true
-        let metalLayer = CAMetalLayer()
-        metalLayer.device = MTLCreateSystemDefaultDevice()
-        metalLayer.pixelFormat = .bgra8Unorm
-        metalLayer.framebufferOnly = false
-        metalLayer.isOpaque = false
-        metalLayer.contentsScale = NSScreen.main?.backingScaleFactor ?? 2.0
-        metalLayer.masksToBounds = true
-        metalLayer.frame = bounds
-        self.layer = metalLayer
+        self.wantsLayer = true
         self.layerContentsRedrawPolicy = .duringViewResize
         self.autoresizingMask = [.width, .height]
 
@@ -186,16 +179,7 @@ final class GhosttyTerminalView: NSView, NSTextInputClient {
     /// `surface_refresh` when un-occluding) per terminal in the ZStack.
     func setOccluded(_ occluded: Bool) {
         guard let surface else { return }
-        if let metal = layer as? CAMetalLayer, metal.isHidden == occluded {
-            return
-        }
-        // Ghostty's C function name says "occlusion", but the boolean it
-        // accepts is `visible`. Passing `occluded` freezes a tab as soon as
-        // it becomes visible again.
         ghostty_surface_set_occlusion(surface, !occluded)
-        if let metal = layer as? CAMetalLayer {
-            metal.isHidden = occluded
-        }
         if !occluded {
             ghostty_surface_refresh(surface)
         }
@@ -223,7 +207,6 @@ final class GhosttyTerminalView: NSView, NSTextInputClient {
     /// explicitly draw the surface after handling that action.
     func drawSurface() {
         guard let surface, window != nil else { return }
-        if let metal = layer as? CAMetalLayer, metal.isHidden { return }
         ghostty_surface_draw(surface)
     }
 
@@ -285,17 +268,41 @@ final class GhosttyTerminalView: NSView, NSTextInputClient {
     }
 
     @objc private func windowDidChangeScreen(_ notification: Notification) {
-        if let surface, let id = currentDisplayID() {
-            ghostty_surface_set_display_id(surface, id)
+        isTransitioningScreen = true
+        syncSurfaceToCurrentScreen()
+
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.10) { [weak self] in
+            self?.syncSurfaceToCurrentScreen()
         }
-        DispatchQueue.main.async { [weak self] in
-            self?.viewDidChangeBackingProperties()
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.35) { [weak self] in
+            self?.syncSurfaceToCurrentScreen()
+            self?.isTransitioningScreen = false
         }
-        // The window may still be animating into place on the new screen;
-        // a second sync after the move settles catches size changes that
-        // arrive after the first async tick.
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.15) { [weak self] in
-            self?.refreshAfterReattach()
+    }
+
+    private static func effectiveScale(for window: NSWindow?) -> CGFloat {
+        guard let window, let screen = window.screen else {
+            return NSScreen.main?.backingScaleFactor ?? 2.0
+        }
+        return screen.backingScaleFactor
+    }
+    private func syncSurfaceToCurrentScreen() {
+        guard let window, bounds.width > 1, bounds.height > 1 else { return }
+        let scale = Self.effectiveScale(for: window)
+        self.layer?.contentsScale = scale
+
+        let fbFrame = convertToBacking(self.frame)
+        let xScale = self.frame.width > 0 ? fbFrame.width / self.frame.width : scale
+        let yScale = self.frame.height > 0 ? fbFrame.height / self.frame.height : scale
+        let scaledBounds = convertToBacking(bounds)
+
+        if let surface {
+            if let displayID = currentDisplayID() {
+                ghostty_surface_set_display_id(surface, displayID)
+            }
+            ghostty_surface_set_content_scale(surface, xScale, yScale)
+            ghostty_surface_set_size(surface, UInt32(max(1, scaledBounds.width)), UInt32(max(1, scaledBounds.height)))
+            ghostty_surface_refresh(surface)
         }
     }
 
@@ -312,64 +319,20 @@ final class GhosttyTerminalView: NSView, NSTextInputClient {
         super.viewDidMoveToWindow()
         updateScreenObserver()
         guard window != nil else { return }
-        let scale = window?.backingScaleFactor ?? NSScreen.main?.backingScaleFactor ?? 2.0
-        (layer as? CAMetalLayer)?.contentsScale = scale
-        if let surface {
-            ghostty_surface_set_content_scale(surface, scale, scale)
-            if let id = currentDisplayID() {
-                ghostty_surface_set_display_id(surface, id)
-            }
-        }
-        // After re-attaching to a window the frame may already be the size
-        // we want, so AppKit doesn't fire `setFrameSize` and the metal layer
-        // can show whatever stale frame it had before detach. Re-assert the
-        // drawable size + surface size and request a paint.
-        //
-        // Two ticks: the immediate `async` catches the common case where
-        // SwiftUI has already laid out by the time we re-enter the runloop;
-        // the second `asyncAfter` is a belt-and-suspenders fallback for the
-        // race where SwiftUI's layout pass runs after our first tick (so
-        // bounds was still stale) or the metal layer's drawable wasn't ready
-        // yet — without it the surface stays on its pre-detach frame until
-        // the user types and ghostty marks the grid dirty.
-        DispatchQueue.main.async { [weak self] in self?.refreshAfterReattach() }
+        syncSurfaceToCurrentScreen()
+        DispatchQueue.main.async { [weak self] in self?.syncSurfaceToCurrentScreen() }
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) { [weak self] in
-            self?.refreshAfterReattach()
+            self?.syncSurfaceToCurrentScreen()
         }
     }
 
     private func refreshAfterReattach() {
-        guard window != nil else { return }
-        let scale = window?.backingScaleFactor ?? 2.0
-        let widthPx = UInt32(max(1, bounds.width * scale))
-        let heightPx = UInt32(max(1, bounds.height * scale))
-        if let metalLayer = layer as? CAMetalLayer {
-            metalLayer.contentsScale = scale
-            metalLayer.frame = bounds
-            metalLayer.drawableSize = CGSize(width: CGFloat(widthPx), height: CGFloat(heightPx))
-        }
-        if let surface {
-            ghostty_surface_set_content_scale(surface, scale, scale)
-            ghostty_surface_set_size(surface, widthPx, heightPx)
-            ghostty_surface_refresh(surface)
-        }
+        syncSurfaceToCurrentScreen()
     }
 
     override func viewDidChangeBackingProperties() {
         super.viewDidChangeBackingProperties()
-        let scale = window?.backingScaleFactor ?? NSScreen.main?.backingScaleFactor ?? 2.0
-        let widthPx = UInt32(max(1, bounds.width * scale))
-        let heightPx = UInt32(max(1, bounds.height * scale))
-        if let metalLayer = layer as? CAMetalLayer {
-            metalLayer.contentsScale = scale
-            metalLayer.frame = bounds
-            metalLayer.drawableSize = CGSize(width: CGFloat(widthPx), height: CGFloat(heightPx))
-        }
-        if let surface {
-            ghostty_surface_set_content_scale(surface, scale, scale)
-            ghostty_surface_set_size(surface, widthPx, heightPx)
-            ghostty_surface_refresh(surface)
-        }
+        syncSurfaceToCurrentScreen()
     }
 
     override func viewDidChangeEffectiveAppearance() {
@@ -380,43 +343,28 @@ final class GhosttyTerminalView: NSView, NSTextInputClient {
     override func layout() {
         super.layout()
         guard window != nil, bounds.width > 1, bounds.height > 1 else { return }
-        let scale = window?.backingScaleFactor ?? 2.0
-        let widthPx = UInt32(max(1, bounds.width * scale))
-        let heightPx = UInt32(max(1, bounds.height * scale))
-        if let metalLayer = layer as? CAMetalLayer {
-            if metalLayer.frame != bounds || metalLayer.contentsScale != scale {
-                metalLayer.contentsScale = scale
-                metalLayer.frame = bounds
-                metalLayer.drawableSize = CGSize(width: CGFloat(widthPx), height: CGFloat(heightPx))
-            }
-        }
-        if let surface {
-            ghostty_surface_set_content_scale(surface, scale, scale)
-            ghostty_surface_set_size(surface, widthPx, heightPx)
+        if !isTransitioningScreen, let surface {
+            let fbFrame = convertToBacking(self.frame)
+            let xScale = self.frame.width > 0 ? fbFrame.width / self.frame.width : 1.0
+            let yScale = self.frame.height > 0 ? fbFrame.height / self.frame.height : 1.0
+            self.layer?.contentsScale = xScale
+            let scaledBounds = convertToBacking(bounds)
+            ghostty_surface_set_content_scale(surface, xScale, yScale)
+            ghostty_surface_set_size(surface, UInt32(max(1, scaledBounds.width)), UInt32(max(1, scaledBounds.height)))
         }
     }
 
     override func setFrameSize(_ newSize: NSSize) {
         super.setFrameSize(newSize)
-        // Skip when detached / transient. SwiftUI calls `setFrameSize(.zero)`
-        // on us when the parent view is removed during a project switch, and
-        // forwarding that to ghostty reflows the scrollback to a 1×1 grid —
-        // every cached line wraps to a single column, and the breakage
-        // persists when we're re-attached. The reattach path
-        // (`viewDidMoveToWindow` → `refreshAfterReattach`) re-syncs the layer
-        // and surface to the real bounds, so we lose nothing by skipping.
         guard window != nil, newSize.width > 1, newSize.height > 1 else { return }
-        let scale = window?.backingScaleFactor ?? 2.0
-        let widthPx = UInt32(max(1, newSize.width * scale))
-        let heightPx = UInt32(max(1, newSize.height * scale))
-        if let metalLayer = layer as? CAMetalLayer {
-            metalLayer.contentsScale = scale
-            metalLayer.frame = NSRect(origin: .zero, size: newSize)
-            metalLayer.drawableSize = CGSize(width: CGFloat(widthPx), height: CGFloat(heightPx))
-        }
-        if let surface {
-            ghostty_surface_set_content_scale(surface, scale, scale)
-            ghostty_surface_set_size(surface, widthPx, heightPx)
+        if !isTransitioningScreen, let surface {
+            let fbFrame = convertToBacking(self.frame)
+            let xScale = self.frame.width > 0 ? fbFrame.width / self.frame.width : 1.0
+            let yScale = self.frame.height > 0 ? fbFrame.height / self.frame.height : 1.0
+            self.layer?.contentsScale = xScale
+            let scaledSize = convertToBacking(NSRect(origin: .zero, size: newSize))
+            ghostty_surface_set_content_scale(surface, xScale, yScale)
+            ghostty_surface_set_size(surface, UInt32(max(1, scaledSize.width)), UInt32(max(1, scaledSize.height)))
             ghostty_surface_refresh(surface)
         }
     }
@@ -434,7 +382,7 @@ final class GhosttyTerminalView: NSView, NSTextInputClient {
         cfg.platform_tag = GHOSTTY_PLATFORM_MACOS
         cfg.platform = ghostty_platform_u(macos: ghostty_platform_macos_s(nsview: Unmanaged.passUnretained(self).toOpaque()))
         cfg.userdata = Unmanaged.passUnretained(self).toOpaque()
-        let scale = NSScreen.main?.backingScaleFactor ?? 2.0
+        let scale = Self.effectiveScale(for: window)
         cfg.scale_factor = scale
         cfg.context = GHOSTTY_SURFACE_CONTEXT_TAB
 

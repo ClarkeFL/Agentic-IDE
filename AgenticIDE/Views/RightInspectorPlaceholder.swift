@@ -126,6 +126,13 @@ struct RightInspectorView: View {
         }
     }
 
+    private var currentOpenTarget: URL? {
+        switch mode {
+        case .files: return selectedProjectFile ?? project?.path
+        case .changes: return selectedFile ?? project?.path
+        }
+    }
+
     private var header: some View {
         InspectorHeader(
             mode: $mode,
@@ -136,7 +143,8 @@ struct RightInspectorView: View {
                 case .changes: Task { await refreshStatusOnce() }
                 case .files:   filesRefreshToken &+= 1
                 }
-            }
+            },
+            openTarget: currentOpenTarget
         )
     }
 

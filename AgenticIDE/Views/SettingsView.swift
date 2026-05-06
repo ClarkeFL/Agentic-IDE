@@ -9,6 +9,8 @@ struct SettingsView: View {
         TabView {
             AgentsSettingsView()
                 .tabItem { Label("Agents", systemImage: "sparkles") }
+            EditorSettingsView()
+                .tabItem { Label("Editor", systemImage: "curlybraces") }
             HooksSettingsView()
                 .tabItem { Label("Hooks", systemImage: "link") }
             SpeechSettingsView()
@@ -181,6 +183,45 @@ private struct HookRow: View {
         case .installed: return .green
         case .notInstalled: return .secondary
         case .agentNotInstalled, .configUnreadable: return .orange
+        }
+    }
+}
+
+private struct EditorSettingsView: View {
+    @AppStorage(AppSettings.Keys.preferredIDE)
+    private var preferredIDE: String = ""
+
+    @State private var installed: [ExternalIDE] = []
+
+    var body: some View {
+        Form {
+            Section {
+                Picker("Default editor", selection: $preferredIDE) {
+                    if installed.isEmpty {
+                        Text("No editors detected").tag("")
+                    } else {
+                        ForEach(installed) { ide in
+                            Label(ide.displayName, systemImage: ide.systemImage)
+                                .tag(ide.rawValue)
+                        }
+                    }
+                }
+            } header: {
+                Label("External editor", systemImage: "curlybraces")
+            } footer: {
+                Text("Choose which IDE opens when you right-click a project and select \"Open in Editor\". Only editors installed on this Mac are shown.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+        }
+        .formStyle(.grouped)
+        .padding(.top, DS.Space.md)
+        .onAppear {
+            installed = ExternalIDEService.installedIDEs()
+            if preferredIDE.isEmpty, let first = installed.first {
+                preferredIDE = first.rawValue
+            }
         }
     }
 }

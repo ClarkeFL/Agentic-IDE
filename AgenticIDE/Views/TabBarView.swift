@@ -3,6 +3,7 @@ import SwiftUI
 struct TabBarView: View {
     let project: Project
     let onLaunch: (QuickLaunch) -> Void
+    let onSaveQuickLaunch: (QuickLaunch) -> Void
     let onLaunchDefaultShell: () -> Void
     let isSpeaking: Bool
     let onSpeakSelection: () -> Void
@@ -24,13 +25,22 @@ struct TabBarView: View {
                 ScrollView(.horizontal, showsIndicators: false) {
                     HStack(spacing: DS.Space.sm) {
                         ForEach(project.quickLaunches) { ql in
-                            QuickLaunchButton(ql: ql) {
-                                if ql.command.isEmpty {
-                                    runServerEditTarget = ql
-                                } else {
-                                    onLaunch(ql)
+                            QuickLaunchButton(
+                                ql: ql,
+                                action: {
+                                    if ql.command.isEmpty {
+                                        runServerEditTarget = ql
+                                    } else {
+                                        onLaunch(ql)
+                                    }
+                                },
+                                onEdit: { runServerEditTarget = ql },
+                                onReset: {
+                                    var reset = ql
+                                    reset.command = ""
+                                    onSaveQuickLaunch(reset)
                                 }
-                            }
+                            )
                             .popover(item: Binding(
                                 get: { runServerEditTarget?.id == ql.id ? runServerEditTarget : nil },
                                 set: { runServerEditTarget = $0 }
@@ -39,7 +49,7 @@ struct TabBarView: View {
                                                  onSave: { newCmd in
                                                      var updated = target
                                                      updated.command = newCmd
-                                                     onLaunch(updated)
+                                                     onSaveQuickLaunch(updated)
                                                      runServerEditTarget = nil
                                                  },
                                                  onCancel: { runServerEditTarget = nil })
@@ -74,6 +84,8 @@ struct TabBarView: View {
 private struct QuickLaunchButton: View {
     let ql: QuickLaunch
     let action: () -> Void
+    var onEdit: (() -> Void)?
+    var onReset: (() -> Void)?
 
     @State private var isHovered = false
     @State private var isPressed = false
@@ -131,6 +143,11 @@ private struct QuickLaunchButton: View {
 
     @ViewBuilder
     private var contextMenuContents: some View {
+        if !ql.command.isEmpty {
+            Button("Edit Command…") { onEdit?() }
+            Button("Reset Command", role: .destructive) { onReset?() }
+            Divider()
+        }
         switch commandExecutable {
         case "claude":
             Toggle("Run with --dangerously-skip-permissions", isOn: $claudeDangerous)

@@ -17,6 +17,7 @@ struct ProjectWorkspaceView: View {
             // at the same y-coordinate.
             TabBarView(project: project,
                        onLaunch: { ql in launch(ql, in: session) },
+                       onSaveQuickLaunch: { ql in saveQuickLaunch(ql) },
                        onLaunchDefaultShell: { launchDefaultShell(in: session) },
                        isSpeaking: speaker.isSpeaking,
                        onSpeakSelection: { speakSelection(in: session) })
@@ -78,6 +79,10 @@ struct ProjectWorkspaceView: View {
         session.wireSmartRename(tab)
         session.addTab(tab)
         store.recordActivity(projectId: project.id, command: ql.command)
+    }
+
+    private func saveQuickLaunch(_ ql: QuickLaunch) {
+        store.updateQuickLaunch(projectId: project.id, ql)
     }
 
     private func launchDefaultShell(in session: ProjectSession) {

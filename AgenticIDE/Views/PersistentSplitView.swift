@@ -25,6 +25,7 @@ struct PersistentSplitView<L: View, M: View, R: View>: View {
     @State private var trailingWidth: CGFloat
     @State private var dragLeadingStart: CGFloat?
     @State private var dragTrailingStart: CGFloat?
+    @State private var isDragging: Bool = false
 
     init(autosaveName: String,
          leadingMin: CGFloat = 180,
@@ -72,19 +73,22 @@ struct PersistentSplitView<L: View, M: View, R: View>: View {
                     .clipped()
 
                 DividerView(onDrag: { delta in dragLeading(delta: delta, total: total) },
-                            onDragEnd: persist)
+                            onDragStart: { isDragging = true },
+                            onDragEnd: { persist(); isDragging = false })
 
                 center()
                     .frame(width: centerW)
                     .clipped()
 
                 DividerView(onDrag: { delta in dragTrailing(delta: delta, total: total) },
-                            onDragEnd: persist)
+                            onDragStart: { isDragging = true },
+                            onDragEnd: { persist(); isDragging = false })
 
                 trailing()
                     .frame(width: trailingW)
                     .clipped()
             }
+            .transaction { t in if isDragging { t.animation = nil } }
             .frame(width: total, height: geo.size.height, alignment: .leading)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -127,9 +131,12 @@ struct PersistentSplitView<L: View, M: View, R: View>: View {
 /// parent owns the width state and the clamping rules.
 private struct DividerView: View {
     static let thickness: CGFloat = 1
-    static let hitArea: CGFloat = 7
+    static let hitArea: CGFloat = 9
     let onDrag: (CGFloat) -> Void
+    let onDragStart: () -> Void
     let onDragEnd: () -> Void
+
+    @State private var isActive = false
 
     var body: some View {
         ZStack {
@@ -141,7 +148,7 @@ private struct DividerView: View {
                 .frame(width: Self.hitArea)
         }
         .frame(maxHeight: .infinity)
-        .contentShape(Rectangle().inset(by: -3))
+        .contentShape(Rectangle().inset(by: -4))
         .onHover { hovering in
             if hovering {
                 NSCursor.resizeLeftRight.push()
@@ -149,10 +156,19 @@ private struct DividerView: View {
                 NSCursor.pop()
             }
         }
-        .gesture(
-            DragGesture(minimumDistance: 0)
-                .onChanged { value in onDrag(value.translation.width) }
-                .onEnded { _ in onDragEnd() }
+        .highPriorityGesture(
+            DragGesture(minimumDistance: 1, coordinateSpace: .global)
+                .onChanged { value in
+                    if !isActive {
+                        isActive = true
+                        onDragStart()
+                    }
+                    onDrag(value.translation.width)
+                }
+                .onEnded { _ in
+                    isActive = false
+                    onDragEnd()
+                }
         )
     }
 }
