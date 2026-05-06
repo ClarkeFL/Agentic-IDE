@@ -137,12 +137,14 @@ struct ProjectSidebarView: View {
     private func groupHeader(_ group: ProjectGroup, isEmpty: Bool) -> some View {
         let isHovered = hoveredGroupId == group.id
 
-        // Section-cap style: small uppercase tracked label, secondary colour.
-        // Matches the inspector file-tree directory headers ("LIB/COMPONENTS",
-        // "ROUTES") so the whole app shares one visual language for "this is
-        // a section label, not a row." The label sits on its own visual tier
-        // so project names below it read clearly as the primary content.
         HStack(spacing: DS.Space.xxs) {
+            Image(systemName: "chevron.right")
+                .font(.system(size: DS.Icon.micro, weight: .semibold))
+                .foregroundStyle(.tertiary)
+                .rotationEffect(.degrees(group.collapsed ? 0 : 90))
+                .frame(width: DS.Tree.chevronColumn)
+                .animation(.easeInOut(duration: 0.15), value: group.collapsed)
+
             Text(group.name)
                 .font(DS.Font.sectionCaps)
                 .foregroundStyle(.secondary)
@@ -180,6 +182,11 @@ struct ProjectSidebarView: View {
         .padding(.top, DS.Space.xs)
         .padding(.bottom, isEmpty ? DS.Space.xs : DS.Space.xs)
         .contentShape(Rectangle())
+        .onTapGesture {
+            withAnimation(.easeInOut(duration: 0.2)) {
+                store.toggleGroupCollapsed(id: group.id)
+            }
+        }
         .onHover { inside in
             if inside {
                 hoveredGroupId = group.id
@@ -188,6 +195,11 @@ struct ProjectSidebarView: View {
             }
         }
         .contextMenu {
+            Button(group.collapsed ? "Expand" : "Collapse") {
+                withAnimation(.easeInOut(duration: 0.2)) {
+                    store.toggleGroupCollapsed(id: group.id)
+                }
+            }
             Button("Rename…") {
                 renameDraft = group.name
                 renamingGroup = group
@@ -247,8 +259,10 @@ struct ProjectSidebarView: View {
                         .background(.thinMaterial, in: RoundedRectangle(cornerRadius: DS.Radius.lg))
                 }
 
-            ForEach(groupProjects) { project in
-                projectRowItem(project)
+            if !group.collapsed {
+                ForEach(groupProjects) { project in
+                    projectRowItem(project)
+                }
             }
         }
         .padding(.bottom, DS.Space.md)

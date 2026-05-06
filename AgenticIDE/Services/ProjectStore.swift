@@ -124,6 +124,12 @@ final class ProjectStore {
         save()
     }
 
+    func toggleGroupCollapsed(id: UUID) {
+        guard let idx = groups.firstIndex(where: { $0.id == id }) else { return }
+        groups[idx].collapsed.toggle()
+        save()
+    }
+
     /// Deletes a group; any projects that belonged to it become Ungrouped.
     func removeGroup(id: UUID) {
         groups.removeAll { $0.id == id }
