@@ -71,35 +71,38 @@ struct ProjectSidebarView: View {
             .animation(.easeOut(duration: 0.12), value: hoveredDropKey)
 
             Divider()
-            // System CPU + memory readout — sits between the project list
-            // and the action buttons so it's always visible without
-            // crowding the buttons themselves.
-            ResourceBar()
-            HStack(spacing: DS.Space.sm) {
-                SidebarFooterButton(label: "Add Project",
-                                    systemName: "plus",
-                                    fillsWidth: true,
-                                    help: "Add a project folder",
-                                    action: addProject)
-
-                SidebarFooterButton(label: "New Group",
-                                    systemName: "folder.badge.plus",
-                                    fillsWidth: false,
-                                    help: "New Group",
-                                    action: startNewGroup)
-
-                // Direct-action update button — no dropdown. Settings stays
-                // reachable via ⌘, and the standard "AgenticIDE → Settings…"
-                // menu-bar item, so we don't lose access by removing the
-                // gear menu from this footer.
-                SidebarFooterButton(label: "Update",
-                                    systemName: "arrow.triangle.2.circlepath",
-                                    fillsWidth: false,
-                                    help: "Check for Updates",
-                                    action: { updater.checkForUpdates() })
-                    .disabled(!updater.canCheckForUpdates)
+            // Footer is three stacked rows on a single block: CPU on top,
+            // MEM (CPU/MEM are owned by `ResourceBar`'s VStack), then the
+            // action icons. All three buttons are icon-only — the labels
+            // were redundant given the tooltips, and dropping them lets
+            // the icons sit on a single tight row.
+            VStack(alignment: .leading, spacing: DS.Space.xs) {
+                ResourceBar()
+                HStack(spacing: DS.Space.sm) {
+                    SidebarFooterButton(label: "",
+                                        systemName: "plus",
+                                        fillsWidth: true,
+                                        help: "Add a project folder",
+                                        action: addProject)
+                    SidebarFooterButton(label: "",
+                                        systemName: "folder.badge.plus",
+                                        fillsWidth: true,
+                                        help: "New Group",
+                                        action: startNewGroup)
+                    // Direct-action update button — no dropdown. Settings
+                    // stays reachable via ⌘, and the standard "AgenticIDE
+                    // → Settings…" menu-bar item, so we don't lose access
+                    // by removing the gear menu from this footer.
+                    SidebarFooterButton(label: "",
+                                        systemName: "arrow.triangle.2.circlepath",
+                                        fillsWidth: true,
+                                        help: "Check for Updates",
+                                        action: { updater.checkForUpdates() })
+                        .disabled(!updater.canCheckForUpdates)
+                }
             }
-            .padding(DS.Space.md)
+            .padding(.horizontal, DS.Space.md)
+            .padding(.vertical, DS.Space.sm)
         }
         .onReceive(nowTick) { now = $0 }
         .alert("New Group", isPresented: $newGroupAlertShown) {
@@ -468,22 +471,27 @@ private struct SidebarFooterButton: View {
     @State private var isHovered = false
     @State private var isPressed = false
 
+    /// True when this button has a visible text label. The icon-only path
+    /// (no label, fillsWidth) shows just the icon centred in a stretched
+    /// pill — used by the footer's three action buttons so they tile the
+    /// row evenly.
+    private var hasLabel: Bool { fillsWidth && !label.isEmpty }
+
     var body: some View {
         Button(action: action) {
             HStack(spacing: DS.Space.sm) {
                 Image(systemName: systemName)
                     .font(DS.Font.bodySemibold)
-                if fillsWidth {
+                if hasLabel {
                     Text(label)
                         .font(DS.Font.bodyMedium)
-                }
-                if fillsWidth {
                     Spacer(minLength: 0)
                 }
             }
-            .padding(.horizontal, fillsWidth ? DS.Space.md : 0)
+            .padding(.horizontal, hasLabel ? DS.Space.md : 0)
             .padding(.vertical, DS.Space.xs + 1)
-            .frame(maxWidth: fillsWidth ? .infinity : nil, alignment: .leading)
+            .frame(maxWidth: fillsWidth ? .infinity : nil,
+                   alignment: hasLabel ? .leading : .center)
             .frame(width: fillsWidth ? nil : DS.Control.large,
                    height: fillsWidth ? nil : DS.Control.large)
             .background(

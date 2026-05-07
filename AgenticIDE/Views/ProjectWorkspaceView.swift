@@ -35,6 +35,7 @@ struct ProjectWorkspaceView: View {
                 ForEach(session.tabs) { tab in
                     let isActive = tab.id == session.activeTabId
                     GhosttyTerminal(view: tab.view, isActive: isActive)
+                        .frame(maxWidth: .infinity, maxHeight: .infinity)
                         .opacity(isActive ? 1 : 0)
                         .allowsHitTesting(isActive)
                         .zIndex(isActive ? 1 : 0)

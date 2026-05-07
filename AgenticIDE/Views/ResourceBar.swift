@@ -8,21 +8,19 @@ struct ResourceBar: View {
     @Environment(ResourceMonitor.self) private var monitor
 
     var body: some View {
-        HStack(spacing: 0) {
+        VStack(alignment: .leading, spacing: 2) {
             metric(systemImage: "cpu",
                    label: "CPU",
                    value: formattedCPU,
                    tint: cpuColor)
-            Spacer(minLength: 8)
             metric(systemImage: "memorychip",
                    label: "MEM",
                    value: formattedMemoryUsed,
                    tint: memoryColor)
         }
-        .font(.system(size: 12, weight: .medium, design: .monospaced))
+        .font(.system(size: 11, weight: .medium, design: .monospaced))
         .monospacedDigit()
-        .padding(.horizontal, 10)
-        .padding(.vertical, 6)
+        .frame(maxWidth: .infinity, alignment: .leading)
         .help("System-wide CPU and memory. Memory total: \(formattedMemoryTotal). Updated 2×/sec.")
     }
 

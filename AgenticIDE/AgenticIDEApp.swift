@@ -6,6 +6,8 @@ struct AgenticIDEApp: App {
     @NSApplicationDelegateAdaptor(AppDelegate.self) private var appDelegate
     @State private var store = ProjectStore()
     @State private var sessions = SessionManager()
+    @State private var editors = EditorSessionManager()
+    @State private var gitWatchers = GitStatusWatcherStore()
     @State private var speaker = SystemSpeaker()
     @State private var resources = ResourceMonitor()
     @StateObject private var updater = UpdaterManager()
@@ -24,6 +26,8 @@ struct AgenticIDEApp: App {
             MainWindow()
                 .environment(store)
                 .environment(sessions)
+                .environment(editors)
+                .environment(gitWatchers)
                 .environment(speaker)
                 .environment(resources)
                 .environmentObject(updater)
@@ -37,6 +41,20 @@ struct AgenticIDEApp: App {
                     NotificationCenter.default.post(name: .addProject, object: nil)
                 }
                 .keyboardShortcut("n", modifiers: [.command])
+            }
+            // Editor save / close — the EditorPaneView listens for these
+            // and routes to its active tab. App-wide shortcuts: when the
+            // editor pane has nothing open, the publisher posts but the
+            // pane's no-active-tab guard ignores it.
+            CommandGroup(after: .saveItem) {
+                Button("Save") {
+                    NotificationCenter.default.post(name: .saveActiveEditorTab, object: nil)
+                }
+                .keyboardShortcut("s", modifiers: [.command])
+                Button("Close Editor Tab") {
+                    NotificationCenter.default.post(name: .closeActiveEditorTab, object: nil)
+                }
+                .keyboardShortcut("w", modifiers: [.command, .shift])
             }
             // Speak selection from the active terminal. ProjectWorkspaceView
             // observes the notification and calls into its active tab.
@@ -71,6 +89,12 @@ extension Notification.Name {
     /// Posted by the Speech menu command. Observed by `ProjectWorkspaceView`,
     /// which forwards the active tab's selected text to the shared `Speaker`.
     static let speakSelection = Notification.Name("AgenticIDE.speakSelection")
+    /// Posted by File → Save (⌘S). Observed by `EditorPaneView`, which writes
+    /// the active editor tab's buffer to disk.
+    static let saveActiveEditorTab = Notification.Name("AgenticIDE.saveActiveEditorTab")
+    /// Posted by File → Close Editor Tab (⌘⇧W). Observed by `EditorPaneView`,
+    /// which closes the active editor tab (prompting on dirty state).
+    static let closeActiveEditorTab = Notification.Name("AgenticIDE.closeActiveEditorTab")
 }
 
 /// Lives only to make termination unrefusable. macOS sends a quit AppleEvent
