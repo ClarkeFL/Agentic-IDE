@@ -25,6 +25,12 @@ struct CodeEditor: NSViewRepresentable {
     /// view). When set, `tab.text` is ignored and this is shown instead.
     var staticText: String?
 
+    /// Single shared `SyntaxHighlighter` — the JSContext spin-up is
+    /// expensive and stateless across files, so every editor instance
+    /// (including the diff view's HEAD panel) reuses it. Lazy so app
+    /// launch isn't blocked on theme parsing.
+    private static let sharedHighlighter: SyntaxHighlighter = SyntaxHighlighter()
+
     func makeCoordinator() -> Coordinator { Coordinator(tab: tab) }
 
     func makeNSView(context: Context) -> NSScrollView {
@@ -176,6 +182,10 @@ struct CodeEditor: NSViewRepresentable {
             textView.string = text
         }
         coordinator.isApplyingExternalChange = false
+        coordinator.scheduleHighlight(for: textView,
+                                      url: tab.url,
+                                      highlighter: Self.sharedHighlighter,
+                                      delay: 0)
     }
 
     private func captureViewState(from textView: NSTextView,
@@ -205,6 +215,12 @@ struct CodeEditor: NSViewRepresentable {
         var isApplyingExternalChange = false
         weak var textView: NSTextView?
         weak var scrollView: NSScrollView?
+        /// Outstanding debounced highlight. Cancelled and replaced on
+        /// every keystroke so we only run highlightr once the user stops
+        /// typing for `highlightDebounceMs`. Heavy minified files would
+        /// otherwise pin the JSContext on every char.
+        private var highlightTask: Task<Void, Never>?
+        private static let highlightDebounceMs: UInt64 = 180
 
         init(tab: EditorTab) { self.tab = tab }
 
@@ -212,6 +228,56 @@ struct CodeEditor: NSViewRepresentable {
             guard !isApplyingExternalChange,
                   let tv = notification.object as? NSTextView else { return }
             tab.text = tv.string
+            scheduleHighlight(for: tv,
+                              url: tab.url,
+                              highlighter: CodeEditor.sharedHighlighter,
+                              delay: Self.highlightDebounceMs)
+        }
+
+        /// Debounced re-highlight pass. `delay = 0` runs on the next
+        /// runloop tick (used after `applyText` for initial paint); a
+        /// non-zero value coalesces typing bursts. Highlighting itself
+        /// happens off main, with the foreground-colour application
+        /// hopping back to the main actor.
+        @MainActor
+        func scheduleHighlight(for textView: NSTextView,
+                               url: URL,
+                               highlighter: SyntaxHighlighter,
+                               delay: UInt64) {
+            highlightTask?.cancel()
+            let storage = textView.textStorage
+            // Use the file extension to pick a grammar. Files with
+            // unrecognised extensions reset to plain `.labelColor` so
+            // colours from a previously-viewed tab don't bleed through.
+            let ext = url.pathExtension
+            guard let storage else { return }
+            guard let language = highlighter.languageName(forExtension: ext) else {
+                highlighter.clearColors(in: storage)
+                return
+            }
+            let snapshot = textView.string
+            guard highlighter.shouldHighlight(byteCount: snapshot.utf8.count) else {
+                highlighter.clearColors(in: storage)
+                return
+            }
+            highlightTask = Task { [weak storage, weak self] in
+                if delay > 0 {
+                    try? await Task.sleep(nanoseconds: delay * 1_000_000)
+                }
+                if Task.isCancelled { return }
+                let attributed = await Task.detached(priority: .userInitiated) {
+                    () -> NSAttributedString? in
+                    highlighter.attributedHighlight(text: snapshot, language: language)
+                }.value
+                guard !Task.isCancelled, let attributed, let storage else { return }
+                await MainActor.run {
+                    // The user may have typed since we computed `attributed`;
+                    // `applyForegroundColors` length-checks the storage and
+                    // bails if so — we'll re-fire on the next debounce.
+                    highlighter.applyForegroundColors(attributed, to: storage)
+                }
+                _ = self // hold a ref so the task isn't reclaimed mid-flight
+            }
         }
     }
 }

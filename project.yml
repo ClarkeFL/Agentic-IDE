@@ -11,6 +11,13 @@ packages:
   Sparkle:
     url: https://github.com/sparkle-project/Sparkle
     from: 2.6.0
+  # highlight.js wrapped in Swift via JavaScriptCore. Drives syntax
+  # colouring inside the CodeEditor — ~190 languages, auto-detected from
+  # the file extension. No native bindings, no per-language dylibs to
+  # bundle, but it is JS-on-main so we debounce + skip very large files.
+  Highlightr:
+    url: https://github.com/raspu/Highlightr
+    from: 2.2.0
 
 settings:
   base:
@@ -121,6 +128,8 @@ targets:
         embed: false
       - package: Sparkle
         product: Sparkle
+      - package: Highlightr
+        product: Highlightr
     preBuildScripts:
       - name: Fetch GhosttyKit
         script: '"${SRCROOT}/Scripts/fetch-ghosttykit.sh"'
