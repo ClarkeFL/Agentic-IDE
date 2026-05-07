@@ -69,6 +69,19 @@ enum GitService {
         return count
     }
 
+    /// Returns the file's contents at HEAD (i.e. the last committed
+    /// version) as a UTF-8 string, or `nil` if the file is untracked /
+    /// brand-new / not in HEAD. Used by the editor's side-by-side diff
+    /// view as the "before" panel.
+    static func headContent(at root: URL, file: URL) async -> String? {
+        guard let rel = relativePath(of: file, in: root) else { return nil }
+        let raw = await run(args: ["-C", root.path,
+                                    "show", "HEAD:\(rel)"],
+                            in: root,
+                            allowNonZeroExit: true)
+        return raw
+    }
+
     /// Returns the unified diff for `file` against HEAD (for tracked files)
     /// or against /dev/null (for untracked files). Empty string means the
     /// file matches HEAD or doesn't exist.

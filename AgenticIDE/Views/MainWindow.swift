@@ -4,6 +4,8 @@ import UniformTypeIdentifiers
 struct MainWindow: View {
     @Environment(ProjectStore.self) private var store
     @Environment(SessionManager.self) private var sessions
+    @Environment(EditorSessionManager.self) private var editors
+    @Environment(GitStatusWatcherStore.self) private var gitWatchers
     @AppStorage("currentProjectId") private var currentProjectIdString: String = ""
 
     @State private var selectedProjectId: UUID?
@@ -19,48 +21,94 @@ struct MainWindow: View {
     @State private var didEvaluateFDA = false
 
     var body: some View {
+        splitView
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+            .navigationTitle(activeProject?.name ?? "Agentic IDE")
+            .onAppear {
+                restoreSelection()
+                if !didEvaluateFDA {
+                    didEvaluateFDA = true
+                    evaluateFullDiskAccess()
+                }
+            }
+            .onChange(of: selectedProjectId) { _, new in
+                currentProjectIdString = new?.uuidString ?? ""
+            }
+            .onDrop(of: [.fileURL], isTargeted: nil) { providers in
+                handleDrop(providers: providers)
+            }
+            .sheet(isPresented: $showFDAOnboarding) {
+                FullDiskAccessOnboarding(gate: fda, isPresented: $showFDAOnboarding)
+            }
+    }
+
+    /// Pulled out of `body` because the four-pane initialiser plus its
+    /// `.frame(...).onAppear...` modifier chain blew past SwiftUI's
+    /// type-inference budget when written inline.
+    private var splitView: some View {
         PersistentSplitView(
             autosaveName: "AgenticIDE.MainSplit",
-            leading: {
-                ProjectSidebarView(selectedProjectId: $selectedProjectId)
-                    .environment(store)
-                    .environment(sessions)
-            },
-            center: {
-                workspaceColumn
-                    .environment(store)
-                    .environment(sessions)
-            },
-            trailing: {
-                RightInspectorView(project: fileAccessProject)
-                    .environment(store)
-                    .environment(sessions)
-            }
+            pane1Min: 160, pane1Initial: 200, pane1Max: 360,
+            pane2Min: 160, pane2Initial: 240, pane2Max: 480,
+            pane3Min: 240,
+            // Claude Code's banner + status bar comfortably needs ~70
+            // monospaced columns. At ~7.5pt/col that's ~525pt; we round up
+            // to 540pt min and 720pt initial so a fresh install never sees
+            // the "with xhig…" / "/effor" truncation Claude does when its
+            // surface is narrower than its UI.
+            pane4Min: 540, pane4Initial: 720, pane4Max: 1400,
+            pane1: { sidebarPane },
+            pane2: { fileTreePane },
+            pane3: { editorPane },
+            pane4: { terminalsPane }
         )
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
-        .navigationTitle(activeProject?.name ?? "Agentic IDE")
-        .onAppear {
-            restoreSelection()
-            if !didEvaluateFDA {
-                didEvaluateFDA = true
-                evaluateFullDiskAccess()
-            }
-        }
-        .onChange(of: selectedProjectId) { _, new in
-            currentProjectIdString = new?.uuidString ?? ""
-        }
-        .onDrop(of: [.fileURL], isTargeted: nil) { providers in
-            handleDrop(providers: providers)
-        }
-        .sheet(isPresented: $showFDAOnboarding) {
-            FullDiskAccessOnboarding(gate: fda, isPresented: $showFDAOnboarding)
+    }
+
+    // MARK: - Pane 1: Sidebar
+
+    @ViewBuilder
+    private var sidebarPane: some View {
+        ProjectSidebarView(selectedProjectId: $selectedProjectId)
+            .environment(store)
+            .environment(sessions)
+    }
+
+    // MARK: - Pane 2: File tree
+
+    @ViewBuilder
+    private var fileTreePane: some View {
+        if let project = fileAccessProject {
+            FileTreeView(project: project,
+                         editor: editors.session(for: project.id),
+                         gitWatcher: gitWatchers.watcher(for: project.id, rootPath: project.path))
+        } else {
+            paneEmptyState(systemImage: "folder",
+                           text: "Select a project to browse its files.")
         }
     }
 
+    // MARK: - Pane 3: Editor
+
     @ViewBuilder
-    private var workspaceColumn: some View {
+    private var editorPane: some View {
+        if let project = fileAccessProject {
+            EditorPaneView(project: project,
+                           editor: editors.session(for: project.id),
+                           gitWatcher: gitWatchers.watcher(for: project.id, rootPath: project.path))
+        } else {
+            paneEmptyState(systemImage: "doc.text",
+                           text: "No project active.")
+        }
+    }
+
+    // MARK: - Pane 4: Terminals
+
+    @ViewBuilder
+    private var terminalsPane: some View {
         if let project = activeProject {
             ProjectWorkspaceView(project: project)
+                .environment(store)
+                .environment(sessions)
         } else if store.projects.filter({ !$0.archived }).isEmpty {
             VStack(spacing: DS.Space.lg) {
                 Image(systemName: "folder.badge.plus")
@@ -73,12 +121,26 @@ struct MainWindow: View {
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
         } else {
-            VStack(spacing: DS.Space.md) {
-                Text("Select a project")
-                    .font(.title3).foregroundStyle(.secondary)
-            }
-            .frame(maxWidth: .infinity, maxHeight: .infinity)
+            paneEmptyState(systemImage: "terminal",
+                           text: "Select a project to launch terminals.")
         }
+    }
+
+    // MARK: - Helpers
+
+    private func paneEmptyState(systemImage: String, text: String) -> some View {
+        VStack(spacing: DS.Space.md) {
+            Image(systemName: systemImage)
+                .font(.system(size: DS.Icon.large, weight: .light))
+                .foregroundStyle(.tertiary)
+            Text(text)
+                .font(.callout)
+                .foregroundStyle(.secondary)
+                .multilineTextAlignment(.center)
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .padding(DS.Space.xxl)
+        .background(Color(nsColor: .controlBackgroundColor))
     }
 
     private var activeProject: Project? {
@@ -86,11 +148,10 @@ struct MainWindow: View {
         return store.projects.first(where: { $0.id == id && !$0.archived })
     }
 
-    /// Project handed to file-touching subviews (the right inspector's
-    /// git-status poll, file listing, etc). Returns `nil` while the FDA
-    /// onboarding sheet is up so the inspector doesn't immediately fire
-    /// per-folder TCC prompts (Documents / Desktop / Downloads) on top
-    /// of our own sheet — competing dialogs were the visible bug.
+    /// Project handed to file-touching subviews (the file tree, editor,
+    /// terminals). Returns `nil` while the FDA onboarding sheet is up so
+    /// the panes don't immediately fire per-folder TCC prompts on top of
+    /// our own sheet.
     private var fileAccessProject: Project? {
         if fda.status == .denied && !fda.skippedThisBuild { return nil }
         return activeProject
