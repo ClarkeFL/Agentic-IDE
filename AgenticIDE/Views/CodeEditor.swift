@@ -297,10 +297,18 @@ final class LineNumberRulerView: NSRulerView {
         super.init(scrollView: textView.enclosingScrollView, orientation: .verticalRuler)
         self.clientView = textView
         self.ruleThickness = 36
-        NotificationCenter.default.addObserver(
-            self, selector: #selector(textChanged(_:)),
-            name: NSText.didChangeNotification, object: textView
-        )
+        // Listen to the storage's edit cycle, not NSText.didChangeNotification.
+        // Programmatic loads via `NSTextStorage.setAttributedString` (used when
+        // CodeEditor swaps in a file's contents) don't post NSText's notification —
+        // that one is only posted by NSTextView.didChangeText for user-driven
+        // edits. Without this, the line cache stays pinned to the empty buffer
+        // the ruler saw at init time and only "1" is ever drawn.
+        if let storage = textView.textStorage {
+            NotificationCenter.default.addObserver(
+                self, selector: #selector(textChanged(_:)),
+                name: NSTextStorage.didProcessEditingNotification, object: storage
+            )
+        }
         NotificationCenter.default.addObserver(
             self, selector: #selector(boundsChanged(_:)),
             name: NSView.boundsDidChangeNotification,
