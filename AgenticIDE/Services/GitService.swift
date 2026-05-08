@@ -82,6 +82,133 @@ enum GitService {
         return raw
     }
 
+    /// Current branch name, e.g. `"dev"` / `"main"`. Returns `nil` if
+    /// detached HEAD (we surface a short SHA in the footer in that case),
+    /// or the directory isn't a git repo.
+    static func currentBranch(at root: URL) async -> String? {
+        let raw = await run(args: ["-C", root.path,
+                                    "symbolic-ref", "--quiet", "--short", "HEAD"],
+                            in: root,
+                            allowNonZeroExit: true)
+        let trimmed = raw?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        if !trimmed.isEmpty { return trimmed }
+        // Detached HEAD — fall back to a short sha so the footer still has
+        // something meaningful to show.
+        let sha = await run(args: ["-C", root.path,
+                                    "rev-parse", "--short", "HEAD"],
+                            in: root,
+                            allowNonZeroExit: true)?
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        if let sha, !sha.isEmpty { return "(\(sha))" }
+        return nil
+    }
+
+    /// Returns `(ahead, behind)` relative to the upstream branch — i.e.
+    /// how many commits the local has that upstream doesn't, and vice
+    /// versa. `nil` when there's no upstream configured (e.g. a fresh
+    /// branch that hasn't been pushed yet) or git failed.
+    static func aheadBehind(at root: URL) async -> (ahead: Int, behind: Int)? {
+        let raw = await run(args: ["-C", root.path,
+                                    "rev-list", "--left-right", "--count",
+                                    "HEAD...@{u}"],
+                            in: root,
+                            allowNonZeroExit: true)
+        guard let raw else { return nil }
+        let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+        // Output is "<ahead>\t<behind>" — left is HEAD-only, right is
+        // upstream-only.
+        let parts = trimmed.split(whereSeparator: { $0 == "\t" || $0 == " " })
+        guard parts.count == 2,
+              let ahead = Int(parts[0]),
+              let behind = Int(parts[1]) else { return nil }
+        return (ahead, behind)
+    }
+
+    // MARK: - Mutating actions
+    //
+    // All four return `(ok, output)` so the UI can pop an alert with git's
+    // own stderr on failure (more useful than a generic "git failed"). The
+    // callers wrap these in alerts; we never throw.
+
+    /// `git fetch` — refreshes remote-tracking refs without touching the
+    /// working tree. Safe to run from a button.
+    static func fetch(at root: URL) async -> (ok: Bool, output: String) {
+        await runReportingExit(args: ["-C", root.path, "fetch"], in: root)
+    }
+
+    /// `git pull --ff-only`. Refuses to merge when the local has diverged
+    /// — surfaces git's "not possible to fast-forward" error verbatim so
+    /// the user knows to rebase / merge themselves rather than us doing
+    /// it silently.
+    static func pull(at root: URL) async -> (ok: Bool, output: String) {
+        await runReportingExit(args: ["-C", root.path, "pull", "--ff-only"], in: root)
+    }
+
+    /// `git push`. If the branch has no upstream this fails — caller can
+    /// inspect `output` and offer `--set-upstream` separately if we ever
+    /// build that flow.
+    static func push(at root: URL) async -> (ok: Bool, output: String) {
+        await runReportingExit(args: ["-C", root.path, "push"], in: root)
+    }
+
+    /// `git add -A` followed by `git commit -m <msg>`. Stages everything
+    /// including untracked + deletions, mirroring what most desktop
+    /// clients call "Commit All". Returns the commit's stderr/stdout on
+    /// failure so the user sees git's own message.
+    static func commitAll(at root: URL, message: String) async -> (ok: Bool, output: String) {
+        let trimmed = message.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return (false, "Commit message can't be empty.") }
+        let stage = await runReportingExit(args: ["-C", root.path, "add", "-A"], in: root)
+        guard stage.ok else { return stage }
+        return await runReportingExit(args: ["-C", root.path,
+                                              "commit", "-m", trimmed],
+                                       in: root)
+    }
+
+    /// Same shape as `run` but always returns whether the exit was zero
+    /// plus the combined stdout+stderr (we want stderr on failure).
+    private static func runReportingExit(args: [String], in cwd: URL) async -> (ok: Bool, output: String) {
+        await withCheckedContinuation { continuation in
+            queue.async {
+                let process = Process()
+                process.executableURL = URL(fileURLWithPath: "/usr/bin/git")
+                process.arguments = args
+                process.currentDirectoryURL = cwd
+
+                let stdout = Pipe()
+                let stderr = Pipe()
+                process.standardOutput = stdout
+                process.standardError = stderr
+
+                let outBuf = AtomicData()
+                let errBuf = AtomicData()
+                let group = DispatchGroup()
+                group.enter(); group.enter()
+                drainQueue.async {
+                    outBuf.set(stdout.fileHandleForReading.readDataToEndOfFile())
+                    group.leave()
+                }
+                drainQueue.async {
+                    errBuf.set(stderr.fileHandleForReading.readDataToEndOfFile())
+                    group.leave()
+                }
+                do {
+                    try process.run()
+                } catch {
+                    group.wait()
+                    continuation.resume(returning: (false, error.localizedDescription))
+                    return
+                }
+                process.waitUntilExit()
+                group.wait()
+                let out = String(data: outBuf.get(), encoding: .utf8) ?? ""
+                let err = String(data: errBuf.get(), encoding: .utf8) ?? ""
+                let combined = [out, err].filter { !$0.isEmpty }.joined(separator: "\n")
+                continuation.resume(returning: (process.terminationStatus == 0, combined))
+            }
+        }
+    }
+
     /// Returns the unified diff for `file` against HEAD (for tracked files)
     /// or against /dev/null (for untracked files). Empty string means the
     /// file matches HEAD or doesn't exist.

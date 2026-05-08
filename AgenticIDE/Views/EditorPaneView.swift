@@ -46,7 +46,7 @@ struct EditorPaneView: View {
                     }
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
                 } else if tab.showingDiff {
-                    diffSplit(tab: tab)
+                    unifiedDiff(tab: tab)
                 } else {
                     CodeEditor(tab: tab)
                 }
@@ -59,27 +59,15 @@ struct EditorPaneView: View {
         }
     }
 
-    /// Two-pane HEAD-vs-working view. Left panel is the file's content at
-    /// HEAD (read-only, dimmed background); right panel is the live
-    /// editable buffer. A 1pt vertical separator sits between them so the
-    /// boundary is unambiguous regardless of the two backgrounds.
+    /// Single-pane unified diff. Reads HEAD via `editor.loadHeadIfNeeded`
+    /// (cached on the tab once loaded) and feeds it alongside the live
+    /// `tab.text` to `UnifiedDiffView`. As the user types, the diff
+    /// recomputes in-process — no `git diff` shell-out needed for the
+    /// "diff against HEAD" experience.
     @ViewBuilder
-    private func diffSplit(tab: EditorTab) -> some View {
+    private func unifiedDiff(tab: EditorTab) -> some View {
         if let head = tab.headText {
-            HStack(spacing: 0) {
-                ZStack(alignment: .topLeading) {
-                    CodeEditor(tab: tab, readOnly: true, staticText: head)
-                    panelLabel("HEAD")
-                }
-                .background(Color(nsColor: .windowBackgroundColor))
-                Rectangle()
-                    .fill(Color(nsColor: .separatorColor))
-                    .frame(width: 1)
-                ZStack(alignment: .topLeading) {
-                    CodeEditor(tab: tab)
-                    panelLabel("Working Copy" + (tab.isDirty ? " (unsaved)" : ""))
-                }
-            }
+            UnifiedDiffView(headText: head, workingText: tab.text)
         } else if tab.headLoadFailed {
             placeholder(systemImage: "doc.text.below.ecg",
                         title: "No HEAD version to compare",
@@ -95,22 +83,6 @@ struct EditorPaneView: View {
                 await editor.loadHeadIfNeeded(tab, projectRoot: project.path)
             }
         }
-    }
-
-    /// Tiny corner label distinguishing the two diff panels. Drawn inside
-    /// the editor's top-left so the line-number gutter isn't covered.
-    private func panelLabel(_ text: String) -> some View {
-        Text(text)
-            .font(.system(size: 9, weight: .semibold, design: .rounded))
-            .foregroundStyle(.secondary)
-            .padding(.horizontal, 6)
-            .padding(.vertical, 2)
-            .background(
-                RoundedRectangle(cornerRadius: 3, style: .continuous)
-                    .fill(Color(nsColor: .windowBackgroundColor).opacity(0.92))
-            )
-            .padding(6)
-            .allowsHitTesting(false)
     }
 
     private func placeholder(systemImage: String, title: String, detail: String) -> some View {

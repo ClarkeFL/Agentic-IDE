@@ -20,6 +20,19 @@ final class GitStatusWatcher {
     /// project root and every interior directory between root and a
     /// changed file.
     var folderStatuses: [String: GitFileStatus] = [:]
+    /// Raw change records — backs the "Changes" pane mode and the footer's
+    /// commit-button enabled state. Sorted by directory then filename.
+    var changes: [GitChange] = []
+    /// Current branch name (or "(<sha>)" when detached). Nil = not a repo.
+    var branch: String?
+    /// How many local commits aren't on the upstream. Drives the Push
+    /// badge.
+    var ahead: Int = 0
+    /// How many upstream commits aren't local yet. Drives the Pull badge.
+    var behind: Int = 0
+    /// True when the branch has no upstream configured. Hides the
+    /// ahead/behind pills (there's nothing to compare to).
+    var hasUpstream: Bool = false
     /// True when the last `git status` ran successfully. Flips to false
     /// when the project isn't a git repo (or git is otherwise unavailable).
     var isGitRepo: Bool = true
@@ -51,16 +64,39 @@ final class GitStatusWatcher {
     /// tree's manual refresh button.
     @MainActor
     func refresh() async {
-        guard let changes = await GitService.status(at: rootPath) else {
+        async let statusTask = GitService.status(at: rootPath)
+        async let branchTask = GitService.currentBranch(at: rootPath)
+        async let aheadBehindTask = GitService.aheadBehind(at: rootPath)
+
+        let statusResult = await statusTask
+        let branchResult = await branchTask
+        let aheadBehindResult = await aheadBehindTask
+
+        guard let raw = statusResult else {
             isGitRepo = false
             fileStatuses = [:]
             folderStatuses = [:]
+            changes = []
+            branch = nil
+            ahead = 0
+            behind = 0
+            hasUpstream = false
             return
         }
         isGitRepo = true
+        branch = branchResult
+        if let pair = aheadBehindResult {
+            ahead = pair.ahead
+            behind = pair.behind
+            hasUpstream = true
+        } else {
+            ahead = 0
+            behind = 0
+            hasUpstream = false
+        }
         var files: [String: GitFileStatus] = [:]
         var folders: [String: GitFileStatus] = [:]
-        for change in changes {
+        for change in raw {
             files[change.url.standardizedFileURL.path] = change.status
             // Walk every ancestor up to the project root, recording the
             // most-severe status seen so far. Severity rank: conflict >
@@ -77,6 +113,7 @@ final class GitStatusWatcher {
         }
         fileStatuses = files
         folderStatuses = folders
+        changes = raw
     }
 
     /// Status read for a single absolute path. Convenience wrapper so call
