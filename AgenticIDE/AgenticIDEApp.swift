@@ -33,6 +33,11 @@ struct AgenticIDEApp: App {
                 .environmentObject(updater)
                 .frame(minWidth: 900, minHeight: 560)
         }
+        // Hide the native title bar — it was sitting empty above the tab
+        // strips, eating ~28pt of vertical space. The traffic lights still
+        // float over the top-left of the window; the sidebar's PaneHeader
+        // reserves a leading inset for them via `DS.Layout.trafficLightInset`.
+        .windowStyle(.hiddenTitleBar)
         .windowResizability(.contentMinSize)
         .defaultSize(width: 1280, height: 800)
         .commands {

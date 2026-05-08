@@ -188,5 +188,10 @@ enum DS {
         static let settingsWindowHeight: CGFloat = 360
         /// 600pt × 400pt — empty-state placeholder.
         static let emptyStateSize = CGSize(width: 600, height: 400)
+        /// 78pt — leading inset reserved for the macOS traffic-light
+        /// buttons under `.windowStyle(.hiddenTitleBar)`. The three
+        /// circles + their padding occupy ~70pt; rounded up to 78 so the
+        /// nearest sidebar header label has visual breathing room.
+        static let trafficLightInset: CGFloat = 78
     }
 }

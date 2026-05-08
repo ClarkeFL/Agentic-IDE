@@ -26,24 +26,39 @@ struct FileTreeView: View {
     /// Bumped to force a manual re-walk of the root (used by the header's
     /// refresh button).
     @State private var refreshToken: Int = 0
+    /// Pane-2 view mode. `.files` shows the project's file tree; `.changes`
+    /// shows only files git knows have working-tree edits since HEAD.
+    @State private var paneMode: PaneMode = .files
+
+    enum PaneMode: Hashable { case files, changes }
 
     var body: some View {
         VStack(spacing: 0) {
             header
             Group {
-                if isLoadingRoot && rootNodes.isEmpty {
-                    centered("Loading…", systemImage: "folder")
-                } else if rootNodes.isEmpty {
-                    centered("Folder is empty", systemImage: "folder")
-                } else {
-                    treeList
+                switch paneMode {
+                case .files:
+                    if isLoadingRoot && rootNodes.isEmpty {
+                        centered("Loading…", systemImage: "folder")
+                    } else if rootNodes.isEmpty {
+                        centered("Folder is empty", systemImage: "folder")
+                    } else {
+                        treeList
+                    }
+                case .changes:
+                    ChangesListView(project: project,
+                                    editor: editor,
+                                    gitWatcher: gitWatcher)
                 }
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
             .contentShape(Rectangle())
             .contextMenu {
-                emptyContextMenu(parent: project.path)
+                if paneMode == .files {
+                    emptyContextMenu(parent: project.path)
+                }
             }
+            GitFooterBar(project: project, gitWatcher: gitWatcher)
         }
         .background(Color(nsColor: .controlBackgroundColor))
         .task(id: TaskKey(path: project.path, token: refreshToken)) {
@@ -77,36 +92,98 @@ struct FileTreeView: View {
 
     private var header: some View {
         HStack(spacing: DS.Space.xs) {
-            Image(systemName: "folder.fill")
-                .font(DS.Font.footnote)
-                .foregroundStyle(.secondary)
-            Text(project.name.uppercased())
-                .font(DS.Font.sectionCaps)
-                .foregroundStyle(.secondary)
-                .lineLimit(1)
-                .truncationMode(.middle)
+            paneModeToggle
             Spacer(minLength: 0)
-            HeaderIconButton(systemName: "doc.badge.plus",
-                             help: "New file in project root") {
-                promptNewItem(in: project.path, kind: .file)
-            }
-            HeaderIconButton(systemName: "folder.badge.plus",
-                             help: "New folder in project root") {
-                promptNewItem(in: project.path, kind: .folder)
+            if paneMode == .files {
+                HeaderIconButton(systemName: "doc.badge.plus",
+                                 help: "New file in project root") {
+                    promptNewItem(in: project.path, kind: .file)
+                }
+                HeaderIconButton(systemName: "folder.badge.plus",
+                                 help: "New folder in project root") {
+                    promptNewItem(in: project.path, kind: .folder)
+                }
             }
             HeaderIconButton(systemName: "arrow.clockwise",
                              help: "Refresh") {
                 refreshToken &+= 1
                 childrenCache = [:]
+                Task { await gitWatcher.refresh() }
             }
         }
-        .padding(.leading, DS.Space.lg - 2)
+        .padding(.leading, DS.Gutter.inspector)
         .padding(.trailing, DS.Space.sm)
         .frame(height: DS.Control.header)
         .background(.regularMaterial)
         .overlay(alignment: .bottom) {
             Divider()
         }
+    }
+
+    /// Two-segment pill that swaps the pane between the project file tree
+    /// and the working-tree changes list. Icon-only chips with a hover
+    /// popover spelling out the verb so the toggle stays compact.
+    private var paneModeToggle: some View {
+        HStack(spacing: 2) {
+            paneModeChip(systemName: "folder",
+                         mode: .files,
+                         title: "Files",
+                         subtitle: "Browse the project's file tree.",
+                         badge: nil)
+            paneModeChip(systemName: "pencil.line",
+                         mode: .changes,
+                         title: "Changes",
+                         subtitle: gitWatcher.isGitRepo
+                             ? (gitWatcher.changes.isEmpty
+                                 ? "Working tree is clean."
+                                 : "Show \(gitWatcher.changes.count) file\(gitWatcher.changes.count == 1 ? "" : "s") with uncommitted edits.")
+                             : "Not a git repository.",
+                         badge: gitWatcher.isGitRepo && !gitWatcher.changes.isEmpty
+                             ? gitWatcher.changes.count
+                             : nil)
+        }
+        .padding(2)
+        .background(
+            RoundedRectangle(cornerRadius: DS.Radius.md, style: .continuous)
+                .fill(Color.primary.opacity(0.06))
+        )
+    }
+
+    @ViewBuilder
+    private func paneModeChip(systemName: String,
+                              mode: PaneMode,
+                              title: String,
+                              subtitle: String,
+                              badge: Int?) -> some View {
+        let isOn = paneMode == mode
+        Button {
+            paneMode = mode
+        } label: {
+            ZStack(alignment: .topTrailing) {
+                Image(systemName: systemName)
+                    .font(.system(size: 11, weight: .semibold))
+                    .foregroundStyle(isOn ? AnyShapeStyle(.primary) : AnyShapeStyle(.secondary))
+                    .frame(width: 28, height: 20)
+                    .background(
+                        RoundedRectangle(cornerRadius: DS.Radius.sm, style: .continuous)
+                            .fill(isOn ? Color(nsColor: .controlBackgroundColor) : Color.clear)
+                    )
+                if let badge {
+                    Text("\(badge)")
+                        .font(.system(size: 8, weight: .bold, design: .rounded))
+                        .monospacedDigit()
+                        .foregroundStyle(.white)
+                        .padding(.horizontal, 3)
+                        .frame(minWidth: 12, minHeight: 11)
+                        .background(Capsule().fill(Color.accentColor))
+                        .offset(x: 4, y: -3)
+                        .allowsHitTesting(false)
+                }
+            }
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .hoverInfo(title: title, subtitle: subtitle)
     }
 
     // MARK: - Tree list
