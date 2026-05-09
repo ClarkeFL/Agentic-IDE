@@ -67,7 +67,9 @@ struct EditorPaneView: View {
     @ViewBuilder
     private func unifiedDiff(tab: EditorTab) -> some View {
         if let head = tab.headText {
-            UnifiedDiffView(headText: head, workingText: tab.text)
+            UnifiedDiffView(headText: head,
+                            workingText: tab.text,
+                            fileExtension: tab.url.pathExtension)
         } else if tab.headLoadFailed {
             placeholder(systemImage: "doc.text.below.ecg",
                         title: "No HEAD version to compare",
