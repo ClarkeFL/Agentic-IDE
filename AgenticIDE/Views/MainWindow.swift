@@ -19,8 +19,31 @@ struct MainWindow: View {
     /// launch — the propagation window is a fresh-launch race, not a
     /// re-entry race.
     @State private var didEvaluateFDA = false
+    /// Drives the Ask overlay slide-in. Toggled by the ⌘⇧A menu command via
+    /// the `.toggleAskOverlay` notification.
+    @State private var showAsk = false
 
     var body: some View {
+        ZStack {
+            mainContent
+            if showAsk {
+                AskOverlay(isPresented: $showAsk)
+                    .transition(.move(edge: .trailing).combined(with: .opacity))
+                    .zIndex(10)
+            }
+        }
+        .onReceive(NotificationCenter.default.publisher(for: .toggleAskOverlay)) { _ in
+            withAnimation(.spring(response: 0.35, dampingFraction: 0.85)) {
+                showAsk.toggle()
+            }
+        }
+    }
+
+    /// Split view + every long-lived modifier. Extracted so the body's
+    /// outer ZStack stays small enough for SwiftUI's type checker — the
+    /// previous inline version tripped the "unable to type-check in
+    /// reasonable time" budget once the AskOverlay branch was added.
+    private var mainContent: some View {
         splitView
             .frame(maxWidth: .infinity, maxHeight: .infinity)
             .navigationTitle(activeProject?.name ?? "Agentic IDE")

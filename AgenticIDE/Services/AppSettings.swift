@@ -18,6 +18,10 @@ enum AppSettings {
         static let speechRate = "speech.rate"
         /// Bundle identifier of the user's preferred external IDE/editor.
         static let preferredIDE = "editor.preferredIDE"
+        /// Prefix invocation for the Ask overlay (⌘⇧A). The user's prompt is
+        /// appended as a single-quoted positional argument, so the value is
+        /// "everything before the prompt." Defaults to `claude -p`.
+        static let askCommand = "ask.command"
     }
 
     static var claudeDangerousSkipPermissions: Bool {
@@ -26,5 +30,14 @@ enum AppSettings {
 
     static var codexDangerousBypass: Bool {
         UserDefaults.standard.bool(forKey: Keys.codexDangerousBypass)
+    }
+
+    /// Prefix command for the Ask overlay. Whatever the user enters gets
+    /// `' <escaped-prompt>'` appended, so values like `claude -p`,
+    /// `codex exec`, or `gemini chat` all work.
+    static var askCommand: String {
+        let stored = UserDefaults.standard.string(forKey: Keys.askCommand)?
+            .trimmingCharacters(in: .whitespaces) ?? ""
+        return stored.isEmpty ? "claude -p" : stored
     }
 }

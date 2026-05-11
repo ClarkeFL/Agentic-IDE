@@ -10,6 +10,10 @@ struct AgenticIDEApp: App {
     @State private var gitWatchers = GitStatusWatcherStore()
     @State private var speaker = SystemSpeaker()
     @State private var resources = ResourceMonitor()
+    /// In-memory, project-agnostic chat thread powering the Ask overlay
+    /// (⌘⇧A). Owned at the app level so the conversation persists across
+    /// overlay open/close without persisting to disk.
+    @State private var ask = AskSession()
     @StateObject private var updater = UpdaterManager()
 
     init() {
@@ -30,6 +34,7 @@ struct AgenticIDEApp: App {
                 .environment(gitWatchers)
                 .environment(speaker)
                 .environment(resources)
+                .environment(ask)
                 .environmentObject(updater)
                 .frame(minWidth: 900, minHeight: 560)
         }
@@ -78,6 +83,15 @@ struct AgenticIDEApp: App {
                 Button("Check for Updates…") { updater.checkForUpdates() }
                     .disabled(!updater.canCheckForUpdates)
             }
+            // Quick ad-hoc Q&A overlay. The actual show/hide lives in
+            // MainWindow; this menu item just posts a toggle notification so
+            // the keyboard shortcut works app-wide.
+            CommandMenu("Ask") {
+                Button("Ask…") {
+                    NotificationCenter.default.post(name: .toggleAskOverlay, object: nil)
+                }
+                .keyboardShortcut("a", modifiers: [.command, .shift])
+            }
         }
 
         // Standard macOS Settings… scene (gives ⌘, automatically). The
@@ -100,6 +114,9 @@ extension Notification.Name {
     /// Posted by File → Close Editor Tab (⌘⇧W). Observed by `EditorPaneView`,
     /// which closes the active editor tab (prompting on dirty state).
     static let closeActiveEditorTab = Notification.Name("AgenticIDE.closeActiveEditorTab")
+    /// Posted by the Ask menu (⌘⇧A). Observed by `MainWindow`, which slides
+    /// the `AskOverlay` in/out over the 4-pane layout.
+    static let toggleAskOverlay = Notification.Name("AgenticIDE.toggleAskOverlay")
 }
 
 /// Lives only to make termination unrefusable. macOS sends a quit AppleEvent

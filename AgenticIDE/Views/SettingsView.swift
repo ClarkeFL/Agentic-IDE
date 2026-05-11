@@ -27,8 +27,29 @@ private struct AgentsSettingsView: View {
     @AppStorage(AppSettings.Keys.codexDangerousBypass)
     private var codexDangerous: Bool = false
 
+    @AppStorage(AppSettings.Keys.askCommand)
+    private var askCommand: String = "claude -p"
+
     var body: some View {
         Form {
+            Section {
+                VStack(alignment: .leading, spacing: DS.Space.sm) {
+                    HStack {
+                        Text("Command")
+                        Spacer()
+                        TextField("claude -p", text: $askCommand)
+                            .textFieldStyle(.roundedBorder)
+                            .frame(maxWidth: 220)
+                    }
+                    Text("Used by the Ask overlay (⌘⇧A). The prompt is appended as a single-quoted argument, so e.g. `claude -p`, `codex exec`, or `gemini chat` all work.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+            } header: {
+                Label("Ask", systemImage: "bubble.left.and.bubble.right")
+            }
+
             Section {
                 Toggle(isOn: $claudeDangerous) {
                     VStack(alignment: .leading, spacing: DS.Space.xxs) {
