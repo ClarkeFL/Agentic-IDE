@@ -14,7 +14,8 @@ struct EditorPaneView: View {
         VStack(spacing: 0) {
             EditorTabBar(editor: editor,
                          gitWatcher: gitWatcher,
-                         onToggleDiff: toggleDiff)
+                         onToggleDiff: toggleDiff,
+                         onOpenInBrowser: openActiveInBrowser)
             content
         }
         .background(Color(nsColor: .textBackgroundColor))
@@ -136,6 +137,20 @@ struct EditorPaneView: View {
             Task { await editor.loadHeadIfNeeded(tab, projectRoot: project.path) }
         }
     }
+
+    /// Open the active HTML tab in the user's default browser. No-op for
+    /// non-HTML tabs — the button that calls this is only shown when the
+    /// active tab is HTML, but guarding here keeps callers honest.
+    private func openActiveInBrowser() {
+        guard let tab = editor.activeTab,
+              Self.isHTML(tab.url) else { return }
+        NSWorkspace.shared.open(tab.url)
+    }
+
+    static func isHTML(_ url: URL) -> Bool {
+        let ext = url.pathExtension.lowercased()
+        return ext == "html" || ext == "htm"
+    }
 }
 
 // MARK: - Tab bar
@@ -151,6 +166,9 @@ struct EditorTabBar: View {
     /// kick off the HEAD-content load alongside the state flip — the bar
     /// itself doesn't know about the project root.
     let onToggleDiff: () -> Void
+    /// Fires the "Open in Browser" pill that appears for HTML tabs. The bar
+    /// otherwise has no business knowing whether a file is HTML.
+    let onOpenInBrowser: () -> Void
 
     /// Active-tab git status (if any). Drives whether the Diff toggle is
     /// shown — there's nothing to compare for clean / untracked-but-clean
@@ -158,6 +176,13 @@ struct EditorTabBar: View {
     private var activeStatus: GitFileStatus? {
         guard let tab = editor.activeTab else { return nil }
         return gitWatcher.status(for: tab.url)
+    }
+
+    /// Whether the active tab is an HTML file — drives whether the Preview
+    /// pill is shown in the tab strip.
+    private var activeIsHTML: Bool {
+        guard let tab = editor.activeTab else { return false }
+        return EditorPaneView.isHTML(tab.url)
     }
 
     var body: some View {
@@ -200,6 +225,11 @@ struct EditorTabBar: View {
                     }
                 }
                 Spacer(minLength: 0)
+
+                if activeIsHTML {
+                    OpenInBrowserButton(action: onOpenInBrowser)
+                        .padding(.trailing, DS.Space.xs)
+                }
 
                 if let status = activeStatus, status != .deleted {
                     DiffToggleButton(
@@ -308,6 +338,40 @@ private struct DiffToggleButton: View {
         .onHover { isHovered = $0 }
         .help(isOn ? "Hide diff (return to single editor)"
                    : "Show diff (HEAD vs working copy)")
+    }
+}
+
+/// Compact "Safari" glyph + "Open", shown in the editor tab strip when the
+/// active file is `.html`/`.htm`. Single-tap action — opens the file in the
+/// user's default browser via `NSWorkspace.open`. Visually mirrors
+/// `DiffToggleButton` so the pills line up consistently when both are
+/// visible.
+private struct OpenInBrowserButton: View {
+    let action: () -> Void
+
+    @State private var isHovered = false
+
+    var body: some View {
+        Button(action: action) {
+            HStack(spacing: 4) {
+                Image(systemName: "safari")
+                    .font(.system(size: 10, weight: .semibold))
+                    .foregroundStyle(.secondary)
+                Text("Open in Browser")
+                    .font(.system(size: 11, weight: .semibold))
+                    .foregroundStyle(.primary)
+            }
+            .padding(.horizontal, 8)
+            .padding(.vertical, 3)
+            .background(
+                RoundedRectangle(cornerRadius: 4, style: .continuous)
+                    .fill(Color.primary.opacity(isHovered ? 0.10 : 0.05))
+            )
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .onHover { isHovered = $0 }
+        .help("Open this file in your default browser")
     }
 }
 
