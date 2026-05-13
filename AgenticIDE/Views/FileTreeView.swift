@@ -319,6 +319,11 @@ struct FileTreeView: View {
     @ViewBuilder
     private func fileContextMenu(for node: FileNode) -> some View {
         Button("Open") { editor.open(node.url) }
+        if Self.isHTML(node.url) {
+            Button("Open in Browser") {
+                NSWorkspace.shared.open(node.url)
+            }
+        }
         Divider()
         Button("Rename…") { promptRename(node) }
         Button("Reveal in Finder") {
@@ -326,6 +331,11 @@ struct FileTreeView: View {
         }
         Divider()
         Button("Delete", role: .destructive) { confirmDelete(node) }
+    }
+
+    private static func isHTML(_ url: URL) -> Bool {
+        let ext = url.pathExtension.lowercased()
+        return ext == "html" || ext == "htm"
     }
 
     /// Shown on right-click in the empty area of the tree (below all rows
