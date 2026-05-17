@@ -17,6 +17,10 @@ struct AgenticIDEApp: App {
     @StateObject private var updater = UpdaterManager()
 
     init() {
+        // Install first so we capture exits/crashes from anywhere downstream,
+        // including libghostty's bootstrap (the prime suspect for silent
+        // terminations).
+        ExitBreadcrumb.install()
         GhosttyApp.shared.bootstrap()
         // Touch the singleton from the main thread so its DispatchSource is
         // installed before the first terminal spawns. Lazy init from
