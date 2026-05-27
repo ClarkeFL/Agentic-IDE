@@ -21,6 +21,10 @@ struct PersistentSplitView<P1: View, P2: View, P3: View, P4: View>: View {
     let pane2Max: CGFloat
 
     let pane3Min: CGFloat
+    /// When true, pane 3 and its preceding divider are removed from the
+    /// layout and pane 4 absorbs the freed width. Used by `MainWindow` to
+    /// auto-hide the editor pane when no files are open.
+    let pane3Collapsed: Bool
 
     let pane4Min: CGFloat
     let pane4Initial: CGFloat
@@ -47,6 +51,7 @@ struct PersistentSplitView<P1: View, P2: View, P3: View, P4: View>: View {
          pane2Initial: CGFloat = 240,
          pane2Max: CGFloat = 480,
          pane3Min: CGFloat = 320,
+         pane3Collapsed: Bool = false,
          pane4Min: CGFloat = 280,
          pane4Initial: CGFloat = 420,
          pane4Max: CGFloat = 900,
@@ -62,6 +67,7 @@ struct PersistentSplitView<P1: View, P2: View, P3: View, P4: View>: View {
         self.pane2Initial = pane2Initial
         self.pane2Max = pane2Max
         self.pane3Min = pane3Min
+        self.pane3Collapsed = pane3Collapsed
         self.pane4Min = pane4Min
         self.pane4Initial = pane4Initial
         self.pane4Max = pane4Max
@@ -90,7 +96,11 @@ struct PersistentSplitView<P1: View, P2: View, P3: View, P4: View>: View {
             // the source of pane 4 overflowing the window's right edge by
             // 24pt (3 dividers × 8pt of unaccounted-for space) and
             // clipping the speaker button + Claude's banner text.
-            let dividers = DividerView.layoutWidth * 3
+            //
+            // When pane 3 is collapsed we drop its preceding divider too,
+            // so only two dividers exist in the layout.
+            let dividerCount: CGFloat = pane3Collapsed ? 2 : 3
+            let dividers = DividerView.layoutWidth * dividerCount
             let widths = computeWidths(total: total, dividers: dividers)
             let w1 = widths.p1
             let w2 = widths.p2
@@ -110,13 +120,15 @@ struct PersistentSplitView<P1: View, P2: View, P3: View, P4: View>: View {
                     .frame(width: w2)
                     .clipped()
 
-                DividerView(onDrag: { delta in dragPane2(delta: delta, total: total) },
-                            onDragStart: { isDragging = true },
-                            onDragEnd: { persist(); isDragging = false })
+                if !pane3Collapsed {
+                    DividerView(onDrag: { delta in dragPane2(delta: delta, total: total) },
+                                onDragStart: { isDragging = true },
+                                onDragEnd: { persist(); isDragging = false })
 
-                pane3()
-                    .frame(width: w3)
-                    .clipped()
+                    pane3()
+                        .frame(width: w3)
+                        .clipped()
+                }
 
                 DividerView(onDrag: { delta in dragPane4(delta: delta, total: total) },
                             onDragStart: { isDragging = true },
@@ -154,6 +166,17 @@ struct PersistentSplitView<P1: View, P2: View, P3: View, P4: View>: View {
         var w2 = clamp(pane2Width, min: pane2Min, max: pane2Max)
         var w4 = clamp(pane4Width, min: pane4Min, max: pane4Max)
         var w3 = max(pane3Min, usable - w1 - w2 - w4)
+
+        // Collapsed mode: pane 3 is zero-width and pane 4 swallows the
+        // freed space (so the layout still fills the window). `pane4Max`
+        // is intentionally bypassed — capping it here would leave a gap
+        // on the right edge of wide windows; the collapse is meant to be
+        // edge-to-edge.
+        if pane3Collapsed {
+            w3 = 0
+            w4 = max(pane4Min, usable - w1 - w2)
+            return (w1, w2, w3, w4)
+        }
 
         var overflow = (w1 + w2 + w3 + w4) - usable
         if overflow > 0 {
