@@ -74,6 +74,7 @@ struct MainWindow: View {
             pane1Min: 160, pane1Initial: 200, pane1Max: 360,
             pane2Min: 160, pane2Initial: 240, pane2Max: 480,
             pane3Min: 240,
+            pane3Collapsed: editorPaneCollapsed,
             // Claude Code's banner + status bar comfortably needs ~70
             // monospaced columns. At ~7.5pt/col that's ~525pt; we round up
             // to 540pt min and 720pt initial so a fresh install never sees
@@ -85,6 +86,15 @@ struct MainWindow: View {
             pane3: { editorPane },
             pane4: { terminalsPane }
         )
+        .animation(.easeInOut(duration: 0.18), value: editorPaneCollapsed)
+    }
+
+    /// Hide the editor pane whenever it has nothing useful to show — no
+    /// project selected, or the active project has zero open tabs. As soon
+    /// as the user opens a file in the tree, the pane animates back in.
+    private var editorPaneCollapsed: Bool {
+        guard let project = fileAccessProject else { return true }
+        return editors.session(for: project.id).tabs.isEmpty
     }
 
     // MARK: - Pane 1: Sidebar
