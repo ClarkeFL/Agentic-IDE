@@ -51,10 +51,14 @@ struct AgenticIDEApp: App {
         .defaultSize(width: 1280, height: 800)
         .commands {
             CommandGroup(replacing: .newItem) {
-                Button("Add Project…") {
-                    NotificationCenter.default.post(name: .addProject, object: nil)
+                Button("New Project…") {
+                    NotificationCenter.default.post(name: .newProject, object: nil)
                 }
                 .keyboardShortcut("n", modifiers: [.command])
+                Button("Add Existing Project…") {
+                    NotificationCenter.default.post(name: .addProject, object: nil)
+                }
+                .keyboardShortcut("o", modifiers: [.command, .shift])
             }
             // Editor save / close — the EditorPaneView listens for these
             // and routes to its active tab. App-wide shortcuts: when the
@@ -108,7 +112,13 @@ struct AgenticIDEApp: App {
 }
 
 extension Notification.Name {
+    /// Posted by File → Add Existing Project… (⇧⌘O) and the footer "+" menu.
+    /// Observed by `ProjectSidebarView`, which opens a folder picker and adds
+    /// the chosen directory to the project list.
     static let addProject = Notification.Name("AgenticIDE.addProject")
+    /// Posted by File → New Project… (⌘N) and the footer "+" menu. Observed by
+    /// `ProjectSidebarView`, which creates a new folder on disk and adds it.
+    static let newProject = Notification.Name("AgenticIDE.newProject")
     /// Posted by the Speech menu command. Observed by `ProjectWorkspaceView`,
     /// which forwards the active tab's selected text to the shared `Speaker`.
     static let speakSelection = Notification.Name("AgenticIDE.speakSelection")
