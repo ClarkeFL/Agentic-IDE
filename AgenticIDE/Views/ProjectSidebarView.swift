@@ -82,11 +82,12 @@ struct ProjectSidebarView: View {
             VStack(alignment: .leading, spacing: DS.Space.xs) {
                 ResourceBar()
                 HStack(spacing: DS.Space.sm) {
-                    SidebarFooterButton(label: "",
-                                        systemName: "plus",
-                                        fillsWidth: true,
-                                        help: "Add a project folder",
-                                        action: addProject)
+                    SidebarFooterMenu(systemName: "plus",
+                                      fillsWidth: true,
+                                      help: "New or existing project") {
+                        Button("New Project…", action: createProject)
+                        Button("Add Existing Project…", action: addProject)
+                    }
                     SidebarFooterButton(label: "",
                                         systemName: "folder.badge.plus",
                                         fillsWidth: true,
@@ -108,6 +109,14 @@ struct ProjectSidebarView: View {
             .padding(.vertical, DS.Space.sm)
         }
         .onReceive(nowTick) { now = $0 }
+        // Menu-bar commands (File → New Project / Add Existing Project) post
+        // these; the sidebar owns the panels + store so it observes here.
+        .onReceive(NotificationCenter.default.publisher(for: .newProject)) { _ in
+            createProject()
+        }
+        .onReceive(NotificationCenter.default.publisher(for: .addProject)) { _ in
+            addProject()
+        }
         .alert("New Group", isPresented: $newGroupAlertShown) {
             TextField("Name", text: $newGroupName)
             Button("Create") {
@@ -439,6 +448,47 @@ struct ProjectSidebarView: View {
         let project = store.add(folder: url)
         selectedProjectId = project.id
     }
+
+    /// Creates a brand-new project folder on disk, then adds it (ungrouped).
+    /// A single NSSavePanel lets the user pick a location and type the folder
+    /// name in one dialog; the typed name becomes both the directory name and
+    /// the project name. We never adopt or clobber an existing path — if one
+    /// is already there we warn and bail so "New" can't silently overwrite.
+    private func createProject() {
+        let panel = NSSavePanel()
+        panel.canCreateDirectories = true
+        panel.prompt = "Create"
+        panel.title = "New Project"
+        panel.message = "Choose a location and name for the new project folder."
+        panel.nameFieldLabel = "Project Name:"
+        panel.nameFieldStringValue = "New Project"
+        guard panel.runModal() == .OK, let url = panel.url else { return }
+
+        let fm = FileManager.default
+        if fm.fileExists(atPath: url.path) {
+            presentCreateError(
+                title: "“\(url.lastPathComponent)” already exists",
+                message: "A file or folder with that name is already at this location. Pick a different name or location.")
+            return
+        }
+        do {
+            try fm.createDirectory(at: url, withIntermediateDirectories: true)
+        } catch {
+            presentCreateError(title: "Couldn’t create project folder",
+                               message: error.localizedDescription)
+            return
+        }
+        let project = store.add(folder: url)
+        selectedProjectId = project.id
+    }
+
+    private func presentCreateError(title: String, message: String) {
+        let alert = NSAlert()
+        alert.messageText = title
+        alert.informativeText = message
+        alert.alertStyle = .warning
+        alert.runModal()
+    }
 }
 
 /// Renders an accent-tinted background + insertion bar on the leading edge
@@ -523,6 +573,10 @@ private struct SidebarFooterButton: View {
 
 private struct SidebarFooterMenu<MenuContent: View>: View {
     let systemName: String
+    /// When true the menu stretches to fill its share of the footer row, so it
+    /// tiles evenly beside the other (fillsWidth) `SidebarFooterButton`s. The
+    /// icon-only metrics below mirror that button's stretched-pill path.
+    var fillsWidth: Bool = false
     let help: String
     @ViewBuilder let content: () -> MenuContent
 
@@ -534,7 +588,10 @@ private struct SidebarFooterMenu<MenuContent: View>: View {
         } label: {
             Image(systemName: systemName)
                 .font(DS.Font.bodySemibold)
-                .frame(width: DS.Control.large, height: DS.Control.large)
+                .padding(.vertical, fillsWidth ? DS.Space.xs + 1 : 0)
+                .frame(maxWidth: fillsWidth ? .infinity : nil, alignment: .center)
+                .frame(width: fillsWidth ? nil : DS.Control.large,
+                       height: fillsWidth ? nil : DS.Control.large)
                 .background(
                     RoundedRectangle(cornerRadius: DS.Radius.lg, style: .continuous)
                         .fill(Color.primary.opacity(isHovered ? 0.10 : 0.04))
@@ -547,9 +604,23 @@ private struct SidebarFooterMenu<MenuContent: View>: View {
         }
         .menuStyle(.borderlessButton)
         .menuIndicator(.hidden)
-        .fixedSize()
+        .modifier(SidebarMenuSizing(fillsWidth: fillsWidth))
         .onHover { isHovered = $0 }
         .help(help)
+    }
+}
+
+/// `.fixedSize()` is right for the compact (icon-tile) menu but wrong for the
+/// stretched footer menu, which must take `maxWidth: .infinity` to tile with
+/// its siblings. This swaps the two without an if/else on the view tree.
+private struct SidebarMenuSizing: ViewModifier {
+    let fillsWidth: Bool
+    func body(content: Content) -> some View {
+        if fillsWidth {
+            content.frame(maxWidth: .infinity)
+        } else {
+            content.fixedSize()
+        }
     }
 }
 
