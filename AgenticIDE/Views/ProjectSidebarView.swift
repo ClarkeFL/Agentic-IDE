@@ -596,12 +596,13 @@ private struct SidebarFooterMenu<MenuContent: View>: View {
         } label: {
             Image(systemName: systemName)
                 .font(DS.Font.bodySemibold)
-                // Explicit height (matching SidebarFooterButton) — the
-                // borderlessButton menu style ignores vertical padding, which
-                // left the `+` pill shorter than its siblings.
+                // Do NOT pin the label height here. The borderlessButton menu
+                // style wraps the label in its own vertical padding, so a 26pt
+                // label became a >26pt menu — the `+` pill rendered taller than
+                // its siblings. The outer `SidebarMenuSizing` frame is the sole
+                // owner of the 26pt height; the glyph just centres within it.
                 .frame(maxWidth: fillsWidth ? .infinity : nil, alignment: .center)
-                .frame(width: fillsWidth ? nil : DS.Control.large,
-                       height: DS.Control.large)
+                .frame(width: fillsWidth ? nil : DS.Control.large)
                 .contentShape(Rectangle())
         }
         .menuStyle(.borderlessButton)
