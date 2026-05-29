@@ -545,8 +545,11 @@ private struct SidebarFooterButton: View {
             .padding(.vertical, DS.Space.xs + 1)
             .frame(maxWidth: fillsWidth ? .infinity : nil,
                    alignment: hasLabel ? .leading : .center)
+            // Pin an explicit height so the icon-only footer pills match the
+            // menu pill exactly (the menu's borderlessButton style won't grow
+            // from vertical padding, so both sides agree on a fixed height).
             .frame(width: fillsWidth ? nil : DS.Control.large,
-                   height: fillsWidth ? nil : DS.Control.large)
+                   height: DS.Control.large)
             .background(
                 RoundedRectangle(cornerRadius: DS.Radius.lg, style: .continuous)
                     .fill(Color.primary.opacity(isPressed ? 0.16 : (isHovered ? 0.10 : 0.04)))
@@ -583,28 +586,38 @@ private struct SidebarFooterMenu<MenuContent: View>: View {
     @State private var isHovered = false
 
     var body: some View {
+        // The background + border live on the `Menu` itself, not on the label.
+        // `.menuStyle(.borderlessButton)` strips chrome applied inside the
+        // label, which left the `+` as a bare glyph with no pill while the
+        // sibling `SidebarFooterButton`s drew their boxes. Applying the chrome
+        // outside the Menu keeps all three footer controls visually identical.
         Menu {
             content()
         } label: {
             Image(systemName: systemName)
                 .font(DS.Font.bodySemibold)
-                .padding(.vertical, fillsWidth ? DS.Space.xs + 1 : 0)
+                // Explicit height (matching SidebarFooterButton) — the
+                // borderlessButton menu style ignores vertical padding, which
+                // left the `+` pill shorter than its siblings.
                 .frame(maxWidth: fillsWidth ? .infinity : nil, alignment: .center)
                 .frame(width: fillsWidth ? nil : DS.Control.large,
-                       height: fillsWidth ? nil : DS.Control.large)
-                .background(
-                    RoundedRectangle(cornerRadius: DS.Radius.lg, style: .continuous)
-                        .fill(Color.primary.opacity(isHovered ? 0.10 : 0.04))
-                )
-                .overlay(
-                    RoundedRectangle(cornerRadius: DS.Radius.lg, style: .continuous)
-                        .strokeBorder(Color.primary.opacity(isHovered ? 0.18 : 0.10), lineWidth: 0.5)
-                )
+                       height: DS.Control.large)
                 .contentShape(Rectangle())
         }
         .menuStyle(.borderlessButton)
         .menuIndicator(.hidden)
+        // Expand to the full footer-row width BEFORE drawing the chrome, so
+        // the pill stretches to fill its third of the row like the sibling
+        // buttons. Drawing the background first would wrap only the glyph.
         .modifier(SidebarMenuSizing(fillsWidth: fillsWidth))
+        .background(
+            RoundedRectangle(cornerRadius: DS.Radius.lg, style: .continuous)
+                .fill(Color.primary.opacity(isHovered ? 0.10 : 0.04))
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: DS.Radius.lg, style: .continuous)
+                .strokeBorder(Color.primary.opacity(isHovered ? 0.18 : 0.10), lineWidth: 0.5)
+        )
         .onHover { isHovered = $0 }
         .help(help)
     }
@@ -617,7 +630,13 @@ private struct SidebarMenuSizing: ViewModifier {
     let fillsWidth: Bool
     func body(content: Content) -> some View {
         if fillsWidth {
-            content.frame(maxWidth: .infinity)
+            // Pin the OUTER menu frame height — the borderlessButton style
+            // collapses to its own short intrinsic height, so the background
+            // (drawn after this) must sit on an explicit 26pt frame to match
+            // the sibling SidebarFooterButton pills.
+            content.frame(maxWidth: .infinity,
+                          minHeight: DS.Control.large,
+                          maxHeight: DS.Control.large)
         } else {
             content.fixedSize()
         }
