@@ -128,11 +128,15 @@ struct PersistentSplitView<P1: View, P2: View, P3: View, P4: View>: View {
                     pane3()
                         .frame(width: w3)
                         .clipped()
-                }
 
-                DividerView(onDrag: { delta in dragPane4(delta: delta, total: total) },
-                            onDragStart: { isDragging = true },
-                            onDragEnd: { persist(); isDragging = false })
+                    DividerView(onDrag: { delta in dragPane4(delta: delta, total: total) },
+                                onDragStart: { isDragging = true },
+                                onDragEnd: { persist(); isDragging = false })
+                } else {
+                    DividerView(onDrag: { delta in dragPane2(delta: delta, total: total) },
+                                onDragStart: { isDragging = true },
+                                onDragEnd: { persist(); isDragging = false })
+                }
 
                 pane4()
                     .frame(width: w4)
@@ -231,7 +235,8 @@ struct PersistentSplitView<P1: View, P2: View, P3: View, P4: View>: View {
         let start = dragStart1 ?? pane1Width
         if dragStart1 == nil { dragStart1 = start }
         let dividers = DividerView.layoutWidth * (pane3Collapsed ? 2 : 3)
-        let maxAllowed = total - pane2Width - pane3Min - pane4Width - dividers
+        let elasticMinimum = pane3Collapsed ? pane4Min : pane3Min + pane4Width
+        let maxAllowed = total - pane2Width - elasticMinimum - dividers
         pane1Width = clamp(start + delta, min: pane1Min, max: min(pane1Max, maxAllowed))
     }
 
@@ -239,8 +244,9 @@ struct PersistentSplitView<P1: View, P2: View, P3: View, P4: View>: View {
     private func dragPane2(delta: CGFloat, total: CGFloat) {
         let start = dragStart2 ?? pane2Width
         if dragStart2 == nil { dragStart2 = start }
-        let dividers = DividerView.layoutWidth * 3
-        let maxAllowed = total - pane1Width - pane3Min - pane4Width - dividers
+        let dividers = DividerView.layoutWidth * (pane3Collapsed ? 2 : 3)
+        let elasticMinimum = pane3Collapsed ? pane4Min : pane3Min + pane4Width
+        let maxAllowed = total - pane1Width - elasticMinimum - dividers
         pane2Width = clamp(start + delta, min: pane2Min, max: min(pane2Max, maxAllowed))
     }
 
