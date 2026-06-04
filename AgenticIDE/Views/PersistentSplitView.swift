@@ -128,11 +128,15 @@ struct PersistentSplitView<P1: View, P2: View, P3: View, P4: View>: View {
                     pane3()
                         .frame(width: w3)
                         .clipped()
-                }
 
-                DividerView(onDrag: { delta in dragPane4(delta: delta, total: total) },
-                            onDragStart: { isDragging = true },
-                            onDragEnd: { persist(); isDragging = false })
+                    DividerView(onDrag: { delta in dragPane4(delta: delta, total: total) },
+                                onDragStart: { isDragging = true },
+                                onDragEnd: { persist(); isDragging = false })
+                } else {
+                    DividerView(onDrag: { delta in dragPane2(delta: delta, total: total) },
+                                onDragStart: { isDragging = true },
+                                onDragEnd: { persist(); isDragging = false })
+                }
 
                 pane4()
                     .frame(width: w4)
@@ -231,7 +235,8 @@ struct PersistentSplitView<P1: View, P2: View, P3: View, P4: View>: View {
         let start = dragStart1 ?? pane1Width
         if dragStart1 == nil { dragStart1 = start }
         let dividers = DividerView.layoutWidth * (pane3Collapsed ? 2 : 3)
-        let maxAllowed = total - pane2Width - pane3Min - pane4Width - dividers
+        let elasticMinimum = pane3Collapsed ? pane4Min : pane3Min + pane4Width
+        let maxAllowed = total - pane2Width - elasticMinimum - dividers
         pane1Width = clamp(start + delta, min: pane1Min, max: min(pane1Max, maxAllowed))
     }
 
@@ -239,8 +244,9 @@ struct PersistentSplitView<P1: View, P2: View, P3: View, P4: View>: View {
     private func dragPane2(delta: CGFloat, total: CGFloat) {
         let start = dragStart2 ?? pane2Width
         if dragStart2 == nil { dragStart2 = start }
-        let dividers = DividerView.layoutWidth * 3
-        let maxAllowed = total - pane1Width - pane3Min - pane4Width - dividers
+        let dividers = DividerView.layoutWidth * (pane3Collapsed ? 2 : 3)
+        let elasticMinimum = pane3Collapsed ? pane4Min : pane3Min + pane4Width
+        let maxAllowed = total - pane1Width - elasticMinimum - dividers
         pane2Width = clamp(start + delta, min: pane2Min, max: min(pane2Max, maxAllowed))
     }
 
@@ -286,25 +292,21 @@ private struct DividerView: View {
     let onDragEnd: () -> Void
 
     @State private var isActive = false
+    @State private var isHovered = false
 
     var body: some View {
         ZStack {
             Rectangle()
-                .fill(Color(nsColor: .separatorColor))
-                .frame(width: Self.thickness)
+                .fill(separatorColor)
+                .frame(width: isHovered || isActive ? 2 : Self.thickness)
             Rectangle()
-                .fill(Color.white.opacity(0.001))
+                .fill(Color.primary.opacity(isHovered || isActive ? 0.05 : 0.001))
+                .frame(width: Self.hitArea)
+            CursorTrackingView(isHovered: $isHovered)
                 .frame(width: Self.hitArea)
         }
         .frame(maxHeight: .infinity)
         .contentShape(Rectangle().inset(by: -4))
-        .onHover { hovering in
-            if hovering {
-                NSCursor.resizeLeftRight.push()
-            } else {
-                NSCursor.pop()
-            }
-        }
         .highPriorityGesture(
             DragGesture(minimumDistance: 1, coordinateSpace: .global)
                 .onChanged { value in
@@ -319,5 +321,78 @@ private struct DividerView: View {
                     onDragEnd()
                 }
         )
+    }
+
+    private var separatorColor: Color {
+        if isActive {
+            return Color.accentColor.opacity(0.85)
+        }
+        if isHovered {
+            return Color.accentColor.opacity(0.65)
+        }
+        return Color(nsColor: .separatorColor)
+    }
+}
+
+private struct CursorTrackingView: NSViewRepresentable {
+    @Binding var isHovered: Bool
+
+    func makeNSView(context: Context) -> CursorTrackingNSView {
+        let view = CursorTrackingNSView()
+        view.onHoverChange = { hovering in
+            DispatchQueue.main.async {
+                isHovered = hovering
+            }
+        }
+        return view
+    }
+
+    func updateNSView(_ nsView: CursorTrackingNSView, context: Context) {
+        nsView.onHoverChange = { hovering in
+            DispatchQueue.main.async {
+                isHovered = hovering
+            }
+        }
+        nsView.needsDisplay = true
+        nsView.window?.invalidateCursorRects(for: nsView)
+    }
+}
+
+private final class CursorTrackingNSView: NSView {
+    var onHoverChange: ((Bool) -> Void)?
+    private var trackingArea: NSTrackingArea?
+
+    override var acceptsFirstResponder: Bool { false }
+
+    override func hitTest(_ point: NSPoint) -> NSView? {
+        nil
+    }
+
+    override func updateTrackingAreas() {
+        if let trackingArea {
+            removeTrackingArea(trackingArea)
+        }
+
+        let area = NSTrackingArea(rect: bounds,
+                                  options: [.mouseEnteredAndExited, .activeAlways, .inVisibleRect],
+                                  owner: self,
+                                  userInfo: nil)
+        addTrackingArea(area)
+        trackingArea = area
+        super.updateTrackingAreas()
+    }
+
+    override func resetCursorRects() {
+        super.resetCursorRects()
+        addCursorRect(bounds, cursor: .resizeLeftRight)
+    }
+
+    override func mouseEntered(with event: NSEvent) {
+        NSCursor.resizeLeftRight.set()
+        onHoverChange?(true)
+    }
+
+    override func mouseExited(with event: NSEvent) {
+        onHoverChange?(false)
     }
 }

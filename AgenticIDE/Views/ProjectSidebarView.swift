@@ -82,12 +82,8 @@ struct ProjectSidebarView: View {
             VStack(alignment: .leading, spacing: DS.Space.xs) {
                 ResourceBar()
                 HStack(spacing: DS.Space.sm) {
-                    SidebarFooterMenu(systemName: "plus",
-                                      fillsWidth: true,
-                                      help: "New or existing project") {
-                        Button("New Project…", action: createProject)
-                        Button("Add Existing Project…", action: addProject)
-                    }
+                    SidebarProjectAddButton(createProject: createProject,
+                                            addProject: addProject)
                     SidebarFooterButton(label: "",
                                         systemName: "folder.badge.plus",
                                         fillsWidth: true,
@@ -574,43 +570,23 @@ private struct SidebarFooterButton: View {
     }
 }
 
-private struct SidebarFooterMenu<MenuContent: View>: View {
-    let systemName: String
-    /// When true the menu stretches to fill its share of the footer row, so it
-    /// tiles evenly beside the other (fillsWidth) `SidebarFooterButton`s. The
-    /// icon-only metrics below mirror that button's stretched-pill path.
-    var fillsWidth: Bool = false
-    let help: String
-    @ViewBuilder let content: () -> MenuContent
+private struct SidebarProjectAddButton: View {
+    let createProject: () -> Void
+    let addProject: () -> Void
 
     @State private var isHovered = false
+    @State private var isPresented = false
 
     var body: some View {
-        // The background + border live on the `Menu` itself, not on the label.
-        // `.menuStyle(.borderlessButton)` strips chrome applied inside the
-        // label, which left the `+` as a bare glyph with no pill while the
-        // sibling `SidebarFooterButton`s drew their boxes. Applying the chrome
-        // outside the Menu keeps all three footer controls visually identical.
-        Menu {
-            content()
+        Button {
+            isPresented.toggle()
         } label: {
-            Image(systemName: systemName)
+            Image(systemName: "plus")
                 .font(DS.Font.bodySemibold)
-                // Do NOT pin the label height here. The borderlessButton menu
-                // style wraps the label in its own vertical padding, so a 26pt
-                // label became a >26pt menu — the `+` pill rendered taller than
-                // its siblings. The outer `SidebarMenuSizing` frame is the sole
-                // owner of the 26pt height; the glyph just centres within it.
-                .frame(maxWidth: fillsWidth ? .infinity : nil, alignment: .center)
-                .frame(width: fillsWidth ? nil : DS.Control.large)
+                .frame(maxWidth: .infinity, minHeight: DS.Control.large, maxHeight: DS.Control.large)
                 .contentShape(Rectangle())
         }
-        .menuStyle(.borderlessButton)
-        .menuIndicator(.hidden)
-        // Expand to the full footer-row width BEFORE drawing the chrome, so
-        // the pill stretches to fill its third of the row like the sibling
-        // buttons. Drawing the background first would wrap only the glyph.
-        .modifier(SidebarMenuSizing(fillsWidth: fillsWidth))
+        .buttonStyle(.plain)
         .background(
             RoundedRectangle(cornerRadius: DS.Radius.lg, style: .continuous)
                 .fill(Color.primary.opacity(isHovered ? 0.10 : 0.04))
@@ -620,27 +596,22 @@ private struct SidebarFooterMenu<MenuContent: View>: View {
                 .strokeBorder(Color.primary.opacity(isHovered ? 0.18 : 0.10), lineWidth: 0.5)
         )
         .onHover { isHovered = $0 }
-        .help(help)
-    }
-}
-
-/// `.fixedSize()` is right for the compact (icon-tile) menu but wrong for the
-/// stretched footer menu, which must take `maxWidth: .infinity` to tile with
-/// its siblings. This swaps the two without an if/else on the view tree.
-private struct SidebarMenuSizing: ViewModifier {
-    let fillsWidth: Bool
-    func body(content: Content) -> some View {
-        if fillsWidth {
-            // Pin the OUTER menu frame height — the borderlessButton style
-            // collapses to its own short intrinsic height, so the background
-            // (drawn after this) must sit on an explicit 26pt frame to match
-            // the sibling SidebarFooterButton pills.
-            content.frame(maxWidth: .infinity,
-                          minHeight: DS.Control.large,
-                          maxHeight: DS.Control.large)
-        } else {
-            content.fixedSize()
+        .popover(isPresented: $isPresented, arrowEdge: .bottom) {
+            VStack(alignment: .leading, spacing: DS.Space.xs) {
+                Button("New Project…") {
+                    isPresented = false
+                    createProject()
+                }
+                Button("Add Existing Project…") {
+                    isPresented = false
+                    addProject()
+                }
+            }
+            .buttonStyle(.plain)
+            .padding(DS.Space.md)
+            .frame(width: 180, alignment: .leading)
         }
+        .help("New or existing project")
     }
 }
 
