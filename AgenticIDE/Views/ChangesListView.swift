@@ -207,6 +207,9 @@ struct GitFooterBar: View {
                 .foregroundStyle(.primary)
                 .lineLimit(1)
                 .truncationMode(.middle)
+            if let pullRequest = gitWatcher.pullRequest {
+                pullRequestBadge(pullRequest)
+            }
             if !gitWatcher.hasUpstream && gitWatcher.branch != nil {
                 Text("· no upstream")
                     .font(.system(size: 10))
@@ -217,8 +220,38 @@ struct GitFooterBar: View {
         .help(statusTooltip)
     }
 
+    private func pullRequestBadge(_ pullRequest: GitService.PullRequestInfo) -> some View {
+        Button {
+            if let url = pullRequest.url {
+                NSWorkspace.shared.open(url)
+            }
+        } label: {
+            HStack(spacing: 3) {
+                Image(systemName: "arrow.triangle.pull")
+                    .font(.system(size: 9, weight: .semibold))
+                Text("#\(pullRequest.number)")
+                    .font(.system(size: 10, weight: .semibold, design: .rounded))
+                    .monospacedDigit()
+            }
+            .foregroundStyle(.secondary)
+            .padding(.horizontal, 5)
+            .frame(height: 18)
+            .background(
+                Capsule(style: .continuous)
+                    .fill(Color.primary.opacity(0.07))
+            )
+        }
+        .buttonStyle(.plain)
+        .disabled(pullRequest.url == nil)
+        .hoverInfo(title: "Pull Request #\(pullRequest.number)",
+                   subtitle: pullRequest.title)
+    }
+
     private var statusTooltip: String {
         guard let branch = gitWatcher.branch else { return "Not a git repository" }
+        if let pullRequest = gitWatcher.pullRequest {
+            return "\(branch) — PR #\(pullRequest.number): \(pullRequest.title)"
+        }
         if !gitWatcher.hasUpstream { return "\(branch) — no upstream configured" }
         switch (gitWatcher.ahead, gitWatcher.behind) {
         case (0, 0): return "\(branch) — up to date"

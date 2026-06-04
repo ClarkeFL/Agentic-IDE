@@ -10,6 +10,12 @@ enum GitService {
                                              qos: .userInitiated,
                                              attributes: .concurrent)
 
+    struct PullRequestInfo: Equatable {
+        let number: Int
+        let title: String
+        let url: URL?
+    }
+
     /// Returns the list of changed paths in `root`, enriched with per-file
     /// +/- line counts. Returns `nil` if `root` is not a git repo (or git
     /// failed for any reason).
@@ -122,6 +128,41 @@ enum GitService {
               let ahead = Int(parts[0]),
               let behind = Int(parts[1]) else { return nil }
         return (ahead, behind)
+    }
+
+    /// Best-effort lookup for an open pull request attached to the current
+    /// branch. Uses GitHub CLI when available/authenticated; nil means either
+    /// "no PR" or "can't query from this machine", so callers should treat it
+    /// as an optional UI hint rather than repo state.
+    static func pullRequest(at root: URL) async -> PullRequestInfo? {
+        let command = ghCommand()
+        guard let raw = await runExecutable(command.executableURL,
+                                            args: command.args + ["pr", "view", "--json", "number,title,url"],
+                                            in: root,
+                                            allowNonZeroExit: true) else { return nil }
+        let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return nil }
+        struct Payload: Decodable {
+            let number: Int
+            let title: String
+            let url: String?
+        }
+        guard let data = trimmed.data(using: .utf8),
+              let decoded = try? JSONDecoder().decode(Payload.self, from: data) else {
+            return nil
+        }
+        return PullRequestInfo(number: decoded.number,
+                               title: decoded.title,
+                               url: decoded.url.flatMap(URL.init(string:)))
+    }
+
+    private static func ghCommand() -> (executableURL: URL, args: [String]) {
+        for path in ["/opt/homebrew/bin/gh", "/usr/local/bin/gh", "/usr/bin/gh"] {
+            if FileManager.default.isExecutableFile(atPath: path) {
+                return (URL(fileURLWithPath: path), [])
+            }
+        }
+        return (URL(fileURLWithPath: "/usr/bin/env"), ["gh"])
     }
 
     // MARK: - Mutating actions
@@ -238,10 +279,20 @@ enum GitService {
     private static func run(args: [String],
                             in cwd: URL,
                             allowNonZeroExit: Bool = false) async -> String? {
+        await runExecutable(URL(fileURLWithPath: "/usr/bin/git"),
+                            args: args,
+                            in: cwd,
+                            allowNonZeroExit: allowNonZeroExit)
+    }
+
+    private static func runExecutable(_ executableURL: URL,
+                                      args: [String],
+                                      in cwd: URL,
+                                      allowNonZeroExit: Bool = false) async -> String? {
         await withCheckedContinuation { continuation in
             queue.async {
                 let process = Process()
-                process.executableURL = URL(fileURLWithPath: "/usr/bin/git")
+                process.executableURL = executableURL
                 process.arguments = args
                 process.currentDirectoryURL = cwd
 
@@ -270,7 +321,7 @@ enum GitService {
                     // The drain reads will return immediately on the closed
                     // pipes; wait so we don't leak the dispatch_group.
                     drainGroup.wait()
-                    log.error("git launch failed: \(error.localizedDescription)")
+                    log.error("\(executableURL.lastPathComponent, privacy: .public) launch failed: \(error.localizedDescription)")
                     continuation.resume(returning: nil)
                     return
                 }
@@ -281,7 +332,7 @@ enum GitService {
 
                 if process.terminationStatus != 0 && !allowNonZeroExit {
                     let err = String(data: errBuf.get(), encoding: .utf8) ?? ""
-                    log.debug("git \(args.joined(separator: " "), privacy: .public) exited \(process.terminationStatus): \(err, privacy: .public)")
+                    log.debug("\(executableURL.lastPathComponent, privacy: .public) \(args.joined(separator: " "), privacy: .public) exited \(process.terminationStatus): \(err, privacy: .public)")
                     continuation.resume(returning: nil)
                     return
                 }

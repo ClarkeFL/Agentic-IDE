@@ -23,9 +23,6 @@ struct FileTreeView: View {
     @State private var visibleRows: [FileTreeRow] = []
     @State private var selection: URL?
     @State private var hoverDropKey: String?
-    /// Bumped to force a manual re-walk of the root (used by the header's
-    /// refresh button).
-    @State private var refreshToken: Int = 0
     /// Pane-2 view mode. `.files` shows the project's file tree; `.changes`
     /// shows only files git knows have working-tree edits since HEAD.
     @State private var paneMode: PaneMode = .files
@@ -61,8 +58,11 @@ struct FileTreeView: View {
             GitFooterBar(project: project, gitWatcher: gitWatcher)
         }
         .background(Color(nsColor: .controlBackgroundColor))
-        .task(id: TaskKey(path: project.path, token: refreshToken)) {
+        .task(id: project.path) {
             await loadRoot()
+        }
+        .task(id: project.path) {
+            await runFileRefreshLoop()
         }
         // Git status polling. The watcher itself runs the loop; we just
         // bind its lifetime to this pane so a project switch / pane
@@ -106,9 +106,10 @@ struct FileTreeView: View {
             }
             HeaderIconButton(systemName: "arrow.clockwise",
                              help: "Refresh") {
-                refreshToken &+= 1
-                childrenCache = [:]
-                Task { await gitWatcher.refresh() }
+                Task {
+                    await refreshVisibleTree()
+                    await gitWatcher.refresh()
+                }
             }
         }
         .padding(.leading, DS.Gutter.inspector)
@@ -238,13 +239,6 @@ struct FileTreeView: View {
         }
     }
 
-    /// Composite id so `.task(id:)` re-fires when either the project path
-    /// changes (project switch) OR the manual refresh token bumps.
-    private struct TaskKey: Hashable {
-        let path: URL
-        let token: Int
-    }
-
     // MARK: - State updates
 
     private func loadRoot() async {
@@ -255,6 +249,48 @@ struct FileTreeView: View {
         await MainActor.run {
             rootNodes = nodes
             isLoadingRoot = false
+        }
+    }
+
+    private func runFileRefreshLoop() async {
+        while !Task.isCancelled {
+            try? await Task.sleep(nanoseconds: 1_500_000_000)
+            await refreshVisibleTree()
+        }
+    }
+
+    /// Re-list the root and any directories the user has already opened
+    /// without dropping `expanded`. This keeps the tree live while avoiding
+    /// the manual-refresh bug where expanded folders became empty until the
+    /// user clicked them twice.
+    private func refreshVisibleTree() async {
+        async let rootTask = FileBrowser.list(project.path)
+        let cachedDirectoryURLs = await MainActor.run {
+            childrenCache.compactMap { key, _ -> URL? in
+                expanded.contains(key) ? URL(fileURLWithPath: key) : nil
+            }
+        }
+
+        let refreshedChildren = await withTaskGroup(of: (String, [FileNode]).self,
+                                                    returning: [String: [FileNode]].self) { group in
+            for url in cachedDirectoryURLs {
+                group.addTask {
+                    (url.path, await FileBrowser.list(url))
+                }
+            }
+            var result: [String: [FileNode]] = [:]
+            for await (key, kids) in group {
+                result[key] = kids
+            }
+            return result
+        }
+
+        let nodes = await rootTask
+        await MainActor.run {
+            rootNodes = nodes
+            for (key, kids) in refreshedChildren {
+                childrenCache[key] = kids
+            }
         }
     }
 
