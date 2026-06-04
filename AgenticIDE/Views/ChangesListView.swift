@@ -221,7 +221,8 @@ struct GitFooterBar: View {
     }
 
     private func pullRequestBadge(_ pullRequest: GitService.PullRequestInfo) -> some View {
-        Button {
+        let amber = Color(red: 0.92, green: 0.68, blue: 0.20)
+        return Button {
             if let url = pullRequest.url {
                 NSWorkspace.shared.open(url)
             }
@@ -233,12 +234,16 @@ struct GitFooterBar: View {
                     .font(.system(size: 10, weight: .semibold, design: .rounded))
                     .monospacedDigit()
             }
-            .foregroundStyle(.secondary)
+            .foregroundStyle(amber)
             .padding(.horizontal, 5)
             .frame(height: 18)
             .background(
                 Capsule(style: .continuous)
-                    .fill(Color.primary.opacity(0.07))
+                    .fill(amber.opacity(0.16))
+            )
+            .overlay(
+                Capsule(style: .continuous)
+                    .stroke(amber.opacity(0.45), lineWidth: 1)
             )
         }
         .buttonStyle(.plain)

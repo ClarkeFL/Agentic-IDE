@@ -132,12 +132,20 @@ enum GitService {
 
     /// Best-effort lookup for an open pull request attached to the current
     /// branch. Uses GitHub CLI when available/authenticated; nil means either
-    /// "no PR" or "can't query from this machine", so callers should treat it
-    /// as an optional UI hint rather than repo state.
+    /// "no open PR" or "can't query from this machine", so callers should
+    /// treat it as an optional UI hint rather than repo state.
     static func pullRequest(at root: URL) async -> PullRequestInfo? {
+        guard let branch = await currentBranch(at: root),
+              !branch.hasPrefix("(") else { return nil }
         let command = ghCommand()
         guard let raw = await runExecutable(command.executableURL,
-                                            args: command.args + ["pr", "view", "--json", "number,title,url"],
+                                            args: command.args + [
+                                                "pr", "list",
+                                                "--state", "open",
+                                                "--head", branch,
+                                                "--json", "number,title,url",
+                                                "--limit", "1"
+                                            ],
                                             in: root,
                                             allowNonZeroExit: true) else { return nil }
         let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -148,12 +156,13 @@ enum GitService {
             let url: String?
         }
         guard let data = trimmed.data(using: .utf8),
-              let decoded = try? JSONDecoder().decode(Payload.self, from: data) else {
+              let decoded = try? JSONDecoder().decode([Payload].self, from: data),
+              let first = decoded.first else {
             return nil
         }
-        return PullRequestInfo(number: decoded.number,
-                               title: decoded.title,
-                               url: decoded.url.flatMap(URL.init(string:)))
+        return PullRequestInfo(number: first.number,
+                               title: first.title,
+                               url: first.url.flatMap(URL.init(string:)))
     }
 
     private static func ghCommand() -> (executableURL: URL, args: [String]) {
