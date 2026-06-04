@@ -230,7 +230,7 @@ struct PersistentSplitView<P1: View, P2: View, P3: View, P4: View>: View {
     private func dragPane1(delta: CGFloat, total: CGFloat) {
         let start = dragStart1 ?? pane1Width
         if dragStart1 == nil { dragStart1 = start }
-        let dividers = DividerView.thickness * 3
+        let dividers = DividerView.layoutWidth * (pane3Collapsed ? 2 : 3)
         let maxAllowed = total - pane2Width - pane3Min - pane4Width - dividers
         pane1Width = clamp(start + delta, min: pane1Min, max: min(pane1Max, maxAllowed))
     }
@@ -239,7 +239,7 @@ struct PersistentSplitView<P1: View, P2: View, P3: View, P4: View>: View {
     private func dragPane2(delta: CGFloat, total: CGFloat) {
         let start = dragStart2 ?? pane2Width
         if dragStart2 == nil { dragStart2 = start }
-        let dividers = DividerView.thickness * 3
+        let dividers = DividerView.layoutWidth * 3
         let maxAllowed = total - pane1Width - pane3Min - pane4Width - dividers
         pane2Width = clamp(start + delta, min: pane2Min, max: min(pane2Max, maxAllowed))
     }
@@ -248,7 +248,7 @@ struct PersistentSplitView<P1: View, P2: View, P3: View, P4: View>: View {
     private func dragPane4(delta: CGFloat, total: CGFloat) {
         let start = dragStart4 ?? pane4Width
         if dragStart4 == nil { dragStart4 = start }
-        let dividers = DividerView.thickness * 3
+        let dividers = DividerView.layoutWidth * (pane3Collapsed ? 2 : 3)
         let maxAllowed = total - pane1Width - pane2Width - pane3Min - dividers
         pane4Width = clamp(start - delta, min: pane4Min, max: min(pane4Max, maxAllowed))
     }
@@ -275,7 +275,7 @@ private struct DividerView: View {
     static let thickness: CGFloat = 1
     /// Drag-target width — wider than the visible line so the user can
     /// grab the divider without pixel-perfect aiming.
-    static let hitArea: CGFloat = 9
+    static let hitArea: CGFloat = 17
     /// Layout-reserved width. The body's ZStack sizes to its widest child,
     /// so the divider takes `hitArea` worth of horizontal space in the
     /// HStack regardless of the visible thickness. Parents that need to
