@@ -36,6 +36,9 @@ final class GitStatusWatcher {
     /// True when the last `git status` ran successfully. Flips to false
     /// when the project isn't a git repo (or git is otherwise unavailable).
     var isGitRepo: Bool = true
+    /// Open GitHub pull request for the current branch, when GitHub CLI can
+    /// resolve one. Nil means no PR or unavailable lookup.
+    var pullRequest: GitService.PullRequestInfo?
 
     let projectId: UUID
     let rootPath: URL
@@ -81,10 +84,12 @@ final class GitStatusWatcher {
             ahead = 0
             behind = 0
             hasUpstream = false
+            pullRequest = nil
             return
         }
         isGitRepo = true
         branch = branchResult
+        async let pullRequestTask = GitService.pullRequest(at: rootPath)
         if let pair = aheadBehindResult {
             ahead = pair.ahead
             behind = pair.behind
@@ -94,6 +99,7 @@ final class GitStatusWatcher {
             behind = 0
             hasUpstream = false
         }
+        pullRequest = await pullRequestTask
         var files: [String: GitFileStatus] = [:]
         var folders: [String: GitFileStatus] = [:]
         for change in raw {
