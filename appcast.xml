@@ -5,6 +5,19 @@
         <description>Updates for AgenticIDE</description>
         <language>en</language>
         <item>
+            <title>Version 2.3.2</title>
+            <link>https://github.com/ClarkeFL/Agentic-IDE/releases/tag/v2.3.2</link>
+            <sparkle:version>38</sparkle:version>
+            <sparkle:shortVersionString>2.3.2</sparkle:shortVersionString>
+            <sparkle:releaseNotesLink>https://github.com/ClarkeFL/Agentic-IDE/releases/tag/v2.3.2</sparkle:releaseNotesLink>
+            <pubDate>Thu, 04 Jun 2026 23:07:21 +0000</pubDate>
+            <enclosure
+                url="https://github.com/ClarkeFL/Agentic-IDE/releases/download/v2.3.2/AgenticIDE-2.3.2.zip"
+                sparkle:edSignature="uZtE93j+atQjHXSkhdQt4NDvBWEfWRCUYIMf2iVSzbprryD0nNY7sOb8hc/mt9tFUiDJwSwzvMuhFTiREC8uCw=="
+                length="9799676"
+                type="application/octet-stream" />
+        </item>
+        <item>
             <title>Version 2.3.1</title>
             <link>https://github.com/ClarkeFL/Agentic-IDE/releases/tag/v2.3.1</link>
             <sparkle:version>37</sparkle:version>
