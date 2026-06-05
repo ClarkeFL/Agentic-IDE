@@ -114,6 +114,7 @@ struct MainWindow: View {
             FileTreeView(project: project,
                          editor: editors.session(for: project.id),
                          gitWatcher: gitWatchers.watcher(for: project.id, rootPath: project.path))
+                .id(project.id)
         } else {
             paneEmptyState(systemImage: "folder",
                            text: "Select a project to browse its files.")

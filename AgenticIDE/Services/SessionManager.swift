@@ -17,6 +17,8 @@ final class SessionManager {
 
     private var sessions: [UUID: ProjectSession] = [:]
     private var pendingSnapshots: [UUID: SessionSnapshot] = [:]
+    @ObservationIgnored
+    private var restoringProjectIds: Set<UUID> = []
     private let storeURL: URL
     /// Serial queue used to encode + atomic-write sessions.json off the main
     /// thread. The hot path here is `markDirty()` from smart-rename, which
@@ -66,7 +68,23 @@ final class SessionManager {
         let s = ProjectSession(projectId: projectId)
         sessions[projectId] = s
 
-        if let snapshot = pendingSnapshots[projectId] {
+        s.saveHook = { [weak self] in self?.save() }
+        scheduleRestoreIfNeeded(projectId: projectId, into: s)
+        return s
+    }
+
+    private func scheduleRestoreIfNeeded(projectId: UUID, into session: ProjectSession) {
+        guard let snapshot = pendingSnapshots[projectId],
+              !restoringProjectIds.contains(projectId) else { return }
+        restoringProjectIds.insert(projectId)
+
+        DispatchQueue.main.async { [weak self, weak session] in
+            guard let self, let session else { return }
+            guard self.pendingSnapshots[projectId]?.projectId == snapshot.projectId else {
+                self.restoringProjectIds.remove(projectId)
+                return
+            }
+
             // Re-spawn each saved tab. New PIDs but the same logical tab.
             for tabSnap in snapshot.tabs {
                 let cwd = tabSnap.workingDirectoryPath.map { URL(fileURLWithPath: $0) }
@@ -74,19 +92,26 @@ final class SessionManager {
                                         workingDirectory: cwd,
                                         env: PtyService.terminalEnvironment())
                 let tab = TerminalTab(id: tabSnap.id, title: tabSnap.title, config: cfg)
-                s.tabs.append(tab)
+                session.tabs.append(tab)
+                session.wireSmartRename(tab)
             }
-            s.activeTabId = snapshot.activeTabId
-            pendingSnapshots.removeValue(forKey: projectId)
+            session.activeTabId = snapshot.activeTabId
+            self.pendingSnapshots.removeValue(forKey: projectId)
+            self.restoringProjectIds.remove(projectId)
         }
+    }
 
-        // Install the save hook AFTER restore so the activeTabId assignment
-        // above doesn't trigger a redundant write.
-        s.saveHook = { [weak self] in self?.save() }
-        // Wire smart-rename on every restored tab now that the save hook is
-        // live (the rename closure calls markDirty → saveHook).
-        for tab in s.tabs { s.wireSmartRename(tab) }
-        return s
+    /// Returns an already-restored live session without materialising one from
+    /// a saved snapshot. Sidebar rows use this so drawing the project list
+    /// doesn't accidentally spawn terminals for every saved project.
+    func liveSession(for projectId: UUID) -> ProjectSession? {
+        sessions[projectId]
+    }
+
+    /// Cheap persisted tab count for projects that haven't been activated in
+    /// this run yet. Does not restore or spawn any terminal surfaces.
+    func savedTabCount(for projectId: UUID) -> Int {
+        pendingSnapshots[projectId]?.tabs.count ?? 0
     }
 
     func discard(projectId: UUID) {
@@ -148,7 +173,7 @@ final class SessionManager {
         }
         // Preserve any snapshots we haven't restored yet (project never opened
         // in this run) so they survive next launch too.
-        for (id, snap) in pendingSnapshots where !all.contains(where: { $0.projectId == id }) {
+        for (id, snap) in pendingSnapshots where !all.contains(where: { $0.projectId == id && !$0.tabs.isEmpty }) {
             all.append(snap)
         }
         return all

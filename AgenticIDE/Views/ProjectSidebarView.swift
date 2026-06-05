@@ -287,21 +287,30 @@ struct ProjectSidebarView: View {
 
     @ViewBuilder
     private func projectRowItem(_ project: Project) -> some View {
-        let session = sessions.session(for: project.id)
         let isSelected = selectedProjectId == project.id
-        ProjectRow(project: project,
-                   session: session,
-                   isExpanded: isSelected,
-                   now: now,
-                   onSelectTab: { id in session.activeTabId = id },
-                   onCloseTab: { id in session.closeTab(id: id) },
-                   onRenameTab: { id, newTitle in
-                       guard let idx = session.tabs.firstIndex(where: { $0.id == id }) else { return }
-                       let trimmed = newTitle.trimmingCharacters(in: .whitespaces)
-                       guard !trimmed.isEmpty else { return }
-                       session.tabs[idx].title = trimmed
-                       session.markDirty()
-                   })
+        let liveSession = isSelected ? sessions.session(for: project.id) : sessions.liveSession(for: project.id)
+
+        Group {
+            if let session = liveSession {
+                ProjectRow(project: project,
+                           session: session,
+                           isExpanded: isSelected,
+                           now: now,
+                           onSelectTab: { id in session.activeTabId = id },
+                           onCloseTab: { id in session.closeTab(id: id) },
+                           onRenameTab: { id, newTitle in
+                               guard let idx = session.tabs.firstIndex(where: { $0.id == id }) else { return }
+                               let trimmed = newTitle.trimmingCharacters(in: .whitespaces)
+                               guard !trimmed.isEmpty else { return }
+                               session.tabs[idx].title = trimmed
+                               session.markDirty()
+                           })
+            } else {
+                ProjectSummaryRow(project: project,
+                                  savedTabCount: sessions.savedTabCount(for: project.id),
+                                  now: now)
+            }
+        }
             .padding(.horizontal, DS.Space.sm)
             .padding(.vertical, DS.Space.xs)
             // Force the padded view to claim the parent's full width before
@@ -652,6 +661,70 @@ private struct SidebarIconButton: View {
                 .onEnded { _ in isPressed = false }
         )
         .help(help)
+    }
+}
+
+private struct ProjectSummaryRow: View {
+    let project: Project
+    let savedTabCount: Int
+    let now: Date
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: DS.Space.xs) {
+            HStack(spacing: DS.Space.sm) {
+                if savedTabCount > 0 {
+                    Image(systemName: "chevron.right")
+                        .font(.system(size: DS.Icon.micro, weight: .bold))
+                        .foregroundStyle(.secondary)
+                        .frame(width: DS.Tree.chevronColumn)
+                }
+                Image(systemName: "folder.fill")
+                    .foregroundStyle(.tint)
+                Text(project.name)
+                    .font(.body.weight(.medium))
+                    .lineLimit(1)
+                Spacer(minLength: 4)
+            }
+
+            HStack(spacing: DS.Space.sm) {
+                if savedTabCount > 0 {
+                    Label(tabCountLabel, systemImage: "rectangle.stack")
+                        .labelStyle(.titleAndIcon)
+                        .font(.caption2)
+                        .foregroundStyle(.secondary)
+                }
+                if let at = project.lastActivityAt {
+                    if savedTabCount > 0 {
+                        Text("·").font(.caption2).foregroundStyle(.tertiary)
+                    }
+                    Text(formatRelative(at))
+                        .font(.caption2)
+                        .foregroundStyle(.tertiary)
+                }
+                if savedTabCount == 0 && project.lastActivityAt == nil {
+                    Text("No activity")
+                        .font(.caption2)
+                        .foregroundStyle(.tertiary)
+                }
+                Spacer(minLength: 0)
+            }
+        }
+        .padding(.vertical, DS.Space.xxs)
+    }
+
+    private var tabCountLabel: String {
+        savedTabCount == 1 ? "1 terminal" : "\(savedTabCount) terminals"
+    }
+
+    private func formatRelative(_ date: Date) -> String {
+        let diff = max(0, Int(now.timeIntervalSince(date)))
+        if diff < 60 { return "just now" }
+        let minutes = diff / 60
+        if minutes < 60 { return "\(minutes) min" }
+        let hours = minutes / 60
+        if hours < 24 { return "\(hours) hr" }
+        let days = hours / 24
+        return "\(days) d"
     }
 }
 
