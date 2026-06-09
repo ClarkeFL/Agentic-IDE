@@ -36,10 +36,10 @@ struct ProjectSidebarView: View {
         return VStack(spacing: 0) {
             // Top strip — locked to the same height as the tab bar and the
             // inspector header so the three columns share one baseline.
-            // Leading inset clears the macOS traffic-light buttons (the
-            // window uses `.hiddenTitleBar`, so the lights now float on
-            // top of this header).
-            PaneHeader(leadingPadding: DS.Layout.trafficLightInset,
+            // Align the title to the sidebar content gutter; the title sits
+            // below the traffic-light row, so reserving that inset made the
+            // header read as centered instead of left-aligned.
+            PaneHeader(leadingPadding: DS.Gutter.sidebar + DS.Space.sm,
                        trailingPadding: DS.Space.md) {
                 PaneTitle("Projects", count: visibleCount)
             }

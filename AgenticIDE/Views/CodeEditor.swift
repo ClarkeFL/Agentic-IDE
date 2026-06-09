@@ -246,12 +246,8 @@ struct CodeEditor: NSViewRepresentable {
                                delay: UInt64) {
             highlightTask?.cancel()
             let storage = textView.textStorage
-            // Use the file extension to pick a grammar. Files with
-            // unrecognised extensions reset to plain `.labelColor` so
-            // colours from a previously-viewed tab don't bleed through.
-            let ext = url.pathExtension
             guard let storage else { return }
-            guard let language = highlighter.languageName(forExtension: ext) else {
+            guard let language = highlighter.languageName(for: url) else {
                 highlighter.clearColors(in: storage)
                 return
             }

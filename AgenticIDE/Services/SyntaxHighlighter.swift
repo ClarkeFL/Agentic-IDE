@@ -30,6 +30,32 @@ final class SyntaxHighlighter {
         return isDark ? "atom-one-dark" : "atom-one-light"
     }
 
+    /// Map a full file URL to a highlight.js language name. Some common
+    /// developer files are named by convention rather than extension
+    /// (`.env.local`, `Dockerfile`, `Makefile`), so check the filename before
+    /// falling back to the extension table.
+    func languageName(for url: URL) -> String? {
+        let filename = url.lastPathComponent.lowercased()
+        if Self.isDotenvFilename(filename) {
+            return "ini"
+        }
+        if Self.isIgnoreFilename(url) {
+            return "bash"
+        }
+        if Self.isMarkdownFilename(filename) {
+            return "markdown"
+        }
+
+        switch filename {
+        case _ where Self.isDockerfileFilename(filename):
+            return "dockerfile"
+        case "makefile":
+            return "makefile"
+        default:
+            return languageName(forExtension: url.pathExtension)
+        }
+    }
+
     /// Map a file extension (no leading dot) to a highlight.js language
     /// name. Returns nil for unknown extensions — the editor should then
     /// skip highlighting and just use the default text colour.
@@ -54,7 +80,7 @@ final class SyntaxHighlighter {
         case "yaml", "yml": return "yaml"
         case "toml": return "ini"
         case "ini", "conf", "cfg": return "ini"
-        case "md", "markdown", "mdx": return "markdown"
+        case "md", "markdown", "mdx", "mdown", "mkd", "mkdn", "mdwn", "mdtxt": return "markdown"
         case "html", "htm", "svelte", "vue": return "xml"
         case "xml", "plist", "xib", "storyboard": return "xml"
         case "css": return "css"
@@ -84,6 +110,42 @@ final class SyntaxHighlighter {
         case "graphql", "gql": return "graphql"
         case "proto": return "protobuf"
         default: return nil
+        }
+    }
+
+    private static func isDotenvFilename(_ filename: String) -> Bool {
+        filename == ".env" || filename.hasPrefix(".env.")
+    }
+
+    private static func isDockerfileFilename(_ filename: String) -> Bool {
+        filename == "dockerfile"
+            || filename == "containerfile"
+            || filename.hasPrefix("dockerfile.")
+            || filename.hasPrefix("containerfile.")
+            || filename.hasSuffix(".dockerfile")
+            || filename.hasSuffix(".containerfile")
+    }
+
+    private static func isIgnoreFilename(_ url: URL) -> Bool {
+        let filename = url.lastPathComponent.lowercased()
+        if filename == ".gitignore"
+            || filename == ".dockerignore"
+            || filename == ".ignore"
+            || filename.hasSuffix(".gitignore")
+            || filename.hasSuffix(".dockerignore")
+            || filename.hasSuffix(".ignore") {
+            return true
+        }
+        return url.path.hasSuffix("/.git/info/exclude")
+    }
+
+    private static func isMarkdownFilename(_ filename: String) -> Bool {
+        switch filename {
+        case "readme", "changelog", "contributing", "code_of_conduct",
+             "security", "support", "authors", "notice", "license":
+            return true
+        default:
+            return false
         }
     }
 
