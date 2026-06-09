@@ -70,7 +70,7 @@ struct EditorPaneView: View {
         if let head = tab.headText {
             UnifiedDiffView(headText: head,
                             workingText: tab.text,
-                            fileExtension: tab.url.pathExtension)
+                            fileURL: tab.url)
         } else if tab.headLoadFailed {
             placeholder(systemImage: "doc.text.below.ecg",
                         title: "No HEAD version to compare",

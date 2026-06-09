@@ -14,9 +14,9 @@ import SwiftUI
 struct UnifiedDiffView: View {
     let headText: String
     let workingText: String
-    /// File extension (no leading dot) — used to pick a highlight.js grammar.
-    /// Empty / unknown extensions skip the highlight pass and render plain.
-    let fileExtension: String
+    /// File URL used to pick a highlight.js grammar. Some important developer
+    /// files are named by convention rather than extension, such as `.env`.
+    let fileURL: URL
 
     @State private var rows: [DiffRow] = []
     @State private var stats: Stats = .zero
@@ -54,7 +54,7 @@ struct UnifiedDiffView: View {
             }
             .background(Color(nsColor: .textBackgroundColor))
         }
-        .task(id: InputKey(head: headText, work: workingText, ext: fileExtension)) {
+        .task(id: InputKey(head: headText, work: workingText, path: fileURL.path)) {
             await rebuild()
         }
     }
@@ -91,7 +91,7 @@ struct UnifiedDiffView: View {
     private func rebuild() async {
         let head = headText
         let work = workingText
-        let ext = fileExtension
+        let url = fileURL
         let computed = await Task.detached(priority: .userInitiated) { () -> Computed in
             let rows = Self.computeRows(head: head, work: work)
             var added = 0
@@ -103,7 +103,7 @@ struct UnifiedDiffView: View {
                 case .unchanged: break
                 }
             }
-            let highlight = Self.buildHighlight(head: head, work: work, ext: ext)
+            let highlight = Self.buildHighlight(head: head, work: work, url: url)
             return Computed(rows: rows, stats: Stats(added: added, removed: removed),
                             highlight: highlight)
         }.value
@@ -189,11 +189,11 @@ struct UnifiedDiffView: View {
 
     /// Run highlight.js (via Highlightr) on both buffers and slice the
     /// results into per-line `AttributedString`s keyed by 1-based line
-    /// number. Returns an empty cache if the extension is unknown or the
+    /// number. Returns an empty cache if the language is unknown or the
     /// file is over the highlighter's size cap — `DiffLineView` falls
     /// back to plain `Text(String)` in that case.
-    nonisolated static func buildHighlight(head: String, work: String, ext: String) -> HighlightCache {
-        guard let language = highlighter.languageName(forExtension: ext) else {
+    nonisolated static func buildHighlight(head: String, work: String, url: URL) -> HighlightCache {
+        guard let language = highlighter.languageName(for: url) else {
             return .empty
         }
         let workLines = highlighter.shouldHighlight(byteCount: work.utf8.count)
@@ -295,7 +295,7 @@ private struct Stats: Equatable {
 private struct InputKey: Hashable {
     let head: String
     let work: String
-    let ext: String
+    let path: String
 }
 
 // MARK: - Row rendering
