@@ -67,6 +67,9 @@ struct TabBarView: View {
 
                 Spacer(minLength: 0)
 
+                PromptLibraryMenu()
+                    .padding(.trailing, DS.Space.xs)
+
                 InlineIconButton(systemName: isSpeaking ? "stop.circle.fill" : "speaker.wave.2",
                                  help: isSpeaking
                                     ? "Stop speaking (⇧⌘.)"
