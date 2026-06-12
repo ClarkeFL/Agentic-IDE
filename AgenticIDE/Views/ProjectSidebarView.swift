@@ -16,11 +16,6 @@ struct ProjectSidebarView: View {
     /// Identifies which drop zone the cursor is currently over, so we can
     /// render a highlight there. Format: "group:<uuid>" or "ungrouped".
     @State private var hoveredDropKey: String?
-    /// Single shared "now" tick fed to every project row's relative-time
-    /// label. Replaces the per-row Timer.publish that used to spin one
-    /// main-runloop timer per visible project.
-    @State private var now: Date = Date()
-    private let nowTick = Timer.publish(every: 30, on: .main, in: .common).autoconnect()
 
     var body: some View {
         // Single O(N) bucket of the live project list keyed by groupId so
@@ -104,7 +99,6 @@ struct ProjectSidebarView: View {
             .padding(.horizontal, DS.Space.md)
             .padding(.vertical, DS.Space.sm)
         }
-        .onReceive(nowTick) { now = $0 }
         // Menu-bar commands (File → New Project / Add Existing Project) post
         // these; the sidebar owns the panels + store so it observes here.
         .onReceive(NotificationCenter.default.publisher(for: .newProject)) { _ in
@@ -295,7 +289,6 @@ struct ProjectSidebarView: View {
                 ProjectRow(project: project,
                            session: session,
                            isExpanded: isSelected,
-                           now: now,
                            onSelectTab: { id in session.activeTabId = id },
                            onCloseTab: { id in session.closeTab(id: id) },
                            onRenameTab: { id, newTitle in
@@ -307,8 +300,7 @@ struct ProjectSidebarView: View {
                            })
             } else {
                 ProjectSummaryRow(project: project,
-                                  savedTabCount: sessions.savedTabCount(for: project.id),
-                                  now: now)
+                                  savedTabCount: sessions.savedTabCount(for: project.id))
             }
         }
             .padding(.horizontal, DS.Space.sm)
@@ -667,7 +659,6 @@ private struct SidebarIconButton: View {
 private struct ProjectSummaryRow: View {
     let project: Project
     let savedTabCount: Int
-    let now: Date
 
     var body: some View {
         VStack(alignment: .leading, spacing: DS.Space.xs) {
@@ -693,15 +684,7 @@ private struct ProjectSummaryRow: View {
                         .font(.caption2)
                         .foregroundStyle(.secondary)
                 }
-                if let at = project.lastActivityAt {
-                    if savedTabCount > 0 {
-                        Text("·").font(.caption2).foregroundStyle(.tertiary)
-                    }
-                    Text(formatRelative(at))
-                        .font(.caption2)
-                        .foregroundStyle(.tertiary)
-                }
-                if savedTabCount == 0 && project.lastActivityAt == nil {
+                if savedTabCount == 0 {
                     Text("No activity")
                         .font(.caption2)
                         .foregroundStyle(.tertiary)
@@ -715,26 +698,12 @@ private struct ProjectSummaryRow: View {
     private var tabCountLabel: String {
         savedTabCount == 1 ? "1 terminal" : "\(savedTabCount) terminals"
     }
-
-    private func formatRelative(_ date: Date) -> String {
-        let diff = max(0, Int(now.timeIntervalSince(date)))
-        if diff < 60 { return "just now" }
-        let minutes = diff / 60
-        if minutes < 60 { return "\(minutes) min" }
-        let hours = minutes / 60
-        if hours < 24 { return "\(hours) hr" }
-        let days = hours / 24
-        return "\(days) d"
-    }
 }
 
 private struct ProjectRow: View {
     let project: Project
     @Bindable var session: ProjectSession
     let isExpanded: Bool
-    /// Shared "now" injected by the sidebar's single timer. Drives the
-    /// relative-time label without each row spinning its own runloop timer.
-    let now: Date
     let onSelectTab: (UUID) -> Void
     let onCloseTab: (UUID) -> Void
     let onRenameTab: (UUID, String) -> Void
@@ -772,11 +741,11 @@ private struct ProjectRow: View {
                 }
             }
 
-            // Summary line — terminal count + last-activity. Lives below the
-            // title so the row height doesn't shift when expanding/collapsing
-            // children. The status indicator used to live here too; it's now
-            // promoted into the title row so the dot stays visible (and right-
-            // aligned to the title) regardless of whether this line renders.
+            // Summary line — terminal count + live agent-work timer. Lives
+            // below the title so the row height doesn't shift when expanding/
+            // collapsing children. The timer counts up from the moment a tab
+            // entered `.working` (set by agent hooks / terminal events) and
+            // disappears — resetting — once the agent finishes.
             HStack(spacing: DS.Space.sm) {
                 if !session.tabs.isEmpty {
                     Label(tabCountLabel, systemImage: "rectangle.stack")
@@ -784,15 +753,13 @@ private struct ProjectRow: View {
                         .font(.caption2)
                         .foregroundStyle(.secondary)
                 }
-                if let at = project.lastActivityAt {
+                if let since = earliestWorkingSince {
                     if !session.tabs.isEmpty {
                         Text("·").font(.caption2).foregroundStyle(.tertiary)
                     }
-                    Text(formatRelative(at))
-                        .font(.caption2)
-                        .foregroundStyle(.tertiary)
+                    WorkingTimerLabel(since: since)
                 }
-                if session.tabs.isEmpty && project.lastActivityAt == nil {
+                if session.tabs.isEmpty {
                     Text("No activity")
                         .font(.caption2)
                         .foregroundStyle(.tertiary)
@@ -868,16 +835,41 @@ private struct ProjectRow: View {
         return "\(tab.title) — \(label)"
     }
 
-    /// Minutes/hours/days only — never seconds.
-    private func formatRelative(_ date: Date) -> String {
-        let diff = max(0, Int(now.timeIntervalSince(date)))
-        if diff < 60 { return "just now" }
-        let minutes = diff / 60
-        if minutes < 60 { return "\(minutes) min" }
-        let hours = minutes / 60
-        if hours < 24 { return "\(hours) hr" }
-        let days = hours / 24
-        return "\(days) d"
+    /// Start time of the longest-running working tab in this project, or nil
+    /// when no agent is working. Multiple working tabs collapse into one
+    /// timer — the earliest start — so the row answers "how long has AI been
+    /// busy here" rather than listing one timer per terminal.
+    private var earliestWorkingSince: Date? {
+        session.tabs
+            .compactMap { $0.status == .working ? $0.workingSince : nil }
+            .min()
+    }
+}
+
+/// Live elapsed-time readout for a working agent. `TimelineView` re-renders
+/// just this label once a second, so the rest of the sidebar doesn't pay for
+/// the tick — and there's no shared runloop timer to manage.
+private struct WorkingTimerLabel: View {
+    let since: Date
+
+    var body: some View {
+        TimelineView(.periodic(from: .now, by: 1)) { context in
+            Label(Self.format(context.date.timeIntervalSince(since)),
+                  systemImage: "timer")
+                .labelStyle(.titleAndIcon)
+                .font(.caption2)
+                .monospacedDigit()
+                .foregroundStyle(TerminalStatusBadge.info(for: .working)?.color ?? .secondary)
+        }
+    }
+
+    /// m:ss under an hour, h:mm:ss after.
+    static func format(_ elapsed: TimeInterval) -> String {
+        let total = max(0, Int(elapsed))
+        if total < 3600 {
+            return String(format: "%d:%02d", total / 60, total % 60)
+        }
+        return String(format: "%d:%02d:%02d", total / 3600, (total % 3600) / 60, total % 60)
     }
 }
 

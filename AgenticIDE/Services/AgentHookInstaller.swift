@@ -213,7 +213,10 @@ enum AgentHookInstaller {
     /// `AGENTIDE_SURFACE_ID` so an agent invoked outside an Agentic IDE
     /// terminal silently no-ops (e.g. the user runs claude in a regular
     /// Terminal.app — we don't want to write status files for surfaces
-    /// nobody's watching).
+    /// nobody's watching). The trailing `|| true` keeps that no-op exit 0:
+    /// both Claude Code and Codex treat a non-zero hook exit as a hook
+    /// failure and surface it to the user. It must come before the marker
+    /// comment, or the shell would never see it.
     private static func command(forStatus status: String) -> String {
         let dir = AgentStatusWatcher.statusDirectoryURL.path
         // Escape the directory path for inclusion inside double quotes —
@@ -222,7 +225,7 @@ enum AgentHookInstaller {
         let escapedDir = dir
             .replacingOccurrences(of: "\\", with: "\\\\")
             .replacingOccurrences(of: "\"", with: "\\\"")
-        return "[ -n \"$AGENTIDE_SURFACE_ID\" ] && mkdir -p \"\(escapedDir)\" && printf '%s' \(status) > \"\(escapedDir)/$AGENTIDE_SURFACE_ID\" \(agenticideMarker)"
+        return "[ -n \"$AGENTIDE_SURFACE_ID\" ] && mkdir -p \"\(escapedDir)\" && printf '%s' \(status) > \"\(escapedDir)/$AGENTIDE_SURFACE_ID\" || true \(agenticideMarker)"
     }
 
     private static func hasAgenticideEntry(under value: Any?) -> Bool {

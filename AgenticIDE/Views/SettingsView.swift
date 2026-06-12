@@ -1,5 +1,6 @@
 import AVFoundation
 import SwiftUI
+import UniformTypeIdentifiers
 
 /// App-wide preferences. Reachable via the standard macOS "Settings…" menu
 /// item (⌘,). Toggles are bound to `@AppStorage` so they persist across
@@ -13,6 +14,8 @@ struct SettingsView: View {
                 .tabItem { Label("Editor", systemImage: "curlybraces") }
             HooksSettingsView()
                 .tabItem { Label("Hooks", systemImage: "link") }
+            NotificationsSettingsView()
+                .tabItem { Label("Notifications", systemImage: "bell") }
             SpeechSettingsView()
                 .tabItem { Label("Speech", systemImage: "speaker.wave.2") }
         }
@@ -204,6 +207,95 @@ private struct HookRow: View {
         case .installed: return .green
         case .notInstalled: return .secondary
         case .agentNotInstalled, .configUnreadable: return .orange
+        }
+    }
+}
+
+/// Completion-sound preferences. The sound fires when an agent finishes a
+/// turn (sidebar status flips Working → Completed/Failed) — driven by the
+/// same hook/terminal signals as the sidebar dot, so it works for Claude,
+/// Codex, and anything else that flips the status.
+private struct NotificationsSettingsView: View {
+    @AppStorage(AppSettings.Keys.completionSoundEnabled)
+    private var soundEnabled: Bool = false
+
+    @AppStorage(AppSettings.Keys.completionSoundName)
+    private var soundName: String = "Glass"
+
+    @AppStorage(AppSettings.Keys.customCompletionSoundPath)
+    private var customSoundPath: String = ""
+
+    @State private var importError: String?
+
+    var body: some View {
+        Form {
+            Section {
+                Toggle(isOn: $soundEnabled) {
+                    VStack(alignment: .leading, spacing: DS.Space.xxs) {
+                        Text("Play sound when an agent finishes")
+                        Text("Fires when a terminal's status flips from Working to Completed — the same signal that drives the sidebar dot.")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
+                }
+
+                Picker("Sound", selection: $soundName) {
+                    ForEach(CompletionSoundPlayer.systemSoundNames, id: \.self) { name in
+                        Text(name).tag(name)
+                    }
+                    if !customSoundPath.isEmpty {
+                        Divider()
+                        Text("Custom — \(customSoundFileName)")
+                            .tag(CompletionSoundPlayer.customSoundToken)
+                    }
+                }
+
+                HStack {
+                    Button("Choose Audio File…") { chooseCustomSound() }
+                    Spacer()
+                    Button("Test") { CompletionSoundPlayer.shared.play() }
+                }
+            } header: {
+                Label("Completion sound", systemImage: "bell")
+            } footer: {
+                Text("Custom sounds can be any audio file macOS can play (MP3, M4A, WAV, AIFF). The file is copied into AgenticIDE's Application Support folder, so you can move or delete the original afterwards.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+
+            if let importError {
+                Section {
+                    Label(importError, systemImage: "exclamationmark.triangle.fill")
+                        .foregroundStyle(.red)
+                        .font(.callout)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+            }
+        }
+        .formStyle(.grouped)
+        .padding(.top, DS.Space.md)
+    }
+
+    private var customSoundFileName: String {
+        (customSoundPath as NSString).lastPathComponent
+    }
+
+    private func chooseCustomSound() {
+        let panel = NSOpenPanel()
+        panel.allowedContentTypes = [.audio]
+        panel.allowsMultipleSelection = false
+        panel.canChooseDirectories = false
+        panel.message = "Choose a sound to play when an agent finishes"
+        guard panel.runModal() == .OK, let url = panel.url else { return }
+        do {
+            customSoundPath = try CompletionSoundPlayer.importCustomSound(from: url)
+            soundName = CompletionSoundPlayer.customSoundToken
+            importError = nil
+            CompletionSoundPlayer.shared.play()
+        } catch {
+            importError = error.localizedDescription
         }
     }
 }

@@ -22,6 +22,15 @@ enum AppSettings {
         /// appended as a single-quoted positional argument, so the value is
         /// "everything before the prompt." Defaults to `claude -p`.
         static let askCommand = "ask.command"
+        /// Whether to play a sound when an agent finishes a turn
+        /// (TerminalTab status flips working → completed/failed).
+        static let completionSoundEnabled = "notifications.completionSoundEnabled"
+        /// Name of the completion sound: a system sound name (e.g. "Glass")
+        /// or `CompletionSoundPlayer.customSoundToken` for the imported file.
+        static let completionSoundName = "notifications.completionSoundName"
+        /// Absolute path of the imported custom sound inside
+        /// `~/Library/Application Support/AgenticIDE/sounds/`.
+        static let customCompletionSoundPath = "notifications.customCompletionSoundPath"
     }
 
     static var claudeDangerousSkipPermissions: Bool {
