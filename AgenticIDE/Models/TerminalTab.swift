@@ -60,7 +60,27 @@ final class TerminalTab: Identifiable, Hashable {
     /// Lifecycle status surfaced in the sidebar. Updated by terminal events
     /// dispatched from `GhosttyApp.actionCallback` and cleared when the user
     /// activates the tab (so they only see "Completed" once).
-    var status: TerminalTabStatus = .idle
+    var status: TerminalTabStatus = .idle {
+        didSet {
+            guard status != oldValue else { return }
+            if status == .working {
+                workingSince = Date()
+            } else {
+                // Leaving .working is the "agent finished a turn" moment —
+                // regardless of whether the signal came from a Stop hook,
+                // BEL, process exit, or the completion timer.
+                if oldValue == .working, status == .completed || status == .failed {
+                    CompletionSoundPlayer.shared.agentDidFinish()
+                }
+                workingSince = nil
+            }
+        }
+    }
+
+    /// Wall-clock moment this tab last entered `.working`. Drives the live
+    /// "AI has been working for…" counter in the sidebar; nil whenever the
+    /// tab isn't working, so the counter resets on every new turn.
+    var workingSince: Date?
 
     /// Pending working→completed transition. Claude (and most AI CLIs) emit
     /// OSC-9;4 SET/REMOVE in tight bursts during thinking and go silent
