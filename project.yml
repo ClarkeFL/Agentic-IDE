@@ -49,6 +49,10 @@ targets:
         CFBundleShortVersionString: $(MARKETING_VERSION)
         CFBundleVersion: $(CURRENT_PROJECT_VERSION)
         LSApplicationCategoryType: public.app-category.developer-tools
+        # Per-config display name (see AGENTICIDE_DISPLAY_NAME below) so TCC
+        # permission prompts and Finder distinguish the dev build ("AgenticIDE
+        # Dev") from the shipped app ("AgenticIDE").
+        CFBundleDisplayName: $(AGENTICIDE_DISPLAY_NAME)
         NSHumanReadableCopyright: ""
         NSMainStoryboardFile: ""
         NSPrincipalClass: NSApplication
@@ -71,6 +75,7 @@ targets:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.fabio.AgenticIDE
         PRODUCT_NAME: AgenticIDE
+        AGENTICIDE_DISPLAY_NAME: AgenticIDE
         ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
         # Manual signing across both configs. Debug uses the local
         # self-signed "AgenticIDE Dev" identity (created by
@@ -118,6 +123,14 @@ targets:
           # Access, Documents, etc) alive across rebuilds. Run
           # `Scripts/create-dev-signing-cert.sh` once before first build.
           CODE_SIGN_IDENTITY: "AgenticIDE Dev"
+          # Separate TCC identity for the dev build. macOS keys privacy
+          # grants by bundle id + code-signing requirement; with a shared
+          # bundle id, running the Dev-signed build invalidated the
+          # Release-signed app's Documents/Desktop grants (and vice versa),
+          # forcing a re-grant after every update. Distinct ids mean each
+          # build is granted once and never clobbers the other.
+          PRODUCT_BUNDLE_IDENTIFIER: com.fabio.AgenticIDE.dev
+          AGENTICIDE_DISPLAY_NAME: AgenticIDE Dev
         Release:
           # Local Release builds stay ad-hoc; CI overrides this to
           # "AgenticIDE Release" via xcodebuild flags after importing the

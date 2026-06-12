@@ -107,7 +107,14 @@ user** — don't try to bypass with raw push or rebase tricks.
 - **Debug**: signed with `"AgenticIDE Dev"`, a self-signed cert in the
   user's login keychain. Created by `Scripts/create-dev-signing-cert.sh`
   (run once per dev machine). Stable cert → stable Designated
-  Requirement → TCC grants persist across rebuilds.
+  Requirement → TCC grants persist across rebuilds. Debug also uses its
+  own bundle id (`com.fabio.AgenticIDE.dev`) and display name
+  ("AgenticIDE Dev") — TCC keys grants by bundle id + signature, so if
+  dev and release shared an id, running one invalidated the other's
+  Documents/Desktop grants. Side effect: dev builds have their own
+  UserDefaults domain; Application Support files (projects.json,
+  sessions.json) are still shared because that path is keyed by app
+  name, not bundle id.
 - **Release (CI)**: signed with `"AgenticIDE Release"`, a separate
   self-signed cert imported from the `RELEASE_CERT_P12_BASE64` repo
   secret. Generated locally by `Scripts/create-release-signing-cert.sh`,
@@ -154,7 +161,9 @@ xcodebuild -project AgenticIDE.xcodeproj -scheme AgenticIDE -configuration Debug
 pkill -f AgenticIDE; sleep 1; open ~/Library/Developer/Xcode/DerivedData/AgenticIDE-*/Build/Products/Debug/AgenticIDE.app
 
 # clear stored split-pane positions if PersistentSplitView changes
-defaults delete com.fabio.AgenticIDE "NSSplitView Subview Frames AgenticIDE.MainSplit"
+# (dev builds use the com.fabio.AgenticIDE.dev defaults domain; the
+# shipped app uses com.fabio.AgenticIDE)
+defaults delete com.fabio.AgenticIDE.dev "NSSplitView Subview Frames AgenticIDE.MainSplit"
 
 # wipe persisted projects + sessions
 rm ~/Library/Application\ Support/AgenticIDE/projects.json ~/Library/Application\ Support/AgenticIDE/sessions.json
