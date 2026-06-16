@@ -1,37 +1,27 @@
 import Foundation
 import Observation
 
-/// In-memory state for an active project: its open tabs and which one is
-/// focused. Created lazily by SessionManager on first activation, retained
-/// for the rest of the app's lifetime so terminals keep running across
-/// project switches.
+/// In-memory state for an active project: its workspaces and which one is
+/// focused. Created lazily by SessionManager on first activation, retained for
+/// the rest of the app's lifetime so terminals keep running across project (and
+/// workspace) switches.
+///
+/// A project owns several `Workspace`s; each is a grid of `WorkspaceCell`s, and
+/// each cell runs at most one `TerminalTab`. The live process lives in the
+/// terminal's Ghostty surface and survives detaching the view (switching away
+/// from the workspace), exactly like switching away from a project does.
 @Observable
 final class ProjectSession: Identifiable {
     let projectId: UUID
-    var tabs: [TerminalTab] = []
-    var activeTabId: UUID? {
+    var workspaces: [Workspace] = []
+    var activeWorkspaceId: UUID? {
         didSet {
             saveHook?()
-            clearStatusOnActiveTab()
+            clearStatusInActiveWorkspace()
         }
     }
 
-    /// When the user opens a tab whose status is one of the "got your
-    /// attention" states (completed / failed), drop it back to idle —
-    /// they've now seen the indicator. Working stays put because the AI
-    /// is still running and the indicator is still meaningful.
-    private func clearStatusOnActiveTab() {
-        guard let id = activeTabId,
-              let tab = tabs.first(where: { $0.id == id }) else { return }
-        switch tab.status {
-        case .completed, .failed:
-            tab.status = .idle
-        case .idle, .working:
-            break
-        }
-    }
-
-    /// Called whenever tabs/active-tab change in a way that should be
+    /// Called whenever workspace/cell state changes in a way that should be
     /// persisted. Set by SessionManager.
     @ObservationIgnored
     var saveHook: (() -> Void)?
@@ -40,65 +30,115 @@ final class ProjectSession: Identifiable {
         self.projectId = projectId
     }
 
-    var activeTab: TerminalTab? {
-        guard let id = activeTabId else { return nil }
-        return tabs.first(where: { $0.id == id })
+    var activeWorkspace: Workspace? {
+        guard let id = activeWorkspaceId else { return workspaces.first }
+        return workspaces.first(where: { $0.id == id }) ?? workspaces.first
     }
 
-    func addTab(_ tab: TerminalTab) {
-        tabs.append(tab)
-        activeTabId = tab.id
+    /// When a workspace is opened, drop any "got your attention" status
+    /// (completed / failed) on its cells back to idle — the user has now seen
+    /// the result. Working stays put because the agent is still running.
+    private func clearStatusInActiveWorkspace() {
+        guard let ws = activeWorkspace else { return }
+        for cell in ws.cells {
+            guard let tab = cell.terminal else { continue }
+            switch tab.status {
+            case .completed, .failed: tab.status = .idle
+            case .idle, .working: break
+            }
+        }
+    }
+
+    // MARK: - Workspaces
+
+    /// Creates a workspace with the chosen grid size and makes it active. We
+    /// deliberately do NOT auto-create a workspace on project selection — the
+    /// user picks a layout first (see `ProjectWorkspaceView`'s chooser), and
+    /// that choice calls this.
+    @discardableResult
+    func addWorkspace(rows: Int = 1, cols: Int = 1) -> Workspace {
+        let ws = Workspace(name: nextWorkspaceName())
+        if rows != 1 || cols != 1 { ws.resize(rows: rows, cols: cols) }
+        workspaces.append(ws)
+        activeWorkspaceId = ws.id
+        saveHook?()
+        return ws
+    }
+
+    func removeWorkspace(id: UUID) {
+        guard let idx = workspaces.firstIndex(where: { $0.id == id }) else { return }
+        let removed = workspaces.remove(at: idx)
+        for cell in removed.cells { cell.terminal?.view.tearDown() }
+
+        if activeWorkspaceId == id {
+            let newIdx = idx > 0 ? idx - 1 : 0
+            activeWorkspaceId = workspaces.indices.contains(newIdx) ? workspaces[newIdx].id : nil
+        }
         saveHook?()
     }
 
-    func closeTab(id: UUID) {
-        guard let idx = tabs.firstIndex(where: { $0.id == id }) else { return }
-
-        // Step 1: switch the active tab synchronously so the next render
-        // shows a different terminal. The closed tab is now invisible
-        // (opacity 0) even though it's still in the array.
-        if activeTabId == id {
-            if tabs.count > 1 {
-                let newIdx = idx > 0 ? idx - 1 : idx + 1
-                activeTabId = tabs[newIdx].id
-            } else {
-                activeTabId = nil
-            }
-        }
-
-        // Step 2: defer the actual array removal + ghostty teardown to the
-        // next runloop tick. The user-visible close is instant; the
-        // NSViewRepresentable detachment + surface_free happen off the
-        // critical path.
-        DispatchQueue.main.async { [weak self] in
-            guard let self else { return }
-            guard let i = self.tabs.firstIndex(where: { $0.id == id }) else { return }
-            let removed = self.tabs[i]
-            self.tabs.remove(at: i)
-            removed.view.tearDown()
-            self.saveHook?()
-        }
+    func renameWorkspace(id: UUID, to name: String) {
+        let trimmed = name.trimmingCharacters(in: .whitespaces)
+        guard !trimmed.isEmpty,
+              let ws = workspaces.first(where: { $0.id == id }) else { return }
+        ws.name = trimmed
+        saveHook?()
     }
 
-    func selectTab(at index: Int) {
-        guard tabs.indices.contains(index) else { return }
-        activeTabId = tabs[index].id
+    func resizeWorkspace(_ ws: Workspace, rows: Int, cols: Int) {
+        let dropped = ws.resize(rows: rows, cols: cols)
+        for cell in dropped { cell.terminal?.view.tearDown() }
+        saveHook?()
     }
 
-    /// Tell the manager that something not covered by a method (e.g. an
-    /// inline title rename) just changed, and to flush state to disk.
+    func toggleZoom(cellId: UUID, in ws: Workspace) {
+        ws.zoomedCellId = (ws.zoomedCellId == cellId) ? nil : cellId
+        saveHook?()
+    }
+
+    // MARK: - Cells
+
+    /// Place a freshly-built terminal into a cell, replacing whatever was there.
+    /// The caller (the launcher view) owns building the `TerminalTab` via
+    /// `PtyService` since that needs the project + store; the session wires the
+    /// smart-rename hook and persists.
+    func place(_ terminal: TerminalTab, icon: String?, in cell: WorkspaceCell) {
+        cell.terminal?.view.tearDown()
+        wireSmartRename(terminal)
+        cell.icon = icon
+        cell.terminal = terminal
+        saveHook?()
+    }
+
+    /// Close a cell's program, returning it to the launcher.
+    func closeCell(_ cell: WorkspaceCell) {
+        guard let tab = cell.terminal else { return }
+        cell.terminal = nil
+        cell.icon = nil
+        // Defer teardown one runloop turn so the visible swap to the launcher
+        // is instant and the Ghostty surface_free happens off the critical path.
+        DispatchQueue.main.async { tab.view.tearDown() }
+        saveHook?()
+    }
+
+    private func nextWorkspaceName() -> String {
+        "Workspace \(workspaces.count + 1)"
+    }
+
+    /// Tell the manager that something not covered by a method (e.g. an inline
+    /// rename) just changed, and to flush state to disk.
     func markDirty() { saveHook?() }
 
-    /// Installs the auto-rename hook on a tab's surface. When the user types
-    /// a line and presses Return, if the tab still has its default launcher
-    /// label (Claude / Codex / Run Server / shell), the title is replaced
-    /// with a truncated version of that line. Manual renames are preserved
-    /// because we only fire when the title still matches one of the defaults.
+    /// Installs the auto-rename hook on a tab's surface. When the user types a
+    /// line and presses Return, if the tab still has its default launcher label
+    /// (Claude / Codex / Run Server / shell), the title is replaced with a
+    /// truncated version of that line. Manual renames are preserved because we
+    /// only fire when the title still matches one of the defaults.
     func wireSmartRename(_ tab: TerminalTab) {
         tab.view.onUserSubmitLine = { [weak self, weak tab] line in
             guard let self, let tab else { return }
             let defaults: Set<String> = [
-                "Claude", "Codex", "Run Server",
+                "Run Server", "Claude", "Codex",
                 "zsh", "bash", "fish", "sh"
             ]
             guard defaults.contains(tab.title) else { return }

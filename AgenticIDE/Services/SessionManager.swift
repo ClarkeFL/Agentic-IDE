@@ -7,10 +7,14 @@ import OSLog
 /// lazily on first activation and retained for the rest of the app's lifetime
 /// so terminals keep running across project switches.
 ///
-/// Persistence: tab metadata (title, command, cwd, active id) is written to
-/// `sessions.json` under Application Support. On the next launch the manager
-/// restores the layout by re-spawning each tab's command — the live PTY
-/// processes themselves don't survive an app exit.
+/// Persistence: workspace + cell metadata (grid size, per-cell command/title/
+/// cwd) is written to `sessions.json` under Application Support. On the next
+/// launch the manager rebuilds each workspace and re-spawns each cell's
+/// command — the live PTY processes themselves don't survive an app exit.
+///
+/// Migration: this build introduced workspaces. An old `sessions.json` (a flat
+/// `[{tabs:[…]}]` array) no longer decodes into the new shape; `loadSnapshots`
+/// treats that as "no saved state" and starts fresh, overwriting on first save.
 @Observable
 final class SessionManager {
     private let log = Logger(subsystem: "com.fabio.AgenticIDE", category: "SessionManager")
@@ -69,6 +73,8 @@ final class SessionManager {
         sessions[projectId] = s
 
         s.saveHook = { [weak self] in self?.save() }
+        // No auto-seed: a project with no saved workspaces stays empty, and
+        // pane ④ shows the layout chooser until the user picks a grid size.
         scheduleRestoreIfNeeded(projectId: projectId, into: s)
         return s
     }
@@ -85,17 +91,31 @@ final class SessionManager {
                 return
             }
 
-            // Re-spawn each saved tab. New PIDs but the same logical tab.
-            for tabSnap in snapshot.tabs {
-                let cwd = tabSnap.workingDirectoryPath.map { URL(fileURLWithPath: $0) }
-                let cfg = SurfaceConfig(command: PtyService.commandEnsuringTerminalBootstrap(tabSnap.command),
-                                        workingDirectory: cwd,
-                                        env: PtyService.terminalEnvironment())
-                let tab = TerminalTab(id: tabSnap.id, title: tabSnap.title, config: cfg)
-                session.tabs.append(tab)
-                session.wireSmartRename(tab)
+            for wsSnap in snapshot.workspaces {
+                let cells: [WorkspaceCell] = wsSnap.cells.map { cellSnap in
+                    let cell = WorkspaceCell(id: cellSnap.id, icon: cellSnap.icon)
+                    if let command = cellSnap.command {
+                        let cwd = cellSnap.workingDirectoryPath.map { URL(fileURLWithPath: $0) }
+                        let cfg = SurfaceConfig(
+                            command: PtyService.commandEnsuringTerminalBootstrap(command),
+                            workingDirectory: cwd,
+                            env: PtyService.terminalEnvironment())
+                        let tab = TerminalTab(id: cellSnap.id,
+                                              title: cellSnap.title ?? "Terminal",
+                                              config: cfg)
+                        session.wireSmartRename(tab)
+                        cell.terminal = tab
+                    }
+                    return cell
+                }
+                let ws = Workspace(id: wsSnap.id,
+                                   name: wsSnap.name,
+                                   rows: wsSnap.rows,
+                                   cols: wsSnap.cols,
+                                   cells: cells)
+                session.workspaces.append(ws)
             }
-            session.activeTabId = snapshot.activeTabId
+            session.activeWorkspaceId = snapshot.activeWorkspaceId ?? session.workspaces.first?.id
             self.pendingSnapshots.removeValue(forKey: projectId)
             self.restoringProjectIds.remove(projectId)
         }
@@ -108,10 +128,23 @@ final class SessionManager {
         sessions[projectId]
     }
 
-    /// Cheap persisted tab count for projects that haven't been activated in
-    /// this run yet. Does not restore or spawn any terminal surfaces.
-    func savedTabCount(for projectId: UUID) -> Int {
-        pendingSnapshots[projectId]?.tabs.count ?? 0
+    /// The session + workspace whose grid contains a cell running the terminal
+    /// with this surface id. Used by the agent bridge to resolve "which cells
+    /// can the caller address / modify" — scoped to its own workspace.
+    func locate(surfaceId id: UUID) -> (session: ProjectSession, workspace: Workspace)? {
+        for (_, session) in sessions {
+            for ws in session.workspaces
+            where ws.cells.contains(where: { $0.terminal?.id == id }) {
+                return (session, ws)
+            }
+        }
+        return nil
+    }
+
+    /// Cheap persisted workspace count for projects that haven't been activated
+    /// in this run yet. Does not restore or spawn any terminal surfaces.
+    func savedWorkspaceCount(for projectId: UUID) -> Int {
+        pendingSnapshots[projectId]?.workspaces.count ?? 0
     }
 
     func discard(projectId: UUID) {
@@ -124,15 +157,10 @@ final class SessionManager {
 
     /// Schedules a debounced background write of the current state. Cheap to
     /// call — bursts of `markDirty()` from smart-rename collapse into one
-    /// fsync, and snapshots that hash identical to the last write are
-    /// skipped entirely.
+    /// fsync, and snapshots that hash identical to the last write are skipped.
     func save() {
         let snapshot = currentSnapshot()
         let hash = snapshot.contentHash
-        // Skip if nothing the encoder would emit has changed. activeTabId
-        // didSet still fires saveHook when tabs reshuffle (e.g. closeTab's
-        // pre-removal active reassignment) but the persisted shape is the
-        // same as what we'd write next tick.
         if hash == lastWrittenHash { return }
 
         pendingSave?.cancel()
@@ -159,24 +187,38 @@ final class SessionManager {
     private func currentSnapshot() -> [SessionSnapshot] {
         var all: [SessionSnapshot] = []
         for (projectId, session) in sessions {
-            let tabs = session.tabs.map { tab in
-                TabSnapshot(id: tab.id,
-                            title: tab.title,
-                            command: tab.command,
-                            workingDirectoryPath: tab.workingDirectoryPath)
+            guard Self.isPersistWorthy(session) else { continue }
+            let workspaces = session.workspaces.map { ws in
+                WorkspaceSnapshot(
+                    id: ws.id,
+                    name: ws.name,
+                    rows: ws.rows,
+                    cols: ws.cols,
+                    cells: ws.cells.map { cell in
+                        CellSnapshot(id: cell.id,
+                                     icon: cell.icon,
+                                     command: cell.terminal?.command,
+                                     title: cell.terminal?.title,
+                                     workingDirectoryPath: cell.terminal?.workingDirectoryPath)
+                    })
             }
-            // Don't write empty sessions — they're equivalent to "not started".
-            guard !tabs.isEmpty else { continue }
             all.append(SessionSnapshot(projectId: projectId,
-                                       activeTabId: session.activeTabId,
-                                       tabs: tabs))
+                                       activeWorkspaceId: session.activeWorkspaceId,
+                                       workspaces: workspaces))
         }
         // Preserve any snapshots we haven't restored yet (project never opened
         // in this run) so they survive next launch too.
-        for (id, snap) in pendingSnapshots where !all.contains(where: { $0.projectId == id && !$0.tabs.isEmpty }) {
+        for (id, snap) in pendingSnapshots where !all.contains(where: { $0.projectId == id }) {
             all.append(snap)
         }
         return all
+    }
+
+    /// Persist any project the user has set up at least one workspace for.
+    /// Projects that were only browsed (no workspace created) stay unsaved, so
+    /// next launch they show the layout chooser instead of a restored grid.
+    private static func isPersistWorthy(_ session: ProjectSession) -> Bool {
+        !session.workspaces.isEmpty
     }
 
     private static func write(_ all: [SessionSnapshot], to url: URL, log: Logger) {
@@ -198,7 +240,9 @@ final class SessionManager {
             pendingSnapshots = Dictionary(uniqueKeysWithValues: snapshots.map { ($0.projectId, $0) })
             log.info("Loaded \(snapshots.count) project session(s) from disk")
         } catch {
-            log.error("Failed to load sessions.json: \(error.localizedDescription)")
+            // Most likely an old (pre-workspaces) sessions.json. Start fresh —
+            // the first save overwrites it with the new shape.
+            log.info("No compatible sessions.json (\(error.localizedDescription)); starting fresh")
         }
     }
 }
@@ -206,15 +250,26 @@ final class SessionManager {
 /// Per-project snapshot persisted to disk.
 struct SessionSnapshot: Codable {
     var projectId: UUID
-    var activeTabId: UUID?
-    var tabs: [TabSnapshot]
+    var activeWorkspaceId: UUID?
+    var workspaces: [WorkspaceSnapshot]
 }
 
-/// Per-tab snapshot. Title + command + cwd is enough to recreate the surface.
-struct TabSnapshot: Codable {
+/// Per-workspace snapshot: grid shape + cells.
+struct WorkspaceSnapshot: Codable {
     var id: UUID
-    var title: String
+    var name: String
+    var rows: Int
+    var cols: Int
+    var cells: [CellSnapshot]
+}
+
+/// Per-cell snapshot. Command + cwd is enough to re-spawn the surface; kind +
+/// title keep the cell labelled before the process prints anything.
+struct CellSnapshot: Codable {
+    var id: UUID
+    var icon: String?
     var command: String?
+    var title: String?
     var workingDirectoryPath: String?
 }
 
@@ -228,13 +283,20 @@ extension Array where Element == SessionSnapshot {
         var hasher = Hasher()
         for snap in self {
             hasher.combine(snap.projectId)
-            hasher.combine(snap.activeTabId)
-            hasher.combine(snap.tabs.count)
-            for tab in snap.tabs {
-                hasher.combine(tab.id)
-                hasher.combine(tab.title)
-                hasher.combine(tab.command)
-                hasher.combine(tab.workingDirectoryPath)
+            hasher.combine(snap.activeWorkspaceId)
+            hasher.combine(snap.workspaces.count)
+            for ws in snap.workspaces {
+                hasher.combine(ws.id)
+                hasher.combine(ws.name)
+                hasher.combine(ws.rows)
+                hasher.combine(ws.cols)
+                for cell in ws.cells {
+                    hasher.combine(cell.id)
+                    hasher.combine(cell.icon)
+                    hasher.combine(cell.command)
+                    hasher.combine(cell.title)
+                    hasher.combine(cell.workingDirectoryPath)
+                }
             }
         }
         return hasher.finalize()

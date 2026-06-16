@@ -40,6 +40,13 @@ final class GhosttyApp {
             return
         }
         ghostty_config_load_default_files(cfg)
+        // Match the terminal background to the app's content surface so the
+        // embedded surface blends with the cell it sits in instead of showing
+        // a darker seam.
+        let bgLine = Self.appBackgroundConfigLine()
+        bgLine.withCString { ptr in
+            ghostty_config_load_string(cfg, ptr, UInt(strlen(ptr)), "agentide")
+        }
         ghostty_config_finalize(cfg)
 
         var rt = ghostty_runtime_config_s(
@@ -118,6 +125,23 @@ final class GhosttyApp {
         isDirectory = false
         let terminfoURL = url.deletingLastPathComponent().appendingPathComponent("terminfo", isDirectory: true)
         return fm.fileExists(atPath: terminfoURL.path, isDirectory: &isDirectory) && isDirectory.boolValue
+    }
+
+    /// A `background = RRGGBB` config line resolved from the app's content
+    /// surface colour (`textBackgroundColor`) in the current appearance, so the
+    /// terminal matches the cell around it.
+    private static func appBackgroundConfigLine() -> String {
+        let appearance = NSApp?.effectiveAppearance ?? NSApplication.shared.effectiveAppearance
+        var hex = "1e1e1e"
+        appearance.performAsCurrentDrawingAppearance {
+            if let c = NSColor.textBackgroundColor.usingColorSpace(.sRGB) {
+                hex = String(format: "%02x%02x%02x",
+                             Int((c.redComponent * 255).rounded()),
+                             Int((c.greenComponent * 255).rounded()),
+                             Int((c.blueComponent * 255).rounded()))
+            }
+        }
+        return "background = \(hex)"
     }
 
     private static func currentColorScheme() -> ghostty_color_scheme_e {

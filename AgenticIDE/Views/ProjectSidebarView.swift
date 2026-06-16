@@ -35,8 +35,19 @@ struct ProjectSidebarView: View {
             // below the traffic-light row, so reserving that inset made the
             // header read as centered instead of left-aligned.
             PaneHeader(leadingPadding: DS.Gutter.sidebar + DS.Space.sm,
-                       trailingPadding: DS.Space.md) {
-                PaneTitle("Projects", count: visibleCount)
+                       trailingPadding: DS.Space.sm) {
+                HStack(spacing: DS.Space.xxs) {
+                    PaneTitle("Projects", count: visibleCount)
+                    SidebarHeaderAddButton(createProject: createProject,
+                                           addProject: addProject)
+                    SidebarHeaderButton(systemName: "folder.badge.plus",
+                                        help: "New Group",
+                                        action: startNewGroup)
+                    SidebarHeaderButton(systemName: "arrow.triangle.2.circlepath",
+                                        help: "Check for Updates",
+                                        action: { updater.checkForUpdates() })
+                        .disabled(!updater.canCheckForUpdates)
+                }
             }
 
             // `.scrollIndicators(.hidden)` alone doesn't reclaim the
@@ -69,35 +80,11 @@ struct ProjectSidebarView: View {
             .animation(.easeOut(duration: 0.12), value: hoveredDropKey)
 
             Divider()
-            // Footer is three stacked rows on a single block: CPU on top,
-            // MEM (CPU/MEM are owned by `ResourceBar`'s VStack), then the
-            // action icons. All three buttons are icon-only — the labels
-            // were redundant given the tooltips, and dropping them lets
-            // the icons sit on a single tight row.
-            VStack(alignment: .leading, spacing: DS.Space.xs) {
-                ResourceBar()
-                HStack(spacing: DS.Space.sm) {
-                    SidebarProjectAddButton(createProject: createProject,
-                                            addProject: addProject)
-                    SidebarFooterButton(label: "",
-                                        systemName: "folder.badge.plus",
-                                        fillsWidth: true,
-                                        help: "New Group",
-                                        action: startNewGroup)
-                    // Direct-action update button — no dropdown. Settings
-                    // stays reachable via ⌘, and the standard "AgenticIDE
-                    // → Settings…" menu-bar item, so we don't lose access
-                    // by removing the gear menu from this footer.
-                    SidebarFooterButton(label: "",
-                                        systemName: "arrow.triangle.2.circlepath",
-                                        fillsWidth: true,
-                                        help: "Check for Updates",
-                                        action: { updater.checkForUpdates() })
-                        .disabled(!updater.canCheckForUpdates)
-                }
-            }
-            .padding(.horizontal, DS.Space.md)
-            .padding(.vertical, DS.Space.sm)
+            // Footer is just the CPU / MEM readout now — the add / new-group /
+            // update icons moved up next to the "Projects" header.
+            ResourceBar()
+                .padding(.horizontal, DS.Space.md)
+                .padding(.vertical, DS.Space.sm)
         }
         // Menu-bar commands (File → New Project / Add Existing Project) post
         // these; the sidebar owns the panels + store so it observes here.
@@ -289,18 +276,22 @@ struct ProjectSidebarView: View {
                 ProjectRow(project: project,
                            session: session,
                            isExpanded: isSelected,
-                           onSelectTab: { id in session.activeTabId = id },
-                           onCloseTab: { id in session.closeTab(id: id) },
-                           onRenameTab: { id, newTitle in
-                               guard let idx = session.tabs.firstIndex(where: { $0.id == id }) else { return }
-                               let trimmed = newTitle.trimmingCharacters(in: .whitespaces)
-                               guard !trimmed.isEmpty else { return }
-                               session.tabs[idx].title = trimmed
-                               session.markDirty()
-                           })
+                           onSelectWorkspace: { id in
+                               selectedProjectId = project.id
+                               session.activeWorkspaceId = id
+                           },
+                           onAddWorkspace: {
+                               // The "+ row" only shows on the selected (expanded)
+                               // project, so its pane ④ is mounted and will catch
+                               // this and show the layout chooser.
+                               selectedProjectId = project.id
+                               NotificationCenter.default.post(name: .newWorkspace, object: nil)
+                           },
+                           onCloseWorkspace: { id in session.removeWorkspace(id: id) },
+                           onRenameWorkspace: { id, name in session.renameWorkspace(id: id, to: name) })
             } else {
                 ProjectSummaryRow(project: project,
-                                  savedTabCount: sessions.savedTabCount(for: project.id))
+                                  savedWorkspaceCount: sessions.savedWorkspaceCount(for: project.id))
             }
         }
             .padding(.horizontal, DS.Space.sm)
@@ -511,67 +502,35 @@ private struct DropZoneHighlight: ViewModifier {
     }
 }
 
-private struct SidebarFooterButton: View {
-    let label: String
+/// Compact icon button sitting in the "Projects" header — just the glyph with a
+/// small hit area and a hover background, no big pill.
+private struct SidebarHeaderButton: View {
     let systemName: String
-    let fillsWidth: Bool
     let help: String
     let action: () -> Void
 
     @State private var isHovered = false
-    @State private var isPressed = false
-
-    /// True when this button has a visible text label. The icon-only path
-    /// (no label, fillsWidth) shows just the icon centred in a stretched
-    /// pill — used by the footer's three action buttons so they tile the
-    /// row evenly.
-    private var hasLabel: Bool { fillsWidth && !label.isEmpty }
 
     var body: some View {
         Button(action: action) {
-            HStack(spacing: DS.Space.sm) {
-                Image(systemName: systemName)
-                    .font(DS.Font.bodySemibold)
-                if hasLabel {
-                    Text(label)
-                        .font(DS.Font.bodyMedium)
-                    Spacer(minLength: 0)
-                }
-            }
-            .padding(.horizontal, hasLabel ? DS.Space.md : 0)
-            .padding(.vertical, DS.Space.xs + 1)
-            .frame(maxWidth: fillsWidth ? .infinity : nil,
-                   alignment: hasLabel ? .leading : .center)
-            // Pin an explicit height so the icon-only footer pills match the
-            // menu pill exactly (the menu's borderlessButton style won't grow
-            // from vertical padding, so both sides agree on a fixed height).
-            .frame(width: fillsWidth ? nil : DS.Control.large,
-                   height: DS.Control.large)
-            .background(
-                RoundedRectangle(cornerRadius: DS.Radius.lg, style: .continuous)
-                    .fill(Color.primary.opacity(isPressed ? 0.16 : (isHovered ? 0.10 : 0.04)))
-            )
-            .overlay(
-                RoundedRectangle(cornerRadius: DS.Radius.lg, style: .continuous)
-                    .strokeBorder(Color.primary.opacity(isHovered ? 0.18 : 0.10), lineWidth: 0.5)
-            )
-            .contentShape(Rectangle())
-            .scaleEffect(isPressed ? 0.97 : 1.0)
-            .animation(.easeOut(duration: 0.08), value: isHovered)
-            .animation(.easeOut(duration: 0.08), value: isPressed)
+            Image(systemName: systemName)
+                .font(.system(size: 11, weight: .semibold))
+                .frame(width: 22, height: 22)
+                .background(
+                    RoundedRectangle(cornerRadius: DS.Radius.md, style: .continuous)
+                        .fill(Color.primary.opacity(isHovered ? 0.10 : 0.0))
+                )
+                .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
         .onHover { isHovered = $0 }
-        .simultaneousGesture(
-            DragGesture(minimumDistance: 0)
-                .onChanged { _ in isPressed = true }
-                .onEnded { _ in isPressed = false }
-        )
         .help(help)
     }
 }
 
-private struct SidebarProjectAddButton: View {
+/// The "+" header button — same compact look, but opens the New / Add Existing
+/// project popover instead of firing a single action.
+private struct SidebarHeaderAddButton: View {
     let createProject: () -> Void
     let addProject: () -> Void
 
@@ -583,19 +542,15 @@ private struct SidebarProjectAddButton: View {
             isPresented.toggle()
         } label: {
             Image(systemName: "plus")
-                .font(DS.Font.bodySemibold)
-                .frame(maxWidth: .infinity, minHeight: DS.Control.large, maxHeight: DS.Control.large)
+                .font(.system(size: 11, weight: .semibold))
+                .frame(width: 22, height: 22)
+                .background(
+                    RoundedRectangle(cornerRadius: DS.Radius.md, style: .continuous)
+                        .fill(Color.primary.opacity(isHovered ? 0.10 : 0.0))
+                )
                 .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
-        .background(
-            RoundedRectangle(cornerRadius: DS.Radius.lg, style: .continuous)
-                .fill(Color.primary.opacity(isHovered ? 0.10 : 0.04))
-        )
-        .overlay(
-            RoundedRectangle(cornerRadius: DS.Radius.lg, style: .continuous)
-                .strokeBorder(Color.primary.opacity(isHovered ? 0.18 : 0.10), lineWidth: 0.5)
-        )
         .onHover { isHovered = $0 }
         .popover(isPresented: $isPresented, arrowEdge: .bottom) {
             VStack(alignment: .leading, spacing: DS.Space.xs) {
@@ -658,12 +613,12 @@ private struct SidebarIconButton: View {
 
 private struct ProjectSummaryRow: View {
     let project: Project
-    let savedTabCount: Int
+    let savedWorkspaceCount: Int
 
     var body: some View {
         VStack(alignment: .leading, spacing: DS.Space.xs) {
             HStack(spacing: DS.Space.sm) {
-                if savedTabCount > 0 {
+                if savedWorkspaceCount > 0 {
                     Image(systemName: "chevron.right")
                         .font(.system(size: DS.Icon.micro, weight: .bold))
                         .foregroundStyle(.secondary)
@@ -678,13 +633,12 @@ private struct ProjectSummaryRow: View {
             }
 
             HStack(spacing: DS.Space.sm) {
-                if savedTabCount > 0 {
-                    Label(tabCountLabel, systemImage: "rectangle.stack")
+                if savedWorkspaceCount > 0 {
+                    Label(workspaceCountLabel, systemImage: "square.grid.2x2")
                         .labelStyle(.titleAndIcon)
                         .font(.caption2)
                         .foregroundStyle(.secondary)
-                }
-                if savedTabCount == 0 {
+                } else {
                     Text("No activity")
                         .font(.caption2)
                         .foregroundStyle(.tertiary)
@@ -695,8 +649,8 @@ private struct ProjectSummaryRow: View {
         .padding(.vertical, DS.Space.xxs)
     }
 
-    private var tabCountLabel: String {
-        savedTabCount == 1 ? "1 terminal" : "\(savedTabCount) terminals"
+    private var workspaceCountLabel: String {
+        savedWorkspaceCount == 1 ? "1 workspace" : "\(savedWorkspaceCount) workspaces"
     }
 }
 
@@ -704,14 +658,15 @@ private struct ProjectRow: View {
     let project: Project
     @Bindable var session: ProjectSession
     let isExpanded: Bool
-    let onSelectTab: (UUID) -> Void
-    let onCloseTab: (UUID) -> Void
-    let onRenameTab: (UUID, String) -> Void
+    let onSelectWorkspace: (UUID) -> Void
+    let onAddWorkspace: () -> Void
+    let onCloseWorkspace: (UUID) -> Void
+    let onRenameWorkspace: (UUID, String) -> Void
 
     var body: some View {
         VStack(alignment: .leading, spacing: DS.Space.xs) {
             HStack(spacing: DS.Space.sm) {
-                if !session.tabs.isEmpty {
+                if !session.workspaces.isEmpty {
                     Image(systemName: "chevron.right")
                         .font(.system(size: DS.Icon.micro, weight: .bold))
                         .foregroundStyle(.secondary)
@@ -724,42 +679,37 @@ private struct ProjectRow: View {
                     .font(.body.weight(.medium))
                     .lineLimit(1)
                 Spacer(minLength: 4)
-                // Per-terminal status dots, only on collapsed rows. When the
-                // project is expanded the per-tab rows below already show
-                // their own dot+label, so a duplicate header indicator just
-                // crowds the title. Order matches tab order so the user can
-                // map "third dot is green" to the third terminal in the list.
-                if !isExpanded, !session.tabs.isEmpty {
-                    HStack(spacing: 3) {
-                        ForEach(session.tabs) { tab in
-                            Circle()
-                                .fill(dotColor(for: tab.status))
-                                .frame(width: 7, height: 7) // status dot — keep tight
-                                .help(dotHelp(for: tab))
+                // Live mini-grids — collapsed rows only. One glyph per workspace
+                // (capped) shows each grid's shape + per-cell status at a glance.
+                // When expanded, each workspace row shows its own glyph.
+                if !isExpanded, !session.workspaces.isEmpty {
+                    HStack(spacing: DS.Space.sm) {
+                        ForEach(session.workspaces.prefix(3)) { ws in
+                            WorkspaceGridGlyph(workspace: ws, square: 7, gap: 1.5, corner: 2)
                         }
                     }
                 }
             }
 
-            // Summary line — terminal count + live agent-work timer. Lives
+            // Summary line — workspace count + live agent-work timer. Lives
             // below the title so the row height doesn't shift when expanding/
-            // collapsing children. The timer counts up from the moment a tab
+            // collapsing children. The timer counts up from the moment a cell
             // entered `.working` (set by agent hooks / terminal events) and
             // disappears — resetting — once the agent finishes.
             HStack(spacing: DS.Space.sm) {
-                if !session.tabs.isEmpty {
-                    Label(tabCountLabel, systemImage: "rectangle.stack")
+                if !session.workspaces.isEmpty {
+                    Label(workspaceCountLabel, systemImage: "square.grid.2x2")
                         .labelStyle(.titleAndIcon)
                         .font(.caption2)
                         .foregroundStyle(.secondary)
                 }
                 if let since = earliestWorkingSince {
-                    if !session.tabs.isEmpty {
+                    if !session.workspaces.isEmpty {
                         Text("·").font(.caption2).foregroundStyle(.tertiary)
                     }
                     WorkingTimerLabel(since: since)
                 }
-                if session.tabs.isEmpty {
+                if session.workspaces.isEmpty {
                     Text("No activity")
                         .font(.caption2)
                         .foregroundStyle(.tertiary)
@@ -772,26 +722,22 @@ private struct ProjectRow: View {
                 Spacer(minLength: 0)
             }
 
-            // Terminal children — only inserted into the layout when shown.
-            // Conditional rendering (vs the old `.frame(maxHeight: 0)`)
-            // means the parent VStack doesn't reserve its `spacing` slot
-            // when collapsed, so the blue tile's top/bottom padding stay
-            // symmetric.
-            //
-            // Horizontal inset is small + symmetric: just enough to read
-            // as nested under the project, not so much that the inner blue
-            // row is dwarfed inside the outer one. Aligns roughly with
-            // where the title text sits (folder-icon column) for a clean
-            // vertical edge running down the tile.
-            if showChildren {
+            // Workspace children — only inserted into the layout when expanded.
+            // Conditional rendering means the parent VStack doesn't reserve its
+            // `spacing` slot when collapsed, so the blue tile's top/bottom
+            // padding stay symmetric. The asymmetric leading inset reads as
+            // nesting under the project; the small trailing inset keeps the
+            // inner tiles off the outer tile's border.
+            if isExpanded {
                 VStack(spacing: 1) {
-                    ForEach(session.tabs) { tab in
-                        TerminalChildRow(tab: tab,
-                                         isActive: session.activeTabId == tab.id,
-                                         onSelect: { onSelectTab(tab.id) },
-                                         onClose: { onCloseTab(tab.id) },
-                                         onRename: { newName in onRenameTab(tab.id, newName) })
+                    ForEach(session.workspaces) { ws in
+                        WorkspaceChildRow(workspace: ws,
+                                          isActive: session.activeWorkspaceId == ws.id,
+                                          onSelect: { onSelectWorkspace(ws.id) },
+                                          onClose: { onCloseWorkspace(ws.id) },
+                                          onRename: { newName in onRenameWorkspace(ws.id, newName) })
                     }
+                    AddWorkspaceRow(action: onAddWorkspace)
                 }
                 // Asymmetric on purpose: a clear hierarchy indent on the
                 // leading side (so the row reads as a child of the project)
@@ -805,43 +751,25 @@ private struct ProjectRow: View {
             }
         }
         .padding(.vertical, DS.Space.xxs)
-        .animation(.spring(response: 0.40, dampingFraction: 0.85), value: session.tabs.map(\.id))
+        .animation(.spring(response: 0.40, dampingFraction: 0.85), value: session.workspaces.map(\.id))
         .animation(.easeInOut(duration: 0.18), value: isExpanded)
     }
 
-    private var showChildren: Bool {
-        isExpanded && !session.tabs.isEmpty
+    private var allRunningCells: [WorkspaceCell] {
+        session.workspaces.flatMap { $0.runningCells }
     }
 
-    private var tabCountLabel: String {
-        let n = session.tabs.count
-        return n == 1 ? "1 terminal" : "\(n) terminals"
+    private var workspaceCountLabel: String {
+        let n = session.workspaces.count
+        return n == 1 ? "1 workspace" : "\(n) workspaces"
     }
 
-    /// Color for one terminal's dot on the collapsed row. Idle tabs fall back
-    /// to a muted neutral so the user can still count "four terminals = four
-    /// dots" — the active-status colours then pop against that baseline.
-    private func dotColor(for status: TerminalTabStatus) -> Color {
-        if let info = TerminalStatusBadge.info(for: status) {
-            return info.color
-        }
-        return Color.secondary.opacity(0.45)
-    }
-
-    /// Tooltip for one dot — names the tab so hovering disambiguates which
-    /// terminal a coloured dot belongs to.
-    private func dotHelp(for tab: TerminalTab) -> String {
-        let label = TerminalStatusBadge.info(for: tab.status)?.label ?? "Idle"
-        return "\(tab.title) — \(label)"
-    }
-
-    /// Start time of the longest-running working tab in this project, or nil
-    /// when no agent is working. Multiple working tabs collapse into one
-    /// timer — the earliest start — so the row answers "how long has AI been
-    /// busy here" rather than listing one timer per terminal.
+    /// Start time of the longest-running working cell in this project, or nil
+    /// when no agent is working. Multiple working cells collapse into one timer
+    /// (the earliest start) so the row answers "how long has AI been busy here".
     private var earliestWorkingSince: Date? {
-        session.tabs
-            .compactMap { $0.status == .working ? $0.workingSince : nil }
+        allRunningCells
+            .compactMap { $0.terminal?.status == .working ? $0.terminal?.workingSince : nil }
             .min()
     }
 }
@@ -873,10 +801,10 @@ private struct WorkingTimerLabel: View {
     }
 }
 
-/// One terminal row nested under a project. Click selects, hover reveals close,
-/// double-click swaps the name into an inline TextField.
-private struct TerminalChildRow: View {
-    @Bindable var tab: TerminalTab
+/// One workspace row nested under a project. Click selects + activates it,
+/// hover reveals close, double-click swaps the name into an inline TextField.
+private struct WorkspaceChildRow: View {
+    @Bindable var workspace: Workspace
     let isActive: Bool
     let onSelect: () -> Void
     let onClose: () -> Void
@@ -885,37 +813,14 @@ private struct TerminalChildRow: View {
     @State private var isHovered = false
     @State private var isEditing = false
     @State private var draftName: String = ""
-    @State private var pulseOpacity: Double = 1.0
-    /// Guards against stacking `repeatForever` animations on the same
-    /// property when both `.onAppear` and `.onChange(of: tab.status)` would
-    /// otherwise call `withAnimation` in quick succession (a working tab's
-    /// row reappearing after a project switch is the common trigger).
-    @State private var isPulsing: Bool = false
     @FocusState private var nameFieldFocused: Bool
 
     var body: some View {
-        // The selectable name area lives in an HStack with a fixed-width
-        // trailing spacer so the title doesn't shift when the close button
-        // appears on hover. The close button is overlaid on top so its taps
-        // aren't fighting the row's onTapGesture for select/rename.
         HStack(spacing: DS.Space.sm) {
-            // Status dot replaces the generic terminal glyph when something
-            // interesting is happening (working / completed /
-            // failed) — keeps the row at the same height but communicates
-            // state at a glance. When idle we fall back to the terminal icon.
-            if let info = TerminalStatusBadge.info(for: tab.status) {
-                Circle()
-                    .fill(info.color)
-                    .frame(width: 7, height: 7) // status dot — keep tight
-                    .frame(width: DS.Tree.iconColumn - 2)
-                    .opacity(tab.status == .working ? pulseOpacity : 1.0)
-                    .help(info.label)
-            } else {
-                Image(systemName: "terminal")
-                    .font(DS.Font.control)
-                    .foregroundStyle(.secondary)
-                    .frame(width: DS.Tree.iconColumn - 2)
-            }
+            // Live mini-grid — encodes the layout AND each cell's status
+            // (blue = working, green = done), replacing the old icon + dots.
+            WorkspaceGridGlyph(workspace: workspace, square: 4.5, gap: 1.2)
+                .frame(width: 24, alignment: .leading)
 
             if isEditing {
                 TextField("", text: $draftName)
@@ -925,18 +830,10 @@ private struct TerminalChildRow: View {
                     .onSubmit(commitRename)
                     .onExitCommand { isEditing = false }
             } else {
-                HStack(spacing: DS.Space.xs + 1) {
-                    if let info = TerminalStatusBadge.info(for: tab.status) {
-                        Text(info.label)
-                            .font(DS.Font.bodySemibold)
-                            .foregroundStyle(info.color)
-                            .lineLimit(1)
-                    }
-                    Text(tab.title)
-                        .font(.system(size: DS.FontSize.body, weight: isActive ? .semibold : .regular))
-                        .foregroundStyle(isActive ? .primary : .secondary)
-                        .lineLimit(1)
-                }
+                Text(workspace.name)
+                    .font(.system(size: DS.FontSize.body, weight: isActive ? .semibold : .regular))
+                    .foregroundStyle(isActive ? .primary : .secondary)
+                    .lineLimit(1)
             }
 
             Spacer(minLength: DS.Space.xs)
@@ -974,26 +871,18 @@ private struct TerminalChildRow: View {
             .padding(.trailing, DS.Space.sm + 1)
             .opacity(isHovered && !isEditing ? 1 : 0)
             .allowsHitTesting(isHovered && !isEditing)
-            .help("Close terminal")
+            .help("Close workspace")
         }
         .onHover { isHovered = $0 }
         .contextMenu {
             Button("Rename…") { startRename() }
             Divider()
-            Button("Close", role: .destructive) { onClose() }
-        }
-        .onChange(of: tab.status) { _, newValue in
-            updatePulse(working: newValue == .working)
-        }
-        .onAppear {
-            // Re-establish the pulse if the tab was already working when the
-            // row appeared (e.g. after switching between projects).
-            updatePulse(working: tab.status == .working)
+            Button("Close Workspace", role: .destructive) { onClose() }
         }
     }
 
     private func startRename() {
-        draftName = tab.title
+        draftName = workspace.name
         isEditing = true
         DispatchQueue.main.async { nameFieldFocused = true }
     }
@@ -1003,21 +892,37 @@ private struct TerminalChildRow: View {
         if !trimmed.isEmpty { onRename(trimmed) }
         isEditing = false
     }
+}
 
-    /// Single entry point for starting/stopping the working-state pulse.
-    /// Idempotent — repeated calls with the same `working` value short-
-    /// circuit so a re-render of an already-pulsing row doesn't add
-    /// another `repeatForever` animation onto `pulseOpacity`.
-    private func updatePulse(working: Bool) {
-        guard working != isPulsing else { return }
-        isPulsing = working
-        if working {
-            withAnimation(.easeInOut(duration: 0.9).repeatForever(autoreverses: true)) {
-                pulseOpacity = 0.35
+/// "New Workspace" affordance shown at the bottom of an expanded project.
+private struct AddWorkspaceRow: View {
+    let action: () -> Void
+    @State private var isHovered = false
+
+    var body: some View {
+        Button(action: action) {
+            HStack(spacing: DS.Space.sm) {
+                Image(systemName: "plus")
+                    .font(DS.Font.control)
+                    .foregroundStyle(.secondary)
+                    .frame(width: DS.Tree.iconColumn - 2)
+                Text("New Workspace")
+                    .font(.system(size: DS.FontSize.body))
+                    .foregroundStyle(.secondary)
+                Spacer(minLength: 0)
             }
-        } else {
-            withAnimation(.easeInOut(duration: 0.2)) { pulseOpacity = 1.0 }
+            .padding(.horizontal, DS.Space.sm)
+            .padding(.vertical, DS.Space.xs)
+            .frame(minHeight: DS.Control.standard)
+            .background(
+                RoundedRectangle(cornerRadius: DS.Radius.md, style: .continuous)
+                    .fill(isHovered ? Color.primary.opacity(0.06) : .clear)
+            )
+            .contentShape(Rectangle())
         }
+        .buttonStyle(.plain)
+        .onHover { isHovered = $0 }
+        .help("Add a workspace to this project")
     }
 }
 

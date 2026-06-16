@@ -19,12 +19,25 @@ struct PersistentSplitView<P1: View, P2: View, P3: View, P4: View>: View {
     let pane2Min: CGFloat
     let pane2Initial: CGFloat
     let pane2Max: CGFloat
+    /// When true, pane 2 and its divider are removed from the layout and
+    /// replaced by a thin reopen rail; the freed width flows to panes 3/4.
+    let pane2Collapsed: Bool
+    /// Invoked when the user clicks the reopen rail to bring pane 2 back.
+    let onExpandPane2: (() -> Void)?
+    /// When this changes, pane 2 animates to the new width (still draggable
+    /// afterward). Used to widen the Explorer when a file opens and shrink it
+    /// back when none are. nil = leave pane 2 at its persisted width.
+    let pane2PreferredWidth: CGFloat?
 
     let pane3Min: CGFloat
     /// When true, pane 3 and its preceding divider are removed from the
     /// layout and pane 4 absorbs the freed width. Used by `MainWindow` to
     /// auto-hide the editor pane when no files are open.
     let pane3Collapsed: Bool
+
+    /// Fixed width of the thin rail shown in place of a collapsed pane 2.
+    /// Computed (not stored) — generic types can't have stored statics.
+    static var railWidth: CGFloat { 18 }
 
     let pane4Min: CGFloat
     let pane4Initial: CGFloat
@@ -50,6 +63,9 @@ struct PersistentSplitView<P1: View, P2: View, P3: View, P4: View>: View {
          pane2Min: CGFloat = 180,
          pane2Initial: CGFloat = 240,
          pane2Max: CGFloat = 480,
+         pane2Collapsed: Bool = false,
+         onExpandPane2: (() -> Void)? = nil,
+         pane2PreferredWidth: CGFloat? = nil,
          pane3Min: CGFloat = 320,
          pane3Collapsed: Bool = false,
          pane4Min: CGFloat = 280,
@@ -66,6 +82,9 @@ struct PersistentSplitView<P1: View, P2: View, P3: View, P4: View>: View {
         self.pane2Min = pane2Min
         self.pane2Initial = pane2Initial
         self.pane2Max = pane2Max
+        self.pane2Collapsed = pane2Collapsed
+        self.onExpandPane2 = onExpandPane2
+        self.pane2PreferredWidth = pane2PreferredWidth
         self.pane3Min = pane3Min
         self.pane3Collapsed = pane3Collapsed
         self.pane4Min = pane4Min
@@ -91,17 +110,11 @@ struct PersistentSplitView<P1: View, P2: View, P3: View, P4: View>: View {
         GeometryReader { geo in
             let total = geo.size.width
             // Each DividerView's ZStack stretches to its widest child —
-            // the 9pt invisible hit-target — so it reserves 9pt of layout
-            // space, NOT the 1pt visible separator. Budgeting 1pt here was
-            // the source of pane 4 overflowing the window's right edge by
-            // 24pt (3 dividers × 8pt of unaccounted-for space) and
-            // clipping the speaker button + Claude's banner text.
-            //
-            // When pane 3 is collapsed we drop its preceding divider too,
-            // so only two dividers exist in the layout.
-            let dividerCount: CGFloat = pane3Collapsed ? 2 : 3
-            let dividers = DividerView.layoutWidth * dividerCount
-            let widths = computeWidths(total: total, dividers: dividers)
+            // the 9pt invisible hit-target — so it reserves that much layout
+            // space, NOT the 1pt visible separator. `dividerCount` drops a
+            // divider for each collapsed pane; a collapsed pane 2 is replaced
+            // by a fixed-width reopen rail instead.
+            let widths = computeWidths(total: total)
             let w1 = widths.p1
             let w2 = widths.p2
             let w3 = widths.p3
@@ -116,24 +129,24 @@ struct PersistentSplitView<P1: View, P2: View, P3: View, P4: View>: View {
                             onDragStart: { isDragging = true },
                             onDragEnd: { persist(); isDragging = false })
 
-                pane2()
-                    .frame(width: w2)
-                    .clipped()
+                if pane2Collapsed {
+                    Pane2ReopenRail(width: Self.railWidth) { onExpandPane2?() }
+                } else {
+                    pane2()
+                        .frame(width: w2)
+                        .clipped()
 
-                if !pane3Collapsed {
                     DividerView(onDrag: { delta in dragPane2(delta: delta, total: total) },
                                 onDragStart: { isDragging = true },
                                 onDragEnd: { persist(); isDragging = false })
+                }
 
+                if !pane3Collapsed {
                     pane3()
                         .frame(width: w3)
                         .clipped()
 
                     DividerView(onDrag: { delta in dragPane4(delta: delta, total: total) },
-                                onDragStart: { isDragging = true },
-                                onDragEnd: { persist(); isDragging = false })
-                } else {
-                    DividerView(onDrag: { delta in dragPane2(delta: delta, total: total) },
                                 onDragStart: { isDragging = true },
                                 onDragEnd: { persist(); isDragging = false })
                 }
@@ -150,6 +163,16 @@ struct PersistentSplitView<P1: View, P2: View, P3: View, P4: View>: View {
             .clipped()
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
+        // When the preferred width changes (e.g. a file opens → widen the
+        // Explorer, or the last file closes → shrink it), animate pane 2 to it.
+        // The user can still drag afterward.
+        .onChange(of: pane2PreferredWidth) { _, newValue in
+            guard let target = newValue else { return }
+            withAnimation(.easeInOut(duration: 0.22)) {
+                pane2Width = clamp(target, min: pane2Min, max: pane2Max)
+            }
+            UserDefaults.standard.set(Double(pane2Width), forKey: "\(autosaveName).pane2Width")
+        }
     }
 
     /// Resolve the four pane widths so they sum exactly to `total - dividers`,
@@ -164,12 +187,21 @@ struct PersistentSplitView<P1: View, P2: View, P3: View, P4: View>: View {
     /// pane has bottomed out does pane 3 itself dip below its min. The old
     /// layout produced an overflow on windows whose mins summed past the
     /// window width, clipping content (visibly the terminal pane).
-    private func computeWidths(total: CGFloat, dividers: CGFloat) -> (p1: CGFloat, p2: CGFloat, p3: CGFloat, p4: CGFloat) {
-        let usable = max(0, total - dividers)
+    /// Number of draggable dividers currently in the layout: one after pane 1,
+    /// plus one after each of panes 2/3 that isn't collapsed.
+    private var dividerCount: CGFloat {
+        1 + (pane2Collapsed ? 0 : 1) + (pane3Collapsed ? 0 : 1)
+    }
+
+    private func computeWidths(total: CGFloat) -> (p1: CGFloat, p2: CGFloat, p3: CGFloat, p4: CGFloat) {
+        let dividers = DividerView.layoutWidth * dividerCount
+        // A collapsed pane 2 reserves a fixed-width rail instead of a pane.
+        let rail = pane2Collapsed ? Self.railWidth : 0
+        let usable = max(0, total - dividers - rail)
         var w1 = clamp(pane1Width, min: pane1Min, max: pane1Max)
-        var w2 = clamp(pane2Width, min: pane2Min, max: pane2Max)
+        var w2 = pane2Collapsed ? 0 : clamp(pane2Width, min: pane2Min, max: pane2Max)
         var w4 = clamp(pane4Width, min: pane4Min, max: pane4Max)
-        var w3 = max(pane3Min, usable - w1 - w2 - w4)
+        var w3 = pane3Collapsed ? 0 : max(pane3Min, usable - w1 - w2 - w4)
 
         // Collapsed mode: pane 3 is zero-width and pane 4 swallows the
         // freed space (so the layout still fills the window). `pane4Max`
@@ -234,17 +266,19 @@ struct PersistentSplitView<P1: View, P2: View, P3: View, P4: View>: View {
     private func dragPane1(delta: CGFloat, total: CGFloat) {
         let start = dragStart1 ?? pane1Width
         if dragStart1 == nil { dragStart1 = start }
-        let dividers = DividerView.layoutWidth * (pane3Collapsed ? 2 : 3)
+        let dividers = DividerView.layoutWidth * dividerCount
+        let pane2Region = pane2Collapsed ? Self.railWidth : pane2Width
         let elasticMinimum = pane3Collapsed ? pane4Min : pane3Min + pane4Width
-        let maxAllowed = total - pane2Width - elasticMinimum - dividers
+        let maxAllowed = total - pane2Region - elasticMinimum - dividers
         pane1Width = clamp(start + delta, min: pane1Min, max: min(pane1Max, maxAllowed))
     }
 
-    /// Positive delta = mouse moved right = pane 2 grows.
+    /// Positive delta = mouse moved right = pane 2 grows. Only reachable when
+    /// pane 2 is visible (the collapsed rail has no divider).
     private func dragPane2(delta: CGFloat, total: CGFloat) {
         let start = dragStart2 ?? pane2Width
         if dragStart2 == nil { dragStart2 = start }
-        let dividers = DividerView.layoutWidth * (pane3Collapsed ? 2 : 3)
+        let dividers = DividerView.layoutWidth * dividerCount
         let elasticMinimum = pane3Collapsed ? pane4Min : pane3Min + pane4Width
         let maxAllowed = total - pane1Width - elasticMinimum - dividers
         pane2Width = clamp(start + delta, min: pane2Min, max: min(pane2Max, maxAllowed))
@@ -254,8 +288,9 @@ struct PersistentSplitView<P1: View, P2: View, P3: View, P4: View>: View {
     private func dragPane4(delta: CGFloat, total: CGFloat) {
         let start = dragStart4 ?? pane4Width
         if dragStart4 == nil { dragStart4 = start }
-        let dividers = DividerView.layoutWidth * (pane3Collapsed ? 2 : 3)
-        let maxAllowed = total - pane1Width - pane2Width - pane3Min - dividers
+        let dividers = DividerView.layoutWidth * dividerCount
+        let pane2Region = pane2Collapsed ? Self.railWidth : pane2Width
+        let maxAllowed = total - pane1Width - pane2Region - pane3Min - dividers
         pane4Width = clamp(start - delta, min: pane4Min, max: min(pane4Max, maxAllowed))
     }
 
@@ -273,15 +308,50 @@ struct PersistentSplitView<P1: View, P2: View, P3: View, P4: View>: View {
     }
 }
 
+/// Thin clickable rail shown where pane 2 was, when it's collapsed. Clicking
+/// it (or the ⌘⌥B shortcut) brings the file-tree pane back.
+private struct Pane2ReopenRail: View {
+    let width: CGFloat
+    let onExpand: () -> Void
+
+    @State private var isHovered = false
+
+    var body: some View {
+        VStack(spacing: 0) {
+            // Just the toggle, sitting in the header band at the top. No
+            // trailing border and no material — the rail blends into the
+            // surrounding panes so the collapsed file tree is unobtrusive.
+            Button(action: onExpand) {
+                Image(systemName: "sidebar.left")
+                    .font(.system(size: DS.Icon.small, weight: .semibold))
+                    .foregroundStyle(isHovered ? .primary : .secondary)
+                    .frame(width: width, height: DS.Control.header)
+                    .background(Color.primary.opacity(isHovered ? 0.08 : 0.0))
+                    .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .onHover { isHovered = $0 }
+            .help("Show panel (⌘⌥B)")
+
+            Spacer(minLength: 0)
+        }
+        .frame(width: width)
+        .frame(maxHeight: .infinity)
+        .background(Color(nsColor: .windowBackgroundColor))
+    }
+}
+
 /// Thin draggable divider with an enlarged invisible hit area and a
 /// resize-cursor on hover. Reports drag deltas to the parent so the
 /// parent owns the width state and the clamping rules.
 private struct DividerView: View {
     /// Visible separator thickness — the 1pt grey line the user sees.
     static let thickness: CGFloat = 1
-    /// Drag-target width — wider than the visible line so the user can
-    /// grab the divider without pixel-perfect aiming.
-    static let hitArea: CGFloat = 17
+    /// Layout-reserved width. Kept small (≈ the card padding) so the gap at a
+    /// divider matches the gap at the window edges. The actual grab target is
+    /// widened beyond this via `contentShape(...inset(-5))`, so the divider is
+    /// still easy to grab without reserving a big visible gap.
+    static let hitArea: CGFloat = 8
     /// Layout-reserved width. The body's ZStack sizes to its widest child,
     /// so the divider takes `hitArea` worth of horizontal space in the
     /// HStack regardless of the visible thickness. Parents that need to
@@ -306,7 +376,9 @@ private struct DividerView: View {
                 .frame(width: Self.hitArea)
         }
         .frame(maxHeight: .infinity)
-        .contentShape(Rectangle().inset(by: -4))
+        // Grab target extends well beyond the slim reserved width so the
+        // divider stays easy to grab even though it only reserves 8pt.
+        .contentShape(Rectangle().inset(by: -6))
         .highPriorityGesture(
             DragGesture(minimumDistance: 1, coordinateSpace: .global)
                 .onChanged { value in
@@ -330,7 +402,9 @@ private struct DividerView: View {
         if isHovered {
             return Color.accentColor.opacity(0.65)
         }
-        return Color(nsColor: .separatorColor)
+        // Hidden at rest — the cards provide their own borders, so the pane
+        // separators only appear (as a faint accent) while hovering/dragging.
+        return Color.clear
     }
 }
 

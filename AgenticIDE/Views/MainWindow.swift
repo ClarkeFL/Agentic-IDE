@@ -6,6 +6,7 @@ struct MainWindow: View {
     @Environment(SessionManager.self) private var sessions
     @Environment(EditorSessionManager.self) private var editors
     @Environment(GitStatusWatcherStore.self) private var gitWatchers
+    @Environment(LaunchToolStore.self) private var launchTools
     @AppStorage("currentProjectId") private var currentProjectIdString: String = ""
 
     @State private var selectedProjectId: UUID?
@@ -22,6 +23,10 @@ struct MainWindow: View {
     /// Drives the Ask overlay slide-in. Toggled by the ⌘⇧A menu command via
     /// the `.toggleAskOverlay` notification.
     @State private var showAsk = false
+    /// Collapses pane ② (file tree) into a thin reopen rail. Persisted so the
+    /// choice survives relaunch. Toggled by the ⌘⌥B command (`.toggleFileTree`)
+    /// and the file-tree header's collapse button.
+    @AppStorage("fileTreeCollapsed") private var fileTreeCollapsed = false
 
     var body: some View {
         ZStack {
@@ -37,6 +42,11 @@ struct MainWindow: View {
                 showAsk.toggle()
             }
         }
+        .onReceive(NotificationCenter.default.publisher(for: .toggleFileTree)) { _ in
+            withAnimation(.easeInOut(duration: 0.18)) {
+                fileTreeCollapsed.toggle()
+            }
+        }
     }
 
     /// Split view + every long-lived modifier. Extracted so the body's
@@ -49,6 +59,9 @@ struct MainWindow: View {
             .navigationTitle(activeProject?.name ?? "Agentic IDE")
             .onAppear {
                 restoreSelection()
+                // Start the local agent bridge (cell → cell control/observe).
+                // Idempotent; needs the session manager to resolve cells.
+                AgentBridge.shared.start(sessions: sessions, store: store, launchTools: launchTools)
                 if !didEvaluateFDA {
                     didEvaluateFDA = true
                     evaluateFullDiskAccess()
@@ -72,29 +85,48 @@ struct MainWindow: View {
         PersistentSplitView(
             autosaveName: "AgenticIDE.MainSplit",
             pane1Min: 160, pane1Initial: 200, pane1Max: 360,
-            pane2Min: 160, pane2Initial: 240, pane2Max: 480,
-            pane3Min: 240,
-            pane3Collapsed: editorPaneCollapsed,
-            // Claude Code's banner + status bar comfortably needs ~70
-            // monospaced columns. At ~7.5pt/col that's ~525pt; we round up
-            // to 540pt min and 720pt initial so a fresh install never sees
-            // the "with xhig…" / "/effor" truncation Claude does when its
-            // surface is narrower than its UI.
+            // Pane 2 is now the Explorer card (file tree + editor). It needs to
+            // grow wide enough to hold both comfortably, so the max is large.
+            // The min is raised while a file is open so the workspace pane can't
+            // shrink the editor below a usable width.
+            pane2Min: explorerMinWidth, pane2Initial: 300, pane2Max: 1100,
+            pane2Collapsed: fileTreeCollapsed,
+            onExpandPane2: {
+                withAnimation(.easeInOut(duration: 0.18)) { fileTreeCollapsed = false }
+            },
+            // Widen the Explorer to a comfortable editing width when a file is
+            // open; shrink back to a tree-only width when none are.
+            pane2PreferredWidth: explorerPreferredWidth,
+            pane3Min: 0,
+            // Pane 3 is unused — the editor lives inside the Explorer card now.
+            // Keeping it always-collapsed makes pane 4 (the workspace) elastic,
+            // so the workspace takes whatever width is left.
+            pane3Collapsed: true,
             pane4Min: 540, pane4Initial: 720, pane4Max: 1400,
             pane1: { sidebarPane },
-            pane2: { fileTreePane },
-            pane3: { editorPane },
+            pane2: { explorerPane },
+            pane3: { Color.clear },
             pane4: { terminalsPane }
         )
-        .animation(.easeInOut(duration: 0.18), value: editorPaneCollapsed)
+        .animation(.easeInOut(duration: 0.18), value: fileTreeCollapsed)
     }
 
-    /// Hide the editor pane whenever it has nothing useful to show — no
-    /// project selected, or the active project has zero open tabs. As soon
-    /// as the user opens a file in the tree, the pane animates back in.
-    private var editorPaneCollapsed: Bool {
-        guard let project = fileAccessProject else { return true }
-        return editors.session(for: project.id).tabs.isEmpty
+    /// Target width for the Explorer pane: wide enough to edit comfortably when
+    /// a file is open, narrow (tree only) when none are. `onChange` in the split
+    /// view animates to this; it never fires on first render, so a persisted
+    /// width still wins on launch.
+    private var explorerPreferredWidth: CGFloat? {
+        guard let project = fileAccessProject else { return nil }
+        let hasFile = !editors.session(for: project.id).tabs.isEmpty
+        return hasFile ? 560 : 300
+    }
+
+    /// Lower bound for the Explorer pane. While a file is open it can't shrink
+    /// below tree + a usable editor width, so dragging the workspace divider
+    /// (or a narrow persisted width on launch) can never crush the editor.
+    private var explorerMinWidth: CGFloat {
+        guard let project = fileAccessProject else { return 200 }
+        return editors.session(for: project.id).tabs.isEmpty ? 200 : 480
     }
 
     // MARK: - Pane 1: Sidebar
@@ -106,32 +138,18 @@ struct MainWindow: View {
             .environment(sessions)
     }
 
-    // MARK: - Pane 2: File tree
+    // MARK: - Pane 2: Explorer (file tree + editor)
 
     @ViewBuilder
-    private var fileTreePane: some View {
+    private var explorerPane: some View {
         if let project = fileAccessProject {
-            FileTreeView(project: project,
+            ExplorerView(project: project,
                          editor: editors.session(for: project.id),
                          gitWatcher: gitWatchers.watcher(for: project.id, rootPath: project.path))
                 .id(project.id)
         } else {
             paneEmptyState(systemImage: "folder",
                            text: "Select a project to browse its files.")
-        }
-    }
-
-    // MARK: - Pane 3: Editor
-
-    @ViewBuilder
-    private var editorPane: some View {
-        if let project = fileAccessProject {
-            EditorPaneView(project: project,
-                           editor: editors.session(for: project.id),
-                           gitWatcher: gitWatchers.watcher(for: project.id, rootPath: project.path))
-        } else {
-            paneEmptyState(systemImage: "doc.text",
-                           text: "No project active.")
         }
     }
 
