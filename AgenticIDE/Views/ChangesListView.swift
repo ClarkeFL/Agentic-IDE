@@ -157,8 +157,9 @@ struct GitFooterBar: View {
                     branchLabel
                     Spacer(minLength: 0)
                 }
-                // Row 2 — the git action buttons.
-                HStack(spacing: DS.Space.sm) {
+                // Row 2 — the git action buttons, centered.
+                HStack(spacing: DS.Space.lg) {
+                    Spacer(minLength: 0)
                     actionButton(.fetch,
                                  systemName: "arrow.triangle.2.circlepath",
                                  title: "Fetch",
@@ -199,19 +200,21 @@ struct GitFooterBar: View {
                 }
             }
             .padding(.horizontal, DS.Space.sm)
-            .padding(.vertical, DS.Space.xs)
+            // Extra top room so the divider doesn't sit right on the branch name.
+            .padding(.top, DS.Space.md)
+            .padding(.bottom, DS.Space.sm)
             .background(Color(nsColor: .controlBackgroundColor))
             .overlay(alignment: .top) { Divider() }
         }
     }
 
     private var branchLabel: some View {
-        HStack(spacing: 4) {
+        HStack(spacing: DS.Space.xs + 1) {
             Image(systemName: "arrow.triangle.branch")
-                .font(.system(size: 10, weight: .semibold))
+                .font(.system(size: 12, weight: .semibold))
                 .foregroundStyle(.secondary)
             Text(gitWatcher.branch ?? "—")
-                .font(DS.Font.control)
+                .font(.system(size: 13, weight: .medium))
                 .foregroundStyle(.primary)
                 .lineLimit(1)
                 .truncationMode(.middle)
@@ -220,7 +223,7 @@ struct GitFooterBar: View {
             }
             if !gitWatcher.hasUpstream && gitWatcher.branch != nil {
                 Text("· no upstream")
-                    .font(.system(size: 10))
+                    .font(.system(size: 11))
                     .foregroundStyle(.tertiary)
                     .lineLimit(1)
             }

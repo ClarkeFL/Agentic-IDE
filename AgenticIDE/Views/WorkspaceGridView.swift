@@ -22,7 +22,9 @@ struct WorkspaceGridView: View {
             }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
-        .padding(gap)
+        // Extra breathing room on the window edges (bottom + trailing) so the
+        // cell's rounded corners aren't tight against the window border.
+        .padding(EdgeInsets(top: gap, leading: gap, bottom: DS.Space.md, trailing: DS.Space.md))
         .background(Color(nsColor: .windowBackgroundColor))
     }
 

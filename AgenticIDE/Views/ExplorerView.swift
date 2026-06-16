@@ -53,7 +53,9 @@ struct ExplorerView: View {
             RoundedRectangle(cornerRadius: DS.Radius.lg, style: .continuous)
                 .strokeBorder(Color(nsColor: .separatorColor), lineWidth: 1)
         )
-        .padding(DS.Space.xs)
+        // Extra bottom room so the card's rounded corners clear the window edge.
+        .padding(EdgeInsets(top: DS.Space.xs, leading: DS.Space.xs,
+                            bottom: DS.Space.md, trailing: DS.Space.xs))
     }
 
     private func clampedTreeWidth(total: CGFloat) -> CGFloat {
