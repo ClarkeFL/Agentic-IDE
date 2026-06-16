@@ -347,9 +347,11 @@ private struct Pane2ReopenRail: View {
 private struct DividerView: View {
     /// Visible separator thickness — the 1pt grey line the user sees.
     static let thickness: CGFloat = 1
-    /// Drag-target width — wider than the visible line so the user can
-    /// grab the divider without pixel-perfect aiming.
-    static let hitArea: CGFloat = 17
+    /// Layout-reserved width. Kept small (≈ the card padding) so the gap at a
+    /// divider matches the gap at the window edges. The actual grab target is
+    /// widened beyond this via `contentShape(...inset(-5))`, so the divider is
+    /// still easy to grab without reserving a big visible gap.
+    static let hitArea: CGFloat = 8
     /// Layout-reserved width. The body's ZStack sizes to its widest child,
     /// so the divider takes `hitArea` worth of horizontal space in the
     /// HStack regardless of the visible thickness. Parents that need to
@@ -374,7 +376,9 @@ private struct DividerView: View {
                 .frame(width: Self.hitArea)
         }
         .frame(maxHeight: .infinity)
-        .contentShape(Rectangle().inset(by: -4))
+        // Grab target extends well beyond the slim reserved width so the
+        // divider stays easy to grab even though it only reserves 8pt.
+        .contentShape(Rectangle().inset(by: -6))
         .highPriorityGesture(
             DragGesture(minimumDistance: 1, coordinateSpace: .global)
                 .onChanged { value in
