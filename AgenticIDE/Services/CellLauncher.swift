@@ -50,33 +50,37 @@ struct CellLauncher {
         store.recordActivity(projectId: project.id, command: command)
     }
 
-    /// In a multi-cell workspace, append the bridge note to the agent's system
-    /// prompt (for CLIs with an inline append flag), so it knows it can drive
-    /// the other cells without having to discover the helper first.
+    /// Append the bridge note to the agent's system prompt (for CLIs with an
+    /// inline append flag) so it knows it can build out and drive the workspace
+    /// without having to discover the helper first. Injected even in a 1×1 — a
+    /// solo agent is the common starting point for "open more cells".
     private func commandWithBridgeHint(_ tool: LaunchTool, cell: WorkspaceCell) -> String {
-        guard workspace.cells.count > 1,
-              let flag = tool.effectivePromptFlag, !flag.isEmpty else { return tool.command }
+        guard let flag = tool.effectivePromptFlag, !flag.isEmpty else { return tool.command }
         let n = (workspace.cells.firstIndex(where: { $0.id == cell.id }) ?? 0) + 1
         // Single-quoted; the hint contains no apostrophes so it stays intact
         // after PtyService re-quotes the whole command for the login shell.
         return "\(tool.command) \(flag) '\(Self.bridgeHint(cellNumber: n))'"
     }
 
-    /// The system-prompt note. No apostrophes — it is single-quoted in the shell
-    /// command and PtyService escapes the surrounding quotes.
+    /// The system-prompt note. No apostrophes / single quotes — it is
+    /// single-quoted in the shell command and PtyService escapes the
+    /// surrounding quotes.
     static func bridgeHint(cellNumber n: Int) -> String {
         """
-        You are running inside AgenticIDE as cell #\(n) in a workspace grid. \
-        You can build out and orchestrate the other cells with the agentide CLI on your PATH: \
-        `agentide cells` lists the cells (number, what is running, status); \
-        `agentide tools` lists the launchers you can start (e.g. claude, codex); \
-        `agentide grid <rows> <cols>` resizes the grid (max 2 rows by 4 cols) to make room; \
-        `agentide launch <n> <tool>` starts a tool in cell n; \
-        `agentide close <n>` closes the program in cell n; \
-        `agentide send <n> "<text>"` types text and presses Enter in cell n (e.g. to give another agent a task); \
-        `agentide read <n>` shows the screen of cell n so you can review its progress; \
-        `agentide wait <n>` blocks until cell n finishes. \
-        Use these when the user asks you to coordinate multiple agents or terminals.
+        You are running inside AgenticIDE (a macOS terminal IDE) as cell #\(n) of a workspace grid. \
+        IMPORTANT: when the user asks you to open, run, or spawn other terminals, agents, or CLIs \
+        (for example, open two codex, or run claude and gemini on a task), you MUST do it by launching \
+        them as real cells with the agentide CLI on your PATH — do NOT run them headlessly in your own \
+        shell, and do NOT launch into your own cell #\(n). Verbs: \
+        `agentide cells` (list cells: number, what is running, status); \
+        `agentide tools` (list launchers you can start, e.g. claude, codex); \
+        `agentide grid <rows> <cols>` (resize the grid, max 2 by 4, to make room for more cells); \
+        `agentide launch <n> <tool>` (start a tool in an empty cell n); \
+        `agentide close <n>` (close cell n); \
+        `agentide send <n> "<text>"` (type text and press Enter in cell n, e.g. to ask another agent a question or give it a task); \
+        `agentide read <n>` (view the screen of cell n to see its reply); \
+        `agentide wait <n>` (block until cell n finishes). \
+        Example — to open two codex and ask who they are: grid to at least 3 cells, launch codex into two empty cells, send each "who are you", then read each.
         """
     }
 }
