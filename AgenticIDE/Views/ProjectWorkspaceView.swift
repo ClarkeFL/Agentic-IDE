@@ -1,8 +1,8 @@
 import SwiftUI
 
-/// Middle pane: the tab bar + the active terminal (or the empty state).
+/// Pane ④: the active workspace's header + grid (or an empty state while a
+/// project's session is still restoring).
 struct ProjectWorkspaceView: View {
-    @Environment(ProjectStore.self) private var store
     @Environment(SessionManager.self) private var sessions
     @Environment(SystemSpeaker.self) private var speaker
 
@@ -12,86 +12,52 @@ struct ProjectWorkspaceView: View {
         let session = sessions.session(for: project.id)
 
         VStack(spacing: 0) {
-            // TabBarView owns its own trailing divider so the three column
-            // headers (sidebar, workspace, inspector) all draw their dividers
-            // at the same y-coordinate.
-            TabBarView(project: project,
-                       onLaunch: { ql in launch(ql, in: session) },
-                       onSaveQuickLaunch: { ql in saveQuickLaunch(ql) },
-                       onLaunchDefaultShell: { launchDefaultShell(in: session) },
-                       isSpeaking: speaker.isSpeaking,
-                       onSpeakSelection: { speakSelection(in: session) })
-
-            ZStack {
-                // Keep every terminal NSView attached to the hierarchy at the
-                // same time and just toggle activeness to switch. Adding/
-                // removing surfaces from the AppKit tree on every switch was
-                // the source of the visible lag — surfaces now stay live and
-                // instantly pop to the front when their tab is selected.
-                // `isActive` drives both the SwiftUI overlay (opacity / hit
-                // test / z-order) and the AppKit-level hide signal (Ghostty
-                // surface occlusion + metal layer isHidden) so background
-                // tabs aren't burning GPU on frames the user can't see.
-                ForEach(session.tabs) { tab in
-                    let isActive = tab.id == session.activeTabId
-                    GhosttyTerminal(view: tab.view, isActive: isActive)
-                        .frame(maxWidth: .infinity, maxHeight: .infinity)
-                        .opacity(isActive ? 1 : 0)
-                        .allowsHitTesting(isActive)
-                        .zIndex(isActive ? 1 : 0)
-                }
-                if session.activeTab == nil {
-                    EmptyStateView()
-                }
+            if let workspace = session.activeWorkspace {
+                WorkspaceHeaderView(session: session,
+                                    workspace: workspace,
+                                    isSpeaking: speaker.isSpeaking,
+                                    onSpeak: { speakSelection(in: session) })
+                WorkspaceGridView(project: project, session: session, workspace: workspace)
+            } else {
+                EmptyStateView()
             }
-            .frame(maxWidth: .infinity, maxHeight: .infinity)
-            .clipped()
         }
         .onReceive(NotificationCenter.default.publisher(for: .speakSelection)) { _ in
             speakSelection(in: session)
         }
-        .onChange(of: session.activeTabId) { _, _ in
-            // Tab switch — stop any in-progress speech so we don't read
-            // stale text aloud while the user is on a new terminal.
+        .onReceive(NotificationCenter.default.publisher(for: .toggleCellZoom)) { _ in
+            toggleZoomFocused(in: session)
+        }
+        .onReceive(NotificationCenter.default.publisher(for: .newWorkspace)) { _ in
+            session.addWorkspace()
+        }
+        .onChange(of: session.activeWorkspaceId) { _, _ in
+            // Workspace switch — stop any in-progress speech so we don't read
+            // stale text aloud while the user is on a new workspace.
             speaker.stop()
         }
     }
 
     /// If something is already speaking, treat the button/hotkey as Stop.
-    /// Otherwise read the active tab's selection (or fall back to the visible
-    /// grid contents — see `readSpeakable`). No-op when nothing is selected
-    /// and no project is active.
+    /// Otherwise read the focused cell's selection (falling back to the first
+    /// running cell).
     private func speakSelection(in session: ProjectSession) {
         if speaker.isSpeaking { speaker.stop(); return }
-        guard let tab = session.activeTab,
-              let text = tab.view.readSelection() else { return }
+        guard let ws = session.activeWorkspace else { return }
+        let cell = ws.cells.first(where: { $0.id == ws.focusedCellId }) ?? ws.runningCells.first
+        guard let tab = cell?.terminal, let text = tab.view.readSelection() else { return }
         speaker.speak(text)
     }
 
-    // MARK: - Launching
-
-    private func launch(_ ql: QuickLaunch, in session: ProjectSession) {
-        // Persist the (possibly updated) command back to the store.
-        store.updateQuickLaunch(projectId: project.id, ql)
-        guard !ql.command.isEmpty else { return }
-
-        let cfg = PtyService.quickLaunchConfig(ql, cwd: project.path)
-        let tab = TerminalTab(title: ql.label, config: cfg)
-        session.wireSmartRename(tab)
-        session.addTab(tab)
-        store.recordActivity(projectId: project.id, command: ql.command)
-    }
-
-    private func saveQuickLaunch(_ ql: QuickLaunch) {
-        store.updateQuickLaunch(projectId: project.id, ql)
-    }
-
-    private func launchDefaultShell(in session: ProjectSession) {
-        let cfg = PtyService.defaultShellConfig(cwd: project.path)
-        let shell = (PtyService.defaultShell() as NSString).lastPathComponent
-        let tab = TerminalTab(title: shell, config: cfg)
-        session.wireSmartRename(tab)
-        session.addTab(tab)
-        store.recordActivity(projectId: project.id, command: shell)
+    /// Zoom the focused cell (falling back to the already-zoomed cell, then the
+    /// first running cell, then the first cell). Re-firing restores the grid.
+    private func toggleZoomFocused(in session: ProjectSession) {
+        guard let ws = session.activeWorkspace else { return }
+        let target = ws.focusedCellId
+            ?? ws.zoomedCellId
+            ?? ws.runningCells.first?.id
+            ?? ws.cells.first?.id
+        guard let id = target else { return }
+        session.toggleZoom(cellId: id, in: ws)
     }
 }

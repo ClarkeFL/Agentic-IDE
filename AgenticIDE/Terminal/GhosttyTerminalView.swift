@@ -45,6 +45,11 @@ final class GhosttyTerminalView: NSView, NSTextInputClient {
     /// exit). The owning `TerminalTab` folds these into a `TerminalTabStatus`.
     var onTerminalEvent: ((TerminalEvent) -> Void)?
 
+    /// Called on the main thread when this surface becomes first responder.
+    /// Used by the workspace grid to track which cell the user is working in
+    /// so the keyboard zoom shortcut targets it.
+    var onFocused: (() -> Void)?
+
     /// Cursor Ghostty has asked us to display. Driven by
     /// `GHOSTTY_ACTION_MOUSE_SHAPE`. Defaults to I-beam (text editing) so the
     /// terminal feels right before any process changes it. Mutating the value
@@ -438,6 +443,7 @@ final class GhosttyTerminalView: NSView, NSTextInputClient {
     override func becomeFirstResponder() -> Bool {
         let ok = super.becomeFirstResponder()
         if let surface { ghostty_surface_set_focus(surface, true) }
+        if ok { onFocused?() }
         return ok
     }
 

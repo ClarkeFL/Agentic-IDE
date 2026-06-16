@@ -131,6 +131,15 @@ extension Notification.Name {
     /// Posted by the Ask menu (⌘⇧A). Observed by `MainWindow`, which slides
     /// the `AskOverlay` in/out over the 4-pane layout.
     static let toggleAskOverlay = Notification.Name("AgenticIDE.toggleAskOverlay")
+    /// Posted by View → Zoom Cell (⌃⌘F). Observed by `ProjectWorkspaceView`,
+    /// which zooms the focused workspace cell (or restores the grid).
+    static let toggleCellZoom = Notification.Name("AgenticIDE.toggleCellZoom")
+    /// Posted by View → New Workspace (⌘T). Observed by `ProjectWorkspaceView`,
+    /// which adds a fresh workspace to the active project's session.
+    static let newWorkspace = Notification.Name("AgenticIDE.newWorkspace")
+    /// Posted by View → Toggle File Tree (⌘⌥B). Observed by `MainWindow`,
+    /// which collapses/expands the file-tree pane (②).
+    static let toggleFileTree = Notification.Name("AgenticIDE.toggleFileTree")
 }
 
 /// Lives only to make termination unrefusable. macOS sends a quit AppleEvent
