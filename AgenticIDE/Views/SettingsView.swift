@@ -10,6 +10,8 @@ struct SettingsView: View {
         TabView {
             AgentsSettingsView()
                 .tabItem { Label("Agents", systemImage: "sparkles") }
+            LaunchersSettingsView()
+                .tabItem { Label("Launchers", systemImage: "square.grid.2x2") }
             EditorSettingsView()
                 .tabItem { Label("Editor", systemImage: "curlybraces") }
             HooksSettingsView()

@@ -93,7 +93,7 @@ final class SessionManager {
 
             for wsSnap in snapshot.workspaces {
                 let cells: [WorkspaceCell] = wsSnap.cells.map { cellSnap in
-                    let cell = WorkspaceCell(id: cellSnap.id, kind: cellSnap.kind)
+                    let cell = WorkspaceCell(id: cellSnap.id, icon: cellSnap.icon)
                     if let command = cellSnap.command {
                         let cwd = cellSnap.workingDirectoryPath.map { URL(fileURLWithPath: $0) }
                         let cfg = SurfaceConfig(
@@ -101,7 +101,7 @@ final class SessionManager {
                             workingDirectory: cwd,
                             env: PtyService.terminalEnvironment())
                         let tab = TerminalTab(id: cellSnap.id,
-                                              title: cellSnap.title ?? cellSnap.kind?.label ?? "Terminal",
+                                              title: cellSnap.title ?? "Terminal",
                                               config: cfg)
                         session.wireSmartRename(tab)
                         cell.terminal = tab
@@ -183,7 +183,7 @@ final class SessionManager {
                     cols: ws.cols,
                     cells: ws.cells.map { cell in
                         CellSnapshot(id: cell.id,
-                                     kind: cell.kind,
+                                     icon: cell.icon,
                                      command: cell.terminal?.command,
                                      title: cell.terminal?.title,
                                      workingDirectoryPath: cell.terminal?.workingDirectoryPath)
@@ -254,7 +254,7 @@ struct WorkspaceSnapshot: Codable {
 /// title keep the cell labelled before the process prints anything.
 struct CellSnapshot: Codable {
     var id: UUID
-    var kind: WorkspaceCellKind?
+    var icon: String?
     var command: String?
     var title: String?
     var workingDirectoryPath: String?
@@ -279,7 +279,7 @@ extension Array where Element == SessionSnapshot {
                 hasher.combine(ws.cols)
                 for cell in ws.cells {
                     hasher.combine(cell.id)
-                    hasher.combine(cell.kind)
+                    hasher.combine(cell.icon)
                     hasher.combine(cell.command)
                     hasher.combine(cell.title)
                     hasher.combine(cell.workingDirectoryPath)

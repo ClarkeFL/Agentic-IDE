@@ -1,9 +1,12 @@
 import SwiftUI
 
-/// Shown inside an empty workspace cell: four launch tiles. Tapping one spawns
-/// that program in the cell (the parent `WorkspaceCellView` owns the spawn).
+/// Shown inside an empty workspace cell: a tile per enabled `LaunchTool`.
+/// Tapping one spawns that program in the cell (the parent `WorkspaceCellView`
+/// owns the spawn). The set of tiles is driven by the global `LaunchToolStore`,
+/// so toggling / adding tools in Settings grows or shrinks this grid.
 struct CellLauncherView: View {
-    let onLaunch: (WorkspaceCellKind) -> Void
+    let tools: [LaunchTool]
+    let onLaunch: (LaunchTool) -> Void
 
     private let columns = [
         GridItem(.flexible(), spacing: DS.Space.sm),
@@ -11,19 +14,28 @@ struct CellLauncherView: View {
     ]
 
     var body: some View {
-        LazyVGrid(columns: columns, spacing: DS.Space.sm) {
-            ForEach(WorkspaceCellKind.allCases, id: \.self) { kind in
-                LauncherTile(kind: kind, action: { onLaunch(kind) })
+        Group {
+            if tools.isEmpty {
+                Text("No launchers enabled.\nAdd or enable one in Settings → Launchers.")
+                    .font(DS.Font.control)
+                    .foregroundStyle(.secondary)
+                    .multilineTextAlignment(.center)
+            } else {
+                LazyVGrid(columns: columns, spacing: DS.Space.sm) {
+                    ForEach(tools) { tool in
+                        LauncherTile(tool: tool, action: { onLaunch(tool) })
+                    }
+                }
+                .frame(maxWidth: 260)
             }
         }
-        .frame(maxWidth: 260)
         .padding(DS.Space.lg)
         .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
 }
 
 private struct LauncherTile: View {
-    let kind: WorkspaceCellKind
+    let tool: LaunchTool
     let action: () -> Void
 
     @State private var isHovered = false
@@ -32,10 +44,11 @@ private struct LauncherTile: View {
     var body: some View {
         Button(action: action) {
             VStack(spacing: DS.Space.xs + 1) {
-                quickLaunchIcon(name: kind.icon, size: 20)
-                Text(kind.label)
+                quickLaunchIcon(name: tool.icon, size: 20)
+                Text(tool.name)
                     .font(DS.Font.bodyMedium)
                     .foregroundStyle(.primary)
+                    .lineLimit(1)
             }
             .frame(maxWidth: .infinity)
             .padding(.vertical, DS.Space.md)
@@ -57,6 +70,6 @@ private struct LauncherTile: View {
                 .onChanged { _ in isPressed = true }
                 .onEnded { _ in isPressed = false }
         )
-        .help("Run \(kind.label) in this cell")
+        .help("Run \(tool.name) in this cell")
     }
 }

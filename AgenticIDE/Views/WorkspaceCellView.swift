@@ -6,6 +6,7 @@ import SwiftUI
 /// session just places the finished tab into the cell.
 struct WorkspaceCellView: View {
     @Environment(ProjectStore.self) private var store
+    @Environment(LaunchToolStore.self) private var launchTools
 
     let project: Project
     @Bindable var session: ProjectSession
@@ -18,6 +19,9 @@ struct WorkspaceCellView: View {
 
     @State private var hovering = false
     @State private var showServerPopover = false
+    /// Icon of the Server tool the user clicked — captured so the deferred
+    /// spawn (after the Run Server popover) tags the cell with the right glyph.
+    @State private var serverIcon: String = "play.circle"
 
     var body: some View {
         VStack(spacing: 0) {
@@ -29,7 +33,7 @@ struct WorkspaceCellView: View {
                                 autoFocus: shouldAutoFocus,
                                 onFocused: { workspace.focusedCellId = cell.id })
             } else {
-                CellLauncherView(onLaunch: launch)
+                CellLauncherView(tools: launchTools.enabledTools, onLaunch: launch)
             }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -67,7 +71,7 @@ struct WorkspaceCellView: View {
     /// terminal renders below it and fills the rest of the cell.
     private func cellHeader(_ tab: TerminalTab) -> some View {
         HStack(spacing: DS.Space.xs) {
-            quickLaunchIcon(name: cell.kind?.icon, size: DS.FontSize.footnote)
+            quickLaunchIcon(name: cell.icon, size: DS.FontSize.footnote)
             Text(tab.title)
                 .font(DS.Font.control)
                 .lineLimit(1)
@@ -100,39 +104,48 @@ struct WorkspaceCellView: View {
 
     // MARK: - Launching
 
-    private func launch(_ kind: WorkspaceCellKind) {
-        switch kind {
+    private func launch(_ tool: LaunchTool) {
+        switch tool.role {
         case .server:
+            serverIcon = tool.icon
             if (serverQuickLaunch?.command ?? "").isEmpty {
                 showServerPopover = true
             } else {
                 spawnServer()
             }
-        case .claude, .codex:
-            spawn(kind: kind, ql: quickLaunch(for: kind))
         case .terminal:
-            spawnShell()
+            spawnShell(icon: tool.icon)
+        case .command:
+            spawnCommand(tool)
         }
     }
 
+    /// Runs the project's per-project Run Server command.
     private func spawnServer() {
         guard let ql = serverQuickLaunch, !ql.command.isEmpty else { return }
-        spawn(kind: .server, ql: ql)
-    }
-
-    private func spawn(kind: WorkspaceCellKind, ql: QuickLaunch) {
-        guard !ql.command.isEmpty else { return }
         let cfg = PtyService.quickLaunchConfig(ql, cwd: project.path)
         let tab = TerminalTab(title: ql.label, config: cfg)
-        session.place(tab, kind: kind, in: cell)
+        session.place(tab, icon: serverIcon, in: cell)
         store.recordActivity(projectId: project.id, command: ql.command)
     }
 
-    private func spawnShell() {
+    /// Runs a `.command` tool's command via the login shell. The Claude/Codex
+    /// "dangerous" flags still apply because `quickLaunchConfig` augments by
+    /// executable name.
+    private func spawnCommand(_ tool: LaunchTool) {
+        guard !tool.command.isEmpty else { return }
+        let ql = QuickLaunch(label: tool.name, command: tool.command, icon: tool.icon)
+        let cfg = PtyService.quickLaunchConfig(ql, cwd: project.path)
+        let tab = TerminalTab(title: tool.name, config: cfg)
+        session.place(tab, icon: tool.icon, in: cell)
+        store.recordActivity(projectId: project.id, command: tool.command)
+    }
+
+    private func spawnShell(icon: String) {
         let cfg = PtyService.defaultShellConfig(cwd: project.path)
         let shell = (PtyService.defaultShell() as NSString).lastPathComponent
         let tab = TerminalTab(title: shell, config: cfg)
-        session.place(tab, kind: .terminal, in: cell)
+        session.place(tab, icon: icon, in: cell)
         store.recordActivity(projectId: project.id, command: shell)
     }
 
@@ -142,26 +155,9 @@ struct WorkspaceCellView: View {
         store.updateQuickLaunch(projectId: project.id, ql)
     }
 
-    // MARK: - QuickLaunch resolution
-
     /// The project's saved Server launcher (carries its per-project command).
     private var serverQuickLaunch: QuickLaunch? {
-        project.quickLaunches.first(where: { $0.label == WorkspaceCellKind.server.quickLaunchLabel })
-    }
-
-    /// Resolve a kind to the project's matching QuickLaunch, falling back to a
-    /// sensible default if the project somehow lacks it.
-    private func quickLaunch(for kind: WorkspaceCellKind) -> QuickLaunch {
-        if let label = kind.quickLaunchLabel,
-           let ql = project.quickLaunches.first(where: { $0.label == label }) {
-            return ql
-        }
-        switch kind {
-        case .claude: return QuickLaunch(label: "Claude", command: "claude", icon: "sparkles", isBuiltin: true)
-        case .codex:  return QuickLaunch(label: "Codex", command: "codex", icon: "wand.and.stars", isBuiltin: true)
-        case .server: return QuickLaunch(label: "Run Server", command: "", icon: "play.circle", isBuiltin: true)
-        case .terminal: return QuickLaunch(label: "Terminal", command: "", icon: "terminal", isBuiltin: true)
-        }
+        project.quickLaunches.first(where: { $0.label == "Run Server" })
     }
 }
 

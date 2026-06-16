@@ -102,10 +102,10 @@ final class ProjectSession: Identifiable {
     /// The caller (the launcher view) owns building the `TerminalTab` via
     /// `PtyService` since that needs the project + store; the session wires the
     /// smart-rename hook and persists.
-    func place(_ terminal: TerminalTab, kind: WorkspaceCellKind, in cell: WorkspaceCell) {
+    func place(_ terminal: TerminalTab, icon: String?, in cell: WorkspaceCell) {
         cell.terminal?.view.tearDown()
         wireSmartRename(terminal)
-        cell.kind = kind
+        cell.icon = icon
         cell.terminal = terminal
         saveHook?()
     }
@@ -114,7 +114,7 @@ final class ProjectSession: Identifiable {
     func closeCell(_ cell: WorkspaceCell) {
         guard let tab = cell.terminal else { return }
         cell.terminal = nil
-        cell.kind = nil
+        cell.icon = nil
         // Defer teardown one runloop turn so the visible swap to the launcher
         // is instant and the Ghostty surface_free happens off the critical path.
         DispatchQueue.main.async { tab.view.tearDown() }

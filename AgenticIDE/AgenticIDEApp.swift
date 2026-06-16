@@ -14,6 +14,9 @@ struct AgenticIDEApp: App {
     /// (⌘⇧A). Owned at the app level so the conversation persists across
     /// overlay open/close without persisting to disk.
     @State private var ask = AskSession()
+    /// Global, persisted list of cell launcher tiles (Server/Claude/Codex/
+    /// Terminal + any custom CLI the user adds in Settings → Launchers).
+    @State private var launchTools = LaunchToolStore()
     @StateObject private var updater = UpdaterManager()
 
     init() {
@@ -39,6 +42,7 @@ struct AgenticIDEApp: App {
                 .environment(speaker)
                 .environment(resources)
                 .environment(ask)
+                .environment(launchTools)
                 .environmentObject(updater)
                 .frame(minWidth: 900, minHeight: 560)
         }
@@ -124,6 +128,7 @@ struct AgenticIDEApp: App {
         Settings {
             SettingsView()
                 .environment(speaker)
+                .environment(launchTools)
         }
     }
 }
