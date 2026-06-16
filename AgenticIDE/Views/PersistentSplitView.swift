@@ -402,7 +402,9 @@ private struct DividerView: View {
         if isHovered {
             return Color.accentColor.opacity(0.65)
         }
-        return Color(nsColor: .separatorColor)
+        // Hidden at rest — the cards provide their own borders, so the pane
+        // separators only appear (as a faint accent) while hovering/dragging.
+        return Color.clear
     }
 }
 
