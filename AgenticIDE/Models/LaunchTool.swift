@@ -73,24 +73,30 @@ struct LaunchTool: Identifiable, Codable, Hashable {
     static let codexID = UUID(uuidString: "00000000-0000-0000-0000-0000000000A3")!
     static let terminalID = UUID(uuidString: "00000000-0000-0000-0000-0000000000A4")!
     static let geminiID = UUID(uuidString: "00000000-0000-0000-0000-0000000000A5")!
-    static let gptID = UUID(uuidString: "00000000-0000-0000-0000-0000000000A6")!
+    static let kimiID = UUID(uuidString: "00000000-0000-0000-0000-0000000000A7")!
+    static let opencodeID = UUID(uuidString: "00000000-0000-0000-0000-0000000000A8")!
 
     static func defaults() -> [LaunchTool] {
         [
+            // On by default.
             LaunchTool(id: serverID, name: "Server", command: "",
                        icon: "play.circle", role: .server, isBuiltin: true),
             LaunchTool(id: claudeID, name: "Claude", command: "claude",
                        icon: "brand:claude", role: .command, isBuiltin: true),
+            // Codex is OpenAI's GPT-powered agent CLI (a.k.a. "GPT").
             LaunchTool(id: codexID, name: "Codex", command: "codex",
                        icon: "brand:codex", role: .command, isBuiltin: true),
-            LaunchTool(id: geminiID, name: "Gemini", command: "gemini",
-                       icon: "sparkle", role: .command, isBuiltin: true),
-            // "GPT" runs OpenAI's Codex CLI — a friendlier label/alias so the
-            // orchestrator can `agentide launch <n> gpt`.
-            LaunchTool(id: gptID, name: "GPT", command: "codex",
-                       icon: "brain", role: .command, isBuiltin: true),
             LaunchTool(id: terminalID, name: "Terminal", command: "",
                        icon: "terminal", role: .terminal, isBuiltin: true),
+            // Extra agents ship OFF by default — toggle them on in
+            // Settings → Launchers. Commands are editable if yours differ.
+            LaunchTool(id: geminiID, name: "Gemini", command: "gemini",
+                       icon: "sparkle", enabled: false, role: .command, isBuiltin: true),
+            LaunchTool(id: kimiID, name: "Kimi", command: "kimi",
+                       icon: "moon.stars", enabled: false, role: .command, isBuiltin: true),
+            LaunchTool(id: opencodeID, name: "opencode", command: "opencode",
+                       icon: "chevron.left.forwardslash.chevron.right",
+                       enabled: false, role: .command, isBuiltin: true),
         ]
     }
 }
