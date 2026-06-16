@@ -413,9 +413,9 @@ private struct FooterActionButton: View {
     }
 }
 
-/// Floating info card rendered inside an `.popover`. The popover hosts
-/// itself in its own window, so this card just needs a clean fixed-width
-/// layout — no shadow / border (the popover chrome supplies those).
+/// Floating info card hosted in a click-through tooltip window. It owns its
+/// own chrome (background / border / shadow comes from the window) so it reads
+/// well as a standalone surface, not just inside popover trim.
 struct HoverInfoCard: View {
     let title: String
     let subtitle: String
@@ -434,13 +434,25 @@ struct HoverInfoCard: View {
         .padding(.horizontal, 12)
         .padding(.vertical, 9)
         .frame(width: 240, alignment: .leading)
+        .background(
+            RoundedRectangle(cornerRadius: 10, style: .continuous)
+                .fill(.regularMaterial)
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: 10, style: .continuous)
+                .strokeBorder(Color.primary.opacity(0.10), lineWidth: 1)
+        )
+        .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
     }
 }
 
-/// Reusable view modifier: shows a `HoverInfoCard` in a native popover
-/// after a 250ms hover delay. Native popovers render in their own window
-/// so the card escapes any pane-level clipping. Pass in title + subtitle
-/// at the call site; the modifier owns the show/hide state internally.
+/// Reusable view modifier: shows a `HoverInfoCard` in a floating tooltip
+/// window after a 250ms hover delay. We deliberately avoid `.popover` because
+/// a popover is a transient window that *intercepts the first click* — it
+/// would sit over the trigger and swallow the click meant for the button.
+/// `TooltipWindowController` uses a non-activating, `ignoresMouseEvents`
+/// window instead, so the card floats above any pane clipping yet the control
+/// underneath stays fully clickable.
 extension View {
     func hoverInfo(title: String, subtitle: String) -> some View {
         modifier(HoverInfoModifier(title: title, subtitle: subtitle))
@@ -451,29 +463,127 @@ private struct HoverInfoModifier: ViewModifier {
     let title: String
     let subtitle: String
 
-    @State private var showPopup = false
     @State private var hoverTask: Task<Void, Never>?
+    @State private var anchor = TooltipAnchor()
 
     func body(content: Content) -> some View {
         content
+            .background(TooltipAnchorReader(anchor: anchor))
             .onHover { hovering in
                 hoverTask?.cancel()
                 if hovering {
                     hoverTask = Task {
                         try? await Task.sleep(nanoseconds: 250_000_000)
                         if !Task.isCancelled {
-                            await MainActor.run { showPopup = true }
+                            await MainActor.run {
+                                guard let frame = anchor.screenFrame() else { return }
+                                TooltipWindowController.shared.show(
+                                    title: title, subtitle: subtitle, anchorScreenFrame: frame)
+                            }
                         }
                     }
                 } else {
-                    showPopup = false
+                    TooltipWindowController.shared.hide()
                 }
             }
             .help("\(title) — \(subtitle)")
-            .popover(isPresented: $showPopup,
-                     attachmentAnchor: .point(.top),
-                     arrowEdge: .bottom) {
-                HoverInfoCard(title: title, subtitle: subtitle)
+            .onDisappear {
+                hoverTask?.cancel()
+                TooltipWindowController.shared.hide()
             }
+    }
+}
+
+/// Holds a weak reference to the trigger's backing `NSView` so the modifier
+/// can resolve its current on-screen frame at hover time (positions move as
+/// panes resize / scroll).
+@MainActor
+final class TooltipAnchor {
+    weak var view: NSView?
+
+    func screenFrame() -> NSRect? {
+        guard let view, let window = view.window else { return nil }
+        let inWindow = view.convert(view.bounds, to: nil)
+        return window.convertToScreen(inWindow)
+    }
+}
+
+private struct TooltipAnchorReader: NSViewRepresentable {
+    let anchor: TooltipAnchor
+
+    func makeNSView(context: Context) -> NSView {
+        let v = NSView()
+        anchor.view = v
+        return v
+    }
+
+    func updateNSView(_ nsView: NSView, context: Context) {
+        anchor.view = nsView
+    }
+}
+
+/// A single shared, borderless, non-activating window that hosts the hover
+/// card. `ignoresMouseEvents = true` makes it click-through, so it can sit
+/// over the trigger without ever stealing the click — the actual fix for the
+/// "tooltip covers the button" bug.
+@MainActor
+final class TooltipWindowController {
+    static let shared = TooltipWindowController()
+
+    private var panel: NSPanel?
+    private var host: NSHostingView<HoverInfoCard>?
+
+    func show(title: String, subtitle: String, anchorScreenFrame anchor: NSRect) {
+        let card = HoverInfoCard(title: title, subtitle: subtitle)
+
+        let panel: NSPanel
+        if let existing = self.panel, let host {
+            panel = existing
+            host.rootView = card
+        } else {
+            let host = NSHostingView(rootView: card)
+            let p = NSPanel(contentRect: .zero,
+                            styleMask: [.borderless, .nonactivatingPanel],
+                            backing: .buffered, defer: false)
+            p.isFloatingPanel = true
+            p.level = .popUpMenu
+            p.backgroundColor = .clear
+            p.isOpaque = false
+            p.hasShadow = true
+            p.ignoresMouseEvents = true          // <- click-through: the whole point
+            p.collectionBehavior = [.transient, .ignoresCycle]
+            p.contentView = host
+            self.panel = p
+            self.host = host
+            panel = p
+        }
+
+        guard let host = self.host else { return }
+        host.layoutSubtreeIfNeeded()
+        let size = host.fittingSize
+
+        // Place the card just below the trigger (screen coords = bottom-left
+        // origin, so "below" is a smaller y), horizontally centered on it, and
+        // clamp into the visible screen.
+        let gap: CGFloat = 6
+        var origin = NSPoint(x: anchor.midX - size.width / 2,
+                             y: anchor.minY - gap - size.height)
+
+        let screen = NSScreen.screens.first { $0.frame.intersects(anchor) }
+            ?? NSScreen.main
+        if let vf = screen?.visibleFrame {
+            origin.x = min(max(origin.x, vf.minX + 4), vf.maxX - size.width - 4)
+            // If it would fall off the bottom, flip above the trigger instead.
+            if origin.y < vf.minY + 4 {
+                origin.y = anchor.maxY + gap
+            }
+        }
+
+        panel.setFrame(NSRect(origin: origin, size: size), display: true)
+        panel.orderFront(nil)
+    }
+
+    func hide() {
+        panel?.orderOut(nil)
     }
 }
