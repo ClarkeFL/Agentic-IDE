@@ -100,6 +100,23 @@ struct AgenticIDEApp: App {
                 }
                 .keyboardShortcut("a", modifiers: [.command, .shift])
             }
+            // Workspace + layout commands. Each posts a notification observed
+            // by MainWindow (file tree) or ProjectWorkspaceView (zoom / new).
+            CommandMenu("View") {
+                Button("Toggle File Tree") {
+                    NotificationCenter.default.post(name: .toggleFileTree, object: nil)
+                }
+                .keyboardShortcut("b", modifiers: [.command, .option])
+                Divider()
+                Button("Zoom Cell") {
+                    NotificationCenter.default.post(name: .toggleCellZoom, object: nil)
+                }
+                .keyboardShortcut("f", modifiers: [.command, .control])
+                Button("New Workspace") {
+                    NotificationCenter.default.post(name: .newWorkspace, object: nil)
+                }
+                .keyboardShortcut("t", modifiers: [.command])
+            }
         }
 
         // Standard macOS Settings… scene (gives ⌘, automatically). The

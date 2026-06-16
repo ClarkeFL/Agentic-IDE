@@ -22,6 +22,10 @@ struct MainWindow: View {
     /// Drives the Ask overlay slide-in. Toggled by the ⌘⇧A menu command via
     /// the `.toggleAskOverlay` notification.
     @State private var showAsk = false
+    /// Collapses pane ② (file tree) into a thin reopen rail. Persisted so the
+    /// choice survives relaunch. Toggled by the ⌘⌥B command (`.toggleFileTree`)
+    /// and the file-tree header's collapse button.
+    @AppStorage("fileTreeCollapsed") private var fileTreeCollapsed = false
 
     var body: some View {
         ZStack {
@@ -35,6 +39,11 @@ struct MainWindow: View {
         .onReceive(NotificationCenter.default.publisher(for: .toggleAskOverlay)) { _ in
             withAnimation(.spring(response: 0.35, dampingFraction: 0.85)) {
                 showAsk.toggle()
+            }
+        }
+        .onReceive(NotificationCenter.default.publisher(for: .toggleFileTree)) { _ in
+            withAnimation(.easeInOut(duration: 0.18)) {
+                fileTreeCollapsed.toggle()
             }
         }
     }
@@ -73,6 +82,10 @@ struct MainWindow: View {
             autosaveName: "AgenticIDE.MainSplit",
             pane1Min: 160, pane1Initial: 200, pane1Max: 360,
             pane2Min: 160, pane2Initial: 240, pane2Max: 480,
+            pane2Collapsed: fileTreeCollapsed,
+            onExpandPane2: {
+                withAnimation(.easeInOut(duration: 0.18)) { fileTreeCollapsed = false }
+            },
             pane3Min: 240,
             pane3Collapsed: editorPaneCollapsed,
             // Claude Code's banner + status bar comfortably needs ~70
@@ -87,6 +100,7 @@ struct MainWindow: View {
             pane4: { terminalsPane }
         )
         .animation(.easeInOut(duration: 0.18), value: editorPaneCollapsed)
+        .animation(.easeInOut(duration: 0.18), value: fileTreeCollapsed)
     }
 
     /// Hide the editor pane whenever it has nothing useful to show — no

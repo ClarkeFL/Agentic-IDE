@@ -111,6 +111,10 @@ struct FileTreeView: View {
                     await gitWatcher.refresh()
                 }
             }
+            HeaderIconButton(systemName: "sidebar.left",
+                             help: "Hide file tree (⌘⌥B)") {
+                NotificationCenter.default.post(name: .toggleFileTree, object: nil)
+            }
         }
         .padding(.leading, DS.Gutter.inspector)
         .padding(.trailing, DS.Space.sm)
