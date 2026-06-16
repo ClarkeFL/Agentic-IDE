@@ -103,7 +103,7 @@ struct AgenticIDEApp: App {
             // Workspace + layout commands. Each posts a notification observed
             // by MainWindow (file tree) or ProjectWorkspaceView (zoom / new).
             CommandMenu("View") {
-                Button("Toggle File Tree") {
+                Button("Toggle Explorer") {
                     NotificationCenter.default.post(name: .toggleFileTree, object: nil)
                 }
                 .keyboardShortcut("b", modifiers: [.command, .option])

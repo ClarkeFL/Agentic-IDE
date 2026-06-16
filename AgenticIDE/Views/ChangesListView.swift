@@ -150,49 +150,57 @@ struct GitFooterBar: View {
 
     var body: some View {
         if gitWatcher.isGitRepo {
-            HStack(spacing: DS.Space.sm) {
-                branchLabel
-                Spacer(minLength: 0)
-                actionButton(.fetch,
-                             systemName: "arrow.triangle.2.circlepath",
-                             title: "Fetch",
-                             subtitle: gitWatcher.hasUpstream
-                                 ? "Refresh ahead/behind from origin without merging."
-                                 : "No upstream configured — set one with `git push -u`.",
-                             enabled: gitWatcher.hasUpstream,
-                             badge: nil)
-                actionButton(.pull,
-                             systemName: "arrow.down.to.line",
-                             title: "Pull",
-                             subtitle: gitWatcher.behind > 0
-                                 ? "Fast-forward \(gitWatcher.behind) incoming commit\(gitWatcher.behind == 1 ? "" : "s") from origin."
-                                 : (gitWatcher.hasUpstream
-                                     ? "Branch is up to date with origin."
-                                     : "No upstream configured."),
-                             enabled: gitWatcher.hasUpstream && gitWatcher.behind > 0,
-                             badge: gitWatcher.behind > 0 ? gitWatcher.behind : nil)
-                actionButton(.push,
-                             systemName: "arrow.up.to.line",
-                             title: "Push",
-                             subtitle: gitWatcher.ahead > 0
-                                 ? "Push \(gitWatcher.ahead) local commit\(gitWatcher.ahead == 1 ? "" : "s") to origin."
-                                 : (gitWatcher.hasUpstream
-                                     ? "Nothing to push — origin matches HEAD."
-                                     : "No upstream configured."),
-                             enabled: gitWatcher.hasUpstream && gitWatcher.ahead > 0,
-                             badge: gitWatcher.ahead > 0 ? gitWatcher.ahead : nil)
-                actionButton(.commit,
-                             systemName: "checkmark.circle",
-                             title: "Commit",
-                             subtitle: gitWatcher.changes.isEmpty
-                                 ? "Working tree is clean."
-                                 : "Stage all and commit (\(gitWatcher.changes.count) file\(gitWatcher.changes.count == 1 ? "" : "s")).",
-                             enabled: !gitWatcher.changes.isEmpty,
-                             badge: gitWatcher.changes.isEmpty ? nil : gitWatcher.changes.count)
+            VStack(alignment: .leading, spacing: DS.Space.xs) {
+                // Row 1 — branch / PR / upstream status, on its own line so the
+                // action buttons below never cover the repo name.
+                HStack(spacing: 0) {
+                    branchLabel
+                    Spacer(minLength: 0)
+                }
+                // Row 2 — the git action buttons.
+                HStack(spacing: DS.Space.sm) {
+                    actionButton(.fetch,
+                                 systemName: "arrow.triangle.2.circlepath",
+                                 title: "Fetch",
+                                 subtitle: gitWatcher.hasUpstream
+                                     ? "Refresh ahead/behind from origin without merging."
+                                     : "No upstream configured — set one with `git push -u`.",
+                                 enabled: gitWatcher.hasUpstream,
+                                 badge: nil)
+                    actionButton(.pull,
+                                 systemName: "arrow.down.to.line",
+                                 title: "Pull",
+                                 subtitle: gitWatcher.behind > 0
+                                     ? "Fast-forward \(gitWatcher.behind) incoming commit\(gitWatcher.behind == 1 ? "" : "s") from origin."
+                                     : (gitWatcher.hasUpstream
+                                         ? "Branch is up to date with origin."
+                                         : "No upstream configured."),
+                                 enabled: gitWatcher.hasUpstream && gitWatcher.behind > 0,
+                                 badge: gitWatcher.behind > 0 ? gitWatcher.behind : nil)
+                    actionButton(.push,
+                                 systemName: "arrow.up.to.line",
+                                 title: "Push",
+                                 subtitle: gitWatcher.ahead > 0
+                                     ? "Push \(gitWatcher.ahead) local commit\(gitWatcher.ahead == 1 ? "" : "s") to origin."
+                                     : (gitWatcher.hasUpstream
+                                         ? "Nothing to push — origin matches HEAD."
+                                         : "No upstream configured."),
+                                 enabled: gitWatcher.hasUpstream && gitWatcher.ahead > 0,
+                                 badge: gitWatcher.ahead > 0 ? gitWatcher.ahead : nil)
+                    actionButton(.commit,
+                                 systemName: "checkmark.circle",
+                                 title: "Commit",
+                                 subtitle: gitWatcher.changes.isEmpty
+                                     ? "Working tree is clean."
+                                     : "Stage all and commit (\(gitWatcher.changes.count) file\(gitWatcher.changes.count == 1 ? "" : "s")).",
+                                 enabled: !gitWatcher.changes.isEmpty,
+                                 badge: gitWatcher.changes.isEmpty ? nil : gitWatcher.changes.count)
+                    Spacer(minLength: 0)
+                }
             }
             .padding(.horizontal, DS.Space.sm)
-            .frame(height: 34)
-            .background(.regularMaterial)
+            .padding(.vertical, DS.Space.xs)
+            .background(Color(nsColor: .controlBackgroundColor))
             .overlay(alignment: .top) { Divider() }
         }
     }

@@ -24,6 +24,10 @@ struct PersistentSplitView<P1: View, P2: View, P3: View, P4: View>: View {
     let pane2Collapsed: Bool
     /// Invoked when the user clicks the reopen rail to bring pane 2 back.
     let onExpandPane2: (() -> Void)?
+    /// When this changes, pane 2 animates to the new width (still draggable
+    /// afterward). Used to widen the Explorer when a file opens and shrink it
+    /// back when none are. nil = leave pane 2 at its persisted width.
+    let pane2PreferredWidth: CGFloat?
 
     let pane3Min: CGFloat
     /// When true, pane 3 and its preceding divider are removed from the
@@ -61,6 +65,7 @@ struct PersistentSplitView<P1: View, P2: View, P3: View, P4: View>: View {
          pane2Max: CGFloat = 480,
          pane2Collapsed: Bool = false,
          onExpandPane2: (() -> Void)? = nil,
+         pane2PreferredWidth: CGFloat? = nil,
          pane3Min: CGFloat = 320,
          pane3Collapsed: Bool = false,
          pane4Min: CGFloat = 280,
@@ -79,6 +84,7 @@ struct PersistentSplitView<P1: View, P2: View, P3: View, P4: View>: View {
         self.pane2Max = pane2Max
         self.pane2Collapsed = pane2Collapsed
         self.onExpandPane2 = onExpandPane2
+        self.pane2PreferredWidth = pane2PreferredWidth
         self.pane3Min = pane3Min
         self.pane3Collapsed = pane3Collapsed
         self.pane4Min = pane4Min
@@ -157,6 +163,16 @@ struct PersistentSplitView<P1: View, P2: View, P3: View, P4: View>: View {
             .clipped()
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
+        // When the preferred width changes (e.g. a file opens → widen the
+        // Explorer, or the last file closes → shrink it), animate pane 2 to it.
+        // The user can still drag afterward.
+        .onChange(of: pane2PreferredWidth) { _, newValue in
+            guard let target = newValue else { return }
+            withAnimation(.easeInOut(duration: 0.22)) {
+                pane2Width = clamp(target, min: pane2Min, max: pane2Max)
+            }
+            UserDefaults.standard.set(Double(pane2Width), forKey: "\(autosaveName).pane2Width")
+        }
     }
 
     /// Resolve the four pane widths so they sum exactly to `total - dividers`,
@@ -315,7 +331,7 @@ private struct Pane2ReopenRail: View {
             }
             .buttonStyle(.plain)
             .onHover { isHovered = $0 }
-            .help("Show file tree (⌘⌥B)")
+            .help("Show panel (⌘⌥B)")
 
             Spacer(minLength: 0)
         }

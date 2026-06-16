@@ -732,9 +732,9 @@ private struct ProjectRow: View {
                 // (capped) shows each grid's shape + per-cell status at a glance.
                 // When expanded, each workspace row shows its own glyph.
                 if !isExpanded, !session.workspaces.isEmpty {
-                    HStack(spacing: DS.Space.xs) {
-                        ForEach(session.workspaces.prefix(4)) { ws in
-                            WorkspaceGridGlyph(workspace: ws, square: 4, gap: 1)
+                    HStack(spacing: DS.Space.sm) {
+                        ForEach(session.workspaces.prefix(3)) { ws in
+                            WorkspaceGridGlyph(workspace: ws, square: 7, gap: 1.5, corner: 2)
                         }
                     }
                 }

@@ -112,7 +112,7 @@ struct FileTreeView: View {
                 }
             }
             HeaderIconButton(systemName: "sidebar.left",
-                             help: "Hide file tree (⌘⌥B)") {
+                             help: "Hide panel (⌘⌥B)") {
                 NotificationCenter.default.post(name: .toggleFileTree, object: nil)
             }
         }

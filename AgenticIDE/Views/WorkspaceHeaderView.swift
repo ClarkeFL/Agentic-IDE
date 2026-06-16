@@ -34,7 +34,8 @@ struct WorkspaceHeaderView: View {
             .padding(.leading, DS.Space.lg - 2)
             .padding(.trailing, DS.Space.lg - 2)
             .frame(height: DS.Control.header)
-            Divider()
+            // No bottom divider — the cell square below is its own bordered
+            // surface, so a line under the header just reads as redundant.
         }
         // Solid (not translucent) — matches the other pane headers and avoids
         // the faint shaded band the material produced over dark content.
