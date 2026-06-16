@@ -22,9 +22,9 @@ struct WorkspaceGridView: View {
             }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
-        // Flush on the leading (divider) side; breathing room on the window
-        // edges (top gap from header, bottom + trailing window border).
-        .padding(EdgeInsets(top: gap, leading: 0, bottom: DS.Space.md, trailing: DS.Space.md))
+        // 4pt on the leading (divider) side so the gap matches the window
+        // edges; breathing room top (header), bottom + trailing (window border).
+        .padding(EdgeInsets(top: gap, leading: gap, bottom: DS.Space.md, trailing: DS.Space.md))
         .background(Color(nsColor: .windowBackgroundColor))
     }
 

@@ -53,10 +53,10 @@ struct ExplorerView: View {
             RoundedRectangle(cornerRadius: DS.Radius.lg, style: .continuous)
                 .strokeBorder(Color(nsColor: .separatorColor), lineWidth: 1)
         )
-        // Flush on the divider-facing sides (the divider reserves the gap);
-        // a bit of room top, and more at the bottom window edge.
-        .padding(EdgeInsets(top: DS.Space.xs, leading: 0,
-                            bottom: DS.Space.md, trailing: 0))
+        // 4pt on the divider-facing sides — with the 8pt divider that puts the
+        // card border ~8pt from the divider line, matching the window-edge gap.
+        .padding(EdgeInsets(top: DS.Space.xs, leading: DS.Space.xs,
+                            bottom: DS.Space.md, trailing: DS.Space.xs))
     }
 
     private func clampedTreeWidth(total: CGFloat) -> CGFloat {
