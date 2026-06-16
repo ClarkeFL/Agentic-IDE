@@ -72,6 +72,8 @@ struct LaunchTool: Identifiable, Codable, Hashable {
     static let claudeID = UUID(uuidString: "00000000-0000-0000-0000-0000000000A2")!
     static let codexID = UUID(uuidString: "00000000-0000-0000-0000-0000000000A3")!
     static let terminalID = UUID(uuidString: "00000000-0000-0000-0000-0000000000A4")!
+    static let geminiID = UUID(uuidString: "00000000-0000-0000-0000-0000000000A5")!
+    static let gptID = UUID(uuidString: "00000000-0000-0000-0000-0000000000A6")!
 
     static func defaults() -> [LaunchTool] {
         [
@@ -81,6 +83,12 @@ struct LaunchTool: Identifiable, Codable, Hashable {
                        icon: "brand:claude", role: .command, isBuiltin: true),
             LaunchTool(id: codexID, name: "Codex", command: "codex",
                        icon: "brand:codex", role: .command, isBuiltin: true),
+            LaunchTool(id: geminiID, name: "Gemini", command: "gemini",
+                       icon: "sparkle", role: .command, isBuiltin: true),
+            // "GPT" runs OpenAI's Codex CLI — a friendlier label/alias so the
+            // orchestrator can `agentide launch <n> gpt`.
+            LaunchTool(id: gptID, name: "GPT", command: "codex",
+                       icon: "brain", role: .command, isBuiltin: true),
             LaunchTool(id: terminalID, name: "Terminal", command: "",
                        icon: "terminal", role: .terminal, isBuiltin: true),
         ]
