@@ -35,8 +35,19 @@ struct ProjectSidebarView: View {
             // below the traffic-light row, so reserving that inset made the
             // header read as centered instead of left-aligned.
             PaneHeader(leadingPadding: DS.Gutter.sidebar + DS.Space.sm,
-                       trailingPadding: DS.Space.md) {
-                PaneTitle("Projects", count: visibleCount)
+                       trailingPadding: DS.Space.sm) {
+                HStack(spacing: DS.Space.xxs) {
+                    PaneTitle("Projects", count: visibleCount)
+                    SidebarHeaderAddButton(createProject: createProject,
+                                           addProject: addProject)
+                    SidebarHeaderButton(systemName: "folder.badge.plus",
+                                        help: "New Group",
+                                        action: startNewGroup)
+                    SidebarHeaderButton(systemName: "arrow.triangle.2.circlepath",
+                                        help: "Check for Updates",
+                                        action: { updater.checkForUpdates() })
+                        .disabled(!updater.canCheckForUpdates)
+                }
             }
 
             // `.scrollIndicators(.hidden)` alone doesn't reclaim the
@@ -69,35 +80,11 @@ struct ProjectSidebarView: View {
             .animation(.easeOut(duration: 0.12), value: hoveredDropKey)
 
             Divider()
-            // Footer is three stacked rows on a single block: CPU on top,
-            // MEM (CPU/MEM are owned by `ResourceBar`'s VStack), then the
-            // action icons. All three buttons are icon-only — the labels
-            // were redundant given the tooltips, and dropping them lets
-            // the icons sit on a single tight row.
-            VStack(alignment: .leading, spacing: DS.Space.xs) {
-                ResourceBar()
-                HStack(spacing: DS.Space.sm) {
-                    SidebarProjectAddButton(createProject: createProject,
-                                            addProject: addProject)
-                    SidebarFooterButton(label: "",
-                                        systemName: "folder.badge.plus",
-                                        fillsWidth: true,
-                                        help: "New Group",
-                                        action: startNewGroup)
-                    // Direct-action update button — no dropdown. Settings
-                    // stays reachable via ⌘, and the standard "AgenticIDE
-                    // → Settings…" menu-bar item, so we don't lose access
-                    // by removing the gear menu from this footer.
-                    SidebarFooterButton(label: "",
-                                        systemName: "arrow.triangle.2.circlepath",
-                                        fillsWidth: true,
-                                        help: "Check for Updates",
-                                        action: { updater.checkForUpdates() })
-                        .disabled(!updater.canCheckForUpdates)
-                }
-            }
-            .padding(.horizontal, DS.Space.md)
-            .padding(.vertical, DS.Space.sm)
+            // Footer is just the CPU / MEM readout now — the add / new-group /
+            // update icons moved up next to the "Projects" header.
+            ResourceBar()
+                .padding(.horizontal, DS.Space.md)
+                .padding(.vertical, DS.Space.sm)
         }
         // Menu-bar commands (File → New Project / Add Existing Project) post
         // these; the sidebar owns the panels + store so it observes here.
@@ -515,67 +502,35 @@ private struct DropZoneHighlight: ViewModifier {
     }
 }
 
-private struct SidebarFooterButton: View {
-    let label: String
+/// Compact icon button sitting in the "Projects" header — just the glyph with a
+/// small hit area and a hover background, no big pill.
+private struct SidebarHeaderButton: View {
     let systemName: String
-    let fillsWidth: Bool
     let help: String
     let action: () -> Void
 
     @State private var isHovered = false
-    @State private var isPressed = false
-
-    /// True when this button has a visible text label. The icon-only path
-    /// (no label, fillsWidth) shows just the icon centred in a stretched
-    /// pill — used by the footer's three action buttons so they tile the
-    /// row evenly.
-    private var hasLabel: Bool { fillsWidth && !label.isEmpty }
 
     var body: some View {
         Button(action: action) {
-            HStack(spacing: DS.Space.sm) {
-                Image(systemName: systemName)
-                    .font(DS.Font.bodySemibold)
-                if hasLabel {
-                    Text(label)
-                        .font(DS.Font.bodyMedium)
-                    Spacer(minLength: 0)
-                }
-            }
-            .padding(.horizontal, hasLabel ? DS.Space.md : 0)
-            .padding(.vertical, DS.Space.xs + 1)
-            .frame(maxWidth: fillsWidth ? .infinity : nil,
-                   alignment: hasLabel ? .leading : .center)
-            // Pin an explicit height so the icon-only footer pills match the
-            // menu pill exactly (the menu's borderlessButton style won't grow
-            // from vertical padding, so both sides agree on a fixed height).
-            .frame(width: fillsWidth ? nil : DS.Control.large,
-                   height: DS.Control.large)
-            .background(
-                RoundedRectangle(cornerRadius: DS.Radius.lg, style: .continuous)
-                    .fill(Color.primary.opacity(isPressed ? 0.16 : (isHovered ? 0.10 : 0.04)))
-            )
-            .overlay(
-                RoundedRectangle(cornerRadius: DS.Radius.lg, style: .continuous)
-                    .strokeBorder(Color.primary.opacity(isHovered ? 0.18 : 0.10), lineWidth: 0.5)
-            )
-            .contentShape(Rectangle())
-            .scaleEffect(isPressed ? 0.97 : 1.0)
-            .animation(.easeOut(duration: 0.08), value: isHovered)
-            .animation(.easeOut(duration: 0.08), value: isPressed)
+            Image(systemName: systemName)
+                .font(.system(size: 11, weight: .semibold))
+                .frame(width: 22, height: 22)
+                .background(
+                    RoundedRectangle(cornerRadius: DS.Radius.md, style: .continuous)
+                        .fill(Color.primary.opacity(isHovered ? 0.10 : 0.0))
+                )
+                .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
         .onHover { isHovered = $0 }
-        .simultaneousGesture(
-            DragGesture(minimumDistance: 0)
-                .onChanged { _ in isPressed = true }
-                .onEnded { _ in isPressed = false }
-        )
         .help(help)
     }
 }
 
-private struct SidebarProjectAddButton: View {
+/// The "+" header button — same compact look, but opens the New / Add Existing
+/// project popover instead of firing a single action.
+private struct SidebarHeaderAddButton: View {
     let createProject: () -> Void
     let addProject: () -> Void
 
@@ -587,19 +542,15 @@ private struct SidebarProjectAddButton: View {
             isPresented.toggle()
         } label: {
             Image(systemName: "plus")
-                .font(DS.Font.bodySemibold)
-                .frame(maxWidth: .infinity, minHeight: DS.Control.large, maxHeight: DS.Control.large)
+                .font(.system(size: 11, weight: .semibold))
+                .frame(width: 22, height: 22)
+                .background(
+                    RoundedRectangle(cornerRadius: DS.Radius.md, style: .continuous)
+                        .fill(Color.primary.opacity(isHovered ? 0.10 : 0.0))
+                )
                 .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
-        .background(
-            RoundedRectangle(cornerRadius: DS.Radius.lg, style: .continuous)
-                .fill(Color.primary.opacity(isHovered ? 0.10 : 0.04))
-        )
-        .overlay(
-            RoundedRectangle(cornerRadius: DS.Radius.lg, style: .continuous)
-                .strokeBorder(Color.primary.opacity(isHovered ? 0.18 : 0.10), lineWidth: 0.5)
-        )
         .onHover { isHovered = $0 }
         .popover(isPresented: $isPresented, arrowEdge: .bottom) {
             VStack(alignment: .leading, spacing: DS.Space.xs) {

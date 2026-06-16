@@ -83,7 +83,9 @@ struct MainWindow: View {
             pane1Min: 160, pane1Initial: 200, pane1Max: 360,
             // Pane 2 is now the Explorer card (file tree + editor). It needs to
             // grow wide enough to hold both comfortably, so the max is large.
-            pane2Min: 200, pane2Initial: 300, pane2Max: 1100,
+            // The min is raised while a file is open so the workspace pane can't
+            // shrink the editor below a usable width.
+            pane2Min: explorerMinWidth, pane2Initial: 300, pane2Max: 1100,
             pane2Collapsed: fileTreeCollapsed,
             onExpandPane2: {
                 withAnimation(.easeInOut(duration: 0.18)) { fileTreeCollapsed = false }
@@ -113,6 +115,14 @@ struct MainWindow: View {
         guard let project = fileAccessProject else { return nil }
         let hasFile = !editors.session(for: project.id).tabs.isEmpty
         return hasFile ? 560 : 300
+    }
+
+    /// Lower bound for the Explorer pane. While a file is open it can't shrink
+    /// below tree + a usable editor width, so dragging the workspace divider
+    /// (or a narrow persisted width on launch) can never crush the editor.
+    private var explorerMinWidth: CGFloat {
+        guard let project = fileAccessProject else { return 200 }
+        return editors.session(for: project.id).tabs.isEmpty ? 200 : 480
     }
 
     // MARK: - Pane 1: Sidebar
