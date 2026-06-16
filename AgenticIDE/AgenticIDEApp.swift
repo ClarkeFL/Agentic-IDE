@@ -14,6 +14,12 @@ struct AgenticIDEApp: App {
     /// (⌘⇧A). Owned at the app level so the conversation persists across
     /// overlay open/close without persisting to disk.
     @State private var ask = AskSession()
+    /// Global, persisted list of cell launcher tiles (Server/Claude/Codex/
+    /// Terminal + any custom CLI the user adds in Settings → Launchers).
+    @State private var launchTools = LaunchToolStore()
+    /// User-rebindable keyboard shortcuts. The menu commands read every
+    /// shortcut from here, and Settings → Shortcuts edits it.
+    @State private var keybindings = KeybindingStore()
     @StateObject private var updater = UpdaterManager()
 
     init() {
@@ -39,6 +45,8 @@ struct AgenticIDEApp: App {
                 .environment(speaker)
                 .environment(resources)
                 .environment(ask)
+                .environment(launchTools)
+                .environment(keybindings)
                 .environmentObject(updater)
                 .frame(minWidth: 900, minHeight: 560)
         }
@@ -54,11 +62,11 @@ struct AgenticIDEApp: App {
                 Button("New Project…") {
                     NotificationCenter.default.post(name: .newProject, object: nil)
                 }
-                .keyboardShortcut("n", modifiers: [.command])
+                .keyboardShortcut(keybindings.shortcut(for: .newProject))
                 Button("Add Existing Project…") {
                     NotificationCenter.default.post(name: .addProject, object: nil)
                 }
-                .keyboardShortcut("o", modifiers: [.command, .shift])
+                .keyboardShortcut(keybindings.shortcut(for: .addProject))
             }
             // Editor save / close — the EditorPaneView listens for these
             // and routes to its active tab. App-wide shortcuts: when the
@@ -68,11 +76,11 @@ struct AgenticIDEApp: App {
                 Button("Save") {
                     NotificationCenter.default.post(name: .saveActiveEditorTab, object: nil)
                 }
-                .keyboardShortcut("s", modifiers: [.command])
+                .keyboardShortcut(keybindings.shortcut(for: .save))
                 Button("Close Editor Tab") {
                     NotificationCenter.default.post(name: .closeActiveEditorTab, object: nil)
                 }
-                .keyboardShortcut("w", modifiers: [.command, .shift])
+                .keyboardShortcut(keybindings.shortcut(for: .closeTab))
             }
             // Speak selection from the active terminal. ProjectWorkspaceView
             // observes the notification and calls into its active tab.
@@ -80,9 +88,9 @@ struct AgenticIDEApp: App {
                 Button("Speak Selection") {
                     NotificationCenter.default.post(name: .speakSelection, object: nil)
                 }
-                .keyboardShortcut("s", modifiers: [.command, .shift])
+                .keyboardShortcut(keybindings.shortcut(for: .speak))
                 Button("Stop Speaking") { speaker.stop() }
-                    .keyboardShortcut(".", modifiers: [.command, .shift])
+                    .keyboardShortcut(keybindings.shortcut(for: .stopSpeak))
                     .disabled(!speaker.isSpeaking)
             }
             // Sparkle-driven update flow. Sits in the app menu where macOS
@@ -98,7 +106,24 @@ struct AgenticIDEApp: App {
                 Button("Ask…") {
                     NotificationCenter.default.post(name: .toggleAskOverlay, object: nil)
                 }
-                .keyboardShortcut("a", modifiers: [.command, .shift])
+                .keyboardShortcut(keybindings.shortcut(for: .ask))
+            }
+            // Workspace + layout commands. Each posts a notification observed
+            // by MainWindow (file tree) or ProjectWorkspaceView (zoom / new).
+            CommandMenu("View") {
+                Button("Toggle Explorer") {
+                    NotificationCenter.default.post(name: .toggleFileTree, object: nil)
+                }
+                .keyboardShortcut(keybindings.shortcut(for: .toggleExplorer))
+                Divider()
+                Button("Zoom Cell") {
+                    NotificationCenter.default.post(name: .toggleCellZoom, object: nil)
+                }
+                .keyboardShortcut(keybindings.shortcut(for: .zoomCell))
+                Button("New Workspace") {
+                    NotificationCenter.default.post(name: .newWorkspace, object: nil)
+                }
+                .keyboardShortcut(keybindings.shortcut(for: .newWorkspace))
             }
         }
 
@@ -107,6 +132,8 @@ struct AgenticIDEApp: App {
         Settings {
             SettingsView()
                 .environment(speaker)
+                .environment(launchTools)
+                .environment(keybindings)
         }
     }
 }
@@ -131,6 +158,15 @@ extension Notification.Name {
     /// Posted by the Ask menu (⌘⇧A). Observed by `MainWindow`, which slides
     /// the `AskOverlay` in/out over the 4-pane layout.
     static let toggleAskOverlay = Notification.Name("AgenticIDE.toggleAskOverlay")
+    /// Posted by View → Zoom Cell (⌃⌘F). Observed by `ProjectWorkspaceView`,
+    /// which zooms the focused workspace cell (or restores the grid).
+    static let toggleCellZoom = Notification.Name("AgenticIDE.toggleCellZoom")
+    /// Posted by View → New Workspace (⌘T). Observed by `ProjectWorkspaceView`,
+    /// which adds a fresh workspace to the active project's session.
+    static let newWorkspace = Notification.Name("AgenticIDE.newWorkspace")
+    /// Posted by View → Toggle File Tree (⌘⌥B). Observed by `MainWindow`,
+    /// which collapses/expands the file-tree pane (②).
+    static let toggleFileTree = Notification.Name("AgenticIDE.toggleFileTree")
 }
 
 /// Lives only to make termination unrefusable. macOS sends a quit AppleEvent

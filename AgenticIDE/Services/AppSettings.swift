@@ -21,7 +21,17 @@ enum AppSettings {
         /// Prefix invocation for the Ask overlay (⌘⇧A). The user's prompt is
         /// appended as a single-quoted positional argument, so the value is
         /// "everything before the prompt." Defaults to `claude -p`.
+        ///
+        /// Legacy: superseded by the provider/model/effort picker in the
+        /// overlay composer (`ask.provider` + the per-provider keys below).
+        /// Kept only so older defaults don't error on read.
         static let askCommand = "ask.command"
+        /// Selected Ask provider raw value (`AskProvider.rawValue`).
+        static let askProvider = "ask.provider"
+        /// Last-used model id per provider, keyed `ask.model.<provider>`.
+        static func askModel(_ provider: AskProvider) -> String { "ask.model.\(provider.rawValue)" }
+        /// Last-used effort per provider, keyed `ask.effort.<provider>`.
+        static func askEffort(_ provider: AskProvider) -> String { "ask.effort.\(provider.rawValue)" }
         /// Whether to play a sound when an agent finishes a turn
         /// (TerminalTab status flips working → completed/failed).
         static let completionSoundEnabled = "notifications.completionSoundEnabled"
@@ -48,5 +58,45 @@ enum AppSettings {
         let stored = UserDefaults.standard.string(forKey: Keys.askCommand)?
             .trimmingCharacters(in: .whitespaces) ?? ""
         return stored.isEmpty ? "claude -p" : stored
+    }
+
+    // MARK: - Ask overlay provider/model/effort
+
+    /// Provider the Ask overlay last used. Defaults to Claude.
+    static var askProvider: AskProvider {
+        get {
+            UserDefaults.standard.string(forKey: Keys.askProvider)
+                .flatMap(AskProvider.init(rawValue:)) ?? .claude
+        }
+        set { UserDefaults.standard.set(newValue.rawValue, forKey: Keys.askProvider) }
+    }
+
+    /// Model last used for `provider`, resolved against its current catalogue.
+    static func askModel(for provider: AskProvider) -> AskModel {
+        provider.model(id: UserDefaults.standard.string(forKey: Keys.askModel(provider)))
+    }
+
+    static func setAskModel(_ model: AskModel, for provider: AskProvider) {
+        UserDefaults.standard.set(model.id, forKey: Keys.askModel(provider))
+    }
+
+    /// Effort last used for `provider`, clamped to what it supports.
+    static func askEffort(for provider: AskProvider) -> AskEffort {
+        let stored = UserDefaults.standard.string(forKey: Keys.askEffort(provider))
+            .flatMap(AskEffort.init(rawValue:)) ?? provider.defaultEffort
+        return provider.effort(stored)
+    }
+
+    static func setAskEffort(_ effort: AskEffort, for provider: AskProvider) {
+        UserDefaults.standard.set(effort.rawValue, forKey: Keys.askEffort(provider))
+    }
+
+    /// Whether the given provider should run with its "skip safety prompts"
+    /// flag, reusing the existing per-CLI toggles from Settings → Agents.
+    static func askDangerous(for provider: AskProvider) -> Bool {
+        switch provider {
+        case .claude: return claudeDangerousSkipPermissions
+        case .codex:  return codexDangerousBypass
+        }
     }
 }

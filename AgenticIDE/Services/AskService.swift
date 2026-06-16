@@ -21,20 +21,21 @@ enum AskService {
         }
     }
 
-    /// Stream the answer to `prompt`. The base invocation comes from
-    /// `AppSettings.askCommand` (default `claude -p`); the prompt is appended
-    /// as a single-quoted positional argument with embedded apostrophes
-    /// escaped. Cancellation (`continuation.onTermination`) terminates the
-    /// underlying process so a half-finished answer doesn't keep streaming
-    /// after the user closes the overlay.
-    static func stream(prompt: String) -> AsyncThrowingStream<String, Error> {
+    /// Stream the answer to `prompt`. `command` is the prefix invocation built
+    /// from the overlay's provider/model/effort picker (e.g.
+    /// `claude -p --model opus --effort high`); the prompt is appended as a
+    /// single-quoted positional argument with embedded apostrophes escaped.
+    /// Cancellation (`continuation.onTermination`) terminates the underlying
+    /// process so a half-finished answer doesn't keep streaming after the user
+    /// closes the overlay.
+    static func stream(prompt: String, command: String) -> AsyncThrowingStream<String, Error> {
         AsyncThrowingStream { continuation in
             let process = Process()
             let stdoutPipe = Pipe()
             let stderrPipe = Pipe()
 
             let shell = ProcessInfo.processInfo.environment["SHELL"] ?? "/bin/zsh"
-            let baseCommand = AppSettings.askCommand
+            let baseCommand = command
             let escapedPrompt = prompt.replacingOccurrences(of: "'", with: "'\\''")
             // `export NO_COLOR=1` AFTER the profile runs so an interactive rc
             // that re-enables color (claude / codex setups commonly do) can't
@@ -46,6 +47,9 @@ enum AskService {
             process.arguments = ["-ilc", fullCommand]
             process.standardOutput = stdoutPipe
             process.standardError = stderrPipe
+            // Feed EOF immediately so a CLI that probes stdin (e.g. `codex exec`
+            // appends a piped `<stdin>` block) doesn't block waiting on input.
+            process.standardInput = FileHandle.nullDevice
 
             // Run in $HOME so the CLI doesn't accidentally pick up an unrelated
             // project's CLAUDE.md / .codex-config from wherever the user last

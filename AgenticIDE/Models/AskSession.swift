@@ -16,11 +16,23 @@ final class AskSession {
         let id: UUID
         let role: Role
         var text: String
+        /// Heading for an assistant turn — the model that actually answered,
+        /// e.g. "Claude Opus" / "Codex GPT-5.5". `nil` for user / error rows.
+        var senderLabel: String?
+        /// SF Symbol for the assistant avatar (provider-specific).
+        var providerSymbol: String?
+        /// Local image files attached to a user message (paste / attach).
+        var attachments: [URL]
 
-        init(id: UUID = UUID(), role: Role, text: String = "") {
+        init(id: UUID = UUID(), role: Role, text: String = "",
+             senderLabel: String? = nil, providerSymbol: String? = nil,
+             attachments: [URL] = []) {
             self.id = id
             self.role = role
             self.text = text
+            self.senderLabel = senderLabel
+            self.providerSymbol = providerSymbol
+            self.attachments = attachments
         }
     }
 
@@ -32,22 +44,72 @@ final class AskSession {
     /// being filled in (the others are finished assistant turns).
     private(set) var streamingMessageId: UUID?
 
+    // MARK: - Provider / model / effort selection
+
+    /// Which CLI the next message goes to. Restored from `AppSettings` on
+    /// launch and persisted on change so the picker remembers your choice.
+    /// Switching providers reloads that provider's last model + clamps effort.
+    var provider: AskProvider {
+        didSet {
+            guard provider != oldValue else { return }
+            AppSettings.askProvider = provider
+            model = AppSettings.askModel(for: provider)
+            effort = AppSettings.askEffort(for: provider)
+        }
+    }
+
+    var model: AskModel {
+        didSet { AppSettings.setAskModel(model, for: provider) }
+    }
+
+    var effort: AskEffort {
+        didSet { AppSettings.setAskEffort(effort, for: provider) }
+    }
+
+    init() {
+        let provider = AppSettings.askProvider
+        self.provider = provider
+        self.model = AppSettings.askModel(for: provider)
+        self.effort = AppSettings.askEffort(for: provider)
+    }
+
     @ObservationIgnored
     private var currentTask: Task<Void, Never>?
 
-    func send(prompt: String) {
-        let trimmed = prompt.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmed.isEmpty, !isStreaming else { return }
+    /// Heading for the assistant bubble: provider name plus the model alias
+    /// when a specific one is picked ("Claude Opus", "Codex GPT-5.5"). On the
+    /// Auto/Default model it's just the provider ("Claude").
+    private func currentSenderLabel() -> String {
+        model.flag == nil ? provider.displayName : "\(provider.displayName) \(model.label)"
+    }
 
-        messages.append(Message(role: .user, text: trimmed))
+    func send(prompt: String, attachments: [URL] = []) {
+        let trimmed = prompt.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty || !attachments.isEmpty, !isStreaming else { return }
+
+        messages.append(Message(role: .user, text: trimmed, attachments: attachments))
         let placeholderId = UUID()
-        messages.append(Message(id: placeholderId, role: .assistant, text: ""))
+        messages.append(Message(
+            id: placeholderId, role: .assistant, text: "",
+            senderLabel: currentSenderLabel(), providerSymbol: provider.symbol
+        ))
         isStreaming = true
         streamingMessageId = placeholderId
 
+        // Empty text + image(s) → a sensible default so Codex (which wants a
+        // prompt) and Claude both have something to act on.
+        let basePrompt = trimmed.isEmpty ? "Describe the attached image(s)." : trimmed
+        let invocation = provider.invocation(
+            prompt: basePrompt,
+            model: model,
+            effort: effort,
+            dangerous: AppSettings.askDangerous(for: provider),
+            imagePaths: attachments.map(\.path)
+        )
+
         currentTask = Task { @MainActor [weak self] in
             do {
-                for try await chunk in AskService.stream(prompt: trimmed) {
+                for try await chunk in AskService.stream(prompt: invocation.prompt, command: invocation.command) {
                     if Task.isCancelled { break }
                     guard let self else { return }
                     let cleaned = Self.stripAnsi(chunk)
