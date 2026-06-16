@@ -150,71 +150,60 @@ struct GitFooterBar: View {
 
     var body: some View {
         if gitWatcher.isGitRepo {
-            VStack(alignment: .leading, spacing: DS.Space.xs) {
-                // Row 1 — branch / PR / upstream status, on its own line so the
-                // action buttons below never cover the repo name.
-                HStack(spacing: 0) {
-                    branchLabel
-                    Spacer(minLength: 0)
-                }
-                // Row 2 — the git action buttons, centered.
-                HStack(spacing: DS.Space.lg) {
-                    Spacer(minLength: 0)
-                    actionButton(.fetch,
-                                 systemName: "arrow.triangle.2.circlepath",
-                                 title: "Fetch",
-                                 subtitle: gitWatcher.hasUpstream
-                                     ? "Refresh ahead/behind from origin without merging."
-                                     : "No upstream configured — set one with `git push -u`.",
-                                 enabled: gitWatcher.hasUpstream,
-                                 badge: nil)
-                    actionButton(.pull,
-                                 systemName: "arrow.down.to.line",
-                                 title: "Pull",
-                                 subtitle: gitWatcher.behind > 0
-                                     ? "Fast-forward \(gitWatcher.behind) incoming commit\(gitWatcher.behind == 1 ? "" : "s") from origin."
-                                     : (gitWatcher.hasUpstream
-                                         ? "Branch is up to date with origin."
-                                         : "No upstream configured."),
-                                 enabled: gitWatcher.hasUpstream && gitWatcher.behind > 0,
-                                 badge: gitWatcher.behind > 0 ? gitWatcher.behind : nil)
-                    actionButton(.push,
-                                 systemName: "arrow.up.to.line",
-                                 title: "Push",
-                                 subtitle: gitWatcher.ahead > 0
-                                     ? "Push \(gitWatcher.ahead) local commit\(gitWatcher.ahead == 1 ? "" : "s") to origin."
-                                     : (gitWatcher.hasUpstream
-                                         ? "Nothing to push — origin matches HEAD."
-                                         : "No upstream configured."),
-                                 enabled: gitWatcher.hasUpstream && gitWatcher.ahead > 0,
-                                 badge: gitWatcher.ahead > 0 ? gitWatcher.ahead : nil)
-                    actionButton(.commit,
-                                 systemName: "checkmark.circle",
-                                 title: "Commit",
-                                 subtitle: gitWatcher.changes.isEmpty
-                                     ? "Working tree is clean."
-                                     : "Stage all and commit (\(gitWatcher.changes.count) file\(gitWatcher.changes.count == 1 ? "" : "s")).",
-                                 enabled: !gitWatcher.changes.isEmpty,
-                                 badge: gitWatcher.changes.isEmpty ? nil : gitWatcher.changes.count)
-                    Spacer(minLength: 0)
-                }
+            HStack(spacing: DS.Space.sm) {
+                branchLabel
+                Spacer(minLength: 0)
+                actionButton(.fetch,
+                             systemName: "arrow.triangle.2.circlepath",
+                             title: "Fetch",
+                             subtitle: gitWatcher.hasUpstream
+                                 ? "Refresh ahead/behind from origin without merging."
+                                 : "No upstream configured — set one with `git push -u`.",
+                             enabled: gitWatcher.hasUpstream,
+                             badge: nil)
+                actionButton(.pull,
+                             systemName: "arrow.down.to.line",
+                             title: "Pull",
+                             subtitle: gitWatcher.behind > 0
+                                 ? "Fast-forward \(gitWatcher.behind) incoming commit\(gitWatcher.behind == 1 ? "" : "s") from origin."
+                                 : (gitWatcher.hasUpstream
+                                     ? "Branch is up to date with origin."
+                                     : "No upstream configured."),
+                             enabled: gitWatcher.hasUpstream && gitWatcher.behind > 0,
+                             badge: gitWatcher.behind > 0 ? gitWatcher.behind : nil)
+                actionButton(.push,
+                             systemName: "arrow.up.to.line",
+                             title: "Push",
+                             subtitle: gitWatcher.ahead > 0
+                                 ? "Push \(gitWatcher.ahead) local commit\(gitWatcher.ahead == 1 ? "" : "s") to origin."
+                                 : (gitWatcher.hasUpstream
+                                     ? "Nothing to push — origin matches HEAD."
+                                     : "No upstream configured."),
+                             enabled: gitWatcher.hasUpstream && gitWatcher.ahead > 0,
+                             badge: gitWatcher.ahead > 0 ? gitWatcher.ahead : nil)
+                actionButton(.commit,
+                             systemName: "checkmark.circle",
+                             title: "Commit",
+                             subtitle: gitWatcher.changes.isEmpty
+                                 ? "Working tree is clean."
+                                 : "Stage all and commit (\(gitWatcher.changes.count) file\(gitWatcher.changes.count == 1 ? "" : "s")).",
+                             enabled: !gitWatcher.changes.isEmpty,
+                             badge: gitWatcher.changes.isEmpty ? nil : gitWatcher.changes.count)
             }
             .padding(.horizontal, DS.Space.sm)
-            // Extra top room so the divider doesn't sit right on the branch name.
-            .padding(.top, DS.Space.md)
-            .padding(.bottom, DS.Space.sm)
-            .background(Color(nsColor: .controlBackgroundColor))
+            .frame(height: 34)
+            .background(.regularMaterial)
             .overlay(alignment: .top) { Divider() }
         }
     }
 
     private var branchLabel: some View {
-        HStack(spacing: DS.Space.xs + 1) {
+        HStack(spacing: 4) {
             Image(systemName: "arrow.triangle.branch")
-                .font(.system(size: 12, weight: .semibold))
+                .font(.system(size: 10, weight: .semibold))
                 .foregroundStyle(.secondary)
             Text(gitWatcher.branch ?? "—")
-                .font(.system(size: 13, weight: .medium))
+                .font(DS.Font.control)
                 .foregroundStyle(.primary)
                 .lineLimit(1)
                 .truncationMode(.middle)
@@ -223,7 +212,7 @@ struct GitFooterBar: View {
             }
             if !gitWatcher.hasUpstream && gitWatcher.branch != nil {
                 Text("· no upstream")
-                    .font(.system(size: 11))
+                    .font(.system(size: 10))
                     .foregroundStyle(.tertiary)
                     .lineLimit(1)
             }
@@ -424,9 +413,9 @@ private struct FooterActionButton: View {
     }
 }
 
-/// Floating info card rendered inside an `.popover`. The popover hosts
-/// itself in its own window, so this card just needs a clean fixed-width
-/// layout — no shadow / border (the popover chrome supplies those).
+/// Floating info card hosted in a click-through tooltip window. It owns its
+/// own chrome (background / border / shadow comes from the window) so it reads
+/// well as a standalone surface, not just inside popover trim.
 struct HoverInfoCard: View {
     let title: String
     let subtitle: String
@@ -445,13 +434,25 @@ struct HoverInfoCard: View {
         .padding(.horizontal, 12)
         .padding(.vertical, 9)
         .frame(width: 240, alignment: .leading)
+        .background(
+            RoundedRectangle(cornerRadius: 10, style: .continuous)
+                .fill(.regularMaterial)
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: 10, style: .continuous)
+                .strokeBorder(Color.primary.opacity(0.10), lineWidth: 1)
+        )
+        .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
     }
 }
 
-/// Reusable view modifier: shows a `HoverInfoCard` in a native popover
-/// after a 250ms hover delay. Native popovers render in their own window
-/// so the card escapes any pane-level clipping. Pass in title + subtitle
-/// at the call site; the modifier owns the show/hide state internally.
+/// Reusable view modifier: shows a `HoverInfoCard` in a floating tooltip
+/// window after a 250ms hover delay. We deliberately avoid `.popover` because
+/// a popover is a transient window that *intercepts the first click* — it
+/// would sit over the trigger and swallow the click meant for the button.
+/// `TooltipWindowController` uses a non-activating, `ignoresMouseEvents`
+/// window instead, so the card floats above any pane clipping yet the control
+/// underneath stays fully clickable.
 extension View {
     func hoverInfo(title: String, subtitle: String) -> some View {
         modifier(HoverInfoModifier(title: title, subtitle: subtitle))
@@ -462,34 +463,127 @@ private struct HoverInfoModifier: ViewModifier {
     let title: String
     let subtitle: String
 
-    @State private var showPopup = false
     @State private var hoverTask: Task<Void, Never>?
+    @State private var anchor = TooltipAnchor()
 
     func body(content: Content) -> some View {
         content
+            .background(TooltipAnchorReader(anchor: anchor))
             .onHover { hovering in
                 hoverTask?.cancel()
                 if hovering {
                     hoverTask = Task {
                         try? await Task.sleep(nanoseconds: 250_000_000)
                         if !Task.isCancelled {
-                            await MainActor.run { showPopup = true }
+                            await MainActor.run {
+                                guard let frame = anchor.screenFrame() else { return }
+                                TooltipWindowController.shared.show(
+                                    title: title, subtitle: subtitle, anchorScreenFrame: frame)
+                            }
                         }
                     }
                 } else {
-                    showPopup = false
+                    TooltipWindowController.shared.hide()
                 }
             }
             .help("\(title) — \(subtitle)")
-            // Drop the card *below* the control (anchored to its bottom edge)
-            // rather than above. For chips that live at the top of a pane
-            // header there's no room above, so an above-anchored popover gets
-            // flipped down onto the header's own button row and blocks it.
-            // Anchoring to the bottom clears the whole row.
-            .popover(isPresented: $showPopup,
-                     attachmentAnchor: .point(.bottom),
-                     arrowEdge: .top) {
-                HoverInfoCard(title: title, subtitle: subtitle)
+            .onDisappear {
+                hoverTask?.cancel()
+                TooltipWindowController.shared.hide()
             }
+    }
+}
+
+/// Holds a weak reference to the trigger's backing `NSView` so the modifier
+/// can resolve its current on-screen frame at hover time (positions move as
+/// panes resize / scroll).
+@MainActor
+final class TooltipAnchor {
+    weak var view: NSView?
+
+    func screenFrame() -> NSRect? {
+        guard let view, let window = view.window else { return nil }
+        let inWindow = view.convert(view.bounds, to: nil)
+        return window.convertToScreen(inWindow)
+    }
+}
+
+private struct TooltipAnchorReader: NSViewRepresentable {
+    let anchor: TooltipAnchor
+
+    func makeNSView(context: Context) -> NSView {
+        let v = NSView()
+        anchor.view = v
+        return v
+    }
+
+    func updateNSView(_ nsView: NSView, context: Context) {
+        anchor.view = nsView
+    }
+}
+
+/// A single shared, borderless, non-activating window that hosts the hover
+/// card. `ignoresMouseEvents = true` makes it click-through, so it can sit
+/// over the trigger without ever stealing the click — the actual fix for the
+/// "tooltip covers the button" bug.
+@MainActor
+final class TooltipWindowController {
+    static let shared = TooltipWindowController()
+
+    private var panel: NSPanel?
+    private var host: NSHostingView<HoverInfoCard>?
+
+    func show(title: String, subtitle: String, anchorScreenFrame anchor: NSRect) {
+        let card = HoverInfoCard(title: title, subtitle: subtitle)
+
+        let panel: NSPanel
+        if let existing = self.panel, let host {
+            panel = existing
+            host.rootView = card
+        } else {
+            let host = NSHostingView(rootView: card)
+            let p = NSPanel(contentRect: .zero,
+                            styleMask: [.borderless, .nonactivatingPanel],
+                            backing: .buffered, defer: false)
+            p.isFloatingPanel = true
+            p.level = .popUpMenu
+            p.backgroundColor = .clear
+            p.isOpaque = false
+            p.hasShadow = true
+            p.ignoresMouseEvents = true          // <- click-through: the whole point
+            p.collectionBehavior = [.transient, .ignoresCycle]
+            p.contentView = host
+            self.panel = p
+            self.host = host
+            panel = p
+        }
+
+        guard let host = self.host else { return }
+        host.layoutSubtreeIfNeeded()
+        let size = host.fittingSize
+
+        // Place the card just below the trigger (screen coords = bottom-left
+        // origin, so "below" is a smaller y), horizontally centered on it, and
+        // clamp into the visible screen.
+        let gap: CGFloat = 6
+        var origin = NSPoint(x: anchor.midX - size.width / 2,
+                             y: anchor.minY - gap - size.height)
+
+        let screen = NSScreen.screens.first { $0.frame.intersects(anchor) }
+            ?? NSScreen.main
+        if let vf = screen?.visibleFrame {
+            origin.x = min(max(origin.x, vf.minX + 4), vf.maxX - size.width - 4)
+            // If it would fall off the bottom, flip above the trigger instead.
+            if origin.y < vf.minY + 4 {
+                origin.y = anchor.maxY + gap
+            }
+        }
+
+        panel.setFrame(NSRect(origin: origin, size: size), display: true)
+        panel.orderFront(nil)
+    }
+
+    func hide() {
+        panel?.orderOut(nil)
     }
 }
