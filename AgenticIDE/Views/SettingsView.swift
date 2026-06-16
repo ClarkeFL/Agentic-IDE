@@ -14,6 +14,8 @@ struct SettingsView: View {
                 .tabItem { Label("Launchers", systemImage: "square.grid.2x2") }
             EditorSettingsView()
                 .tabItem { Label("Editor", systemImage: "curlybraces") }
+            KeybindingsSettingsView()
+                .tabItem { Label("Shortcuts", systemImage: "command") }
             HooksSettingsView()
                 .tabItem { Label("Hooks", systemImage: "link") }
             NotificationsSettingsView()
