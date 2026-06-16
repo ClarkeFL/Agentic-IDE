@@ -73,13 +73,9 @@ final class SessionManager {
         sessions[projectId] = s
 
         s.saveHook = { [weak self] in self?.save() }
-        if pendingSnapshots[projectId] != nil {
-            scheduleRestoreIfNeeded(projectId: projectId, into: s)
-        } else {
-            // No saved state — give the project an empty workspace immediately
-            // so pane ④ has something to show on first activation.
-            s.seedInitialWorkspaceIfEmpty()
-        }
+        // No auto-seed: a project with no saved workspaces stays empty, and
+        // pane ④ shows the layout chooser until the user picks a grid size.
+        scheduleRestoreIfNeeded(projectId: projectId, into: s)
         return s
     }
 
@@ -120,7 +116,6 @@ final class SessionManager {
                 session.workspaces.append(ws)
             }
             session.activeWorkspaceId = snapshot.activeWorkspaceId ?? session.workspaces.first?.id
-            session.seedInitialWorkspaceIfEmpty()
             self.pendingSnapshots.removeValue(forKey: projectId)
             self.restoringProjectIds.remove(projectId)
         }
@@ -206,15 +201,11 @@ final class SessionManager {
         return all
     }
 
-    /// A session is only worth writing if the user has shaped it beyond the
-    /// auto-seeded empty single cell: launched something, built a grid, or made
-    /// more than one workspace. A bare 1×1 empty workspace is recreated for
-    /// free by the lazy seed on next activation.
+    /// Persist any project the user has set up at least one workspace for.
+    /// Projects that were only browsed (no workspace created) stay unsaved, so
+    /// next launch they show the layout chooser instead of a restored grid.
     private static func isPersistWorthy(_ session: ProjectSession) -> Bool {
-        if session.workspaces.count > 1 { return true }
-        return session.workspaces.contains { ws in
-            !ws.runningCells.isEmpty || ws.rows * ws.cols > 1
-        }
+        !session.workspaces.isEmpty
     }
 
     private static func write(_ all: [SessionSnapshot], to url: URL, log: Logger) {

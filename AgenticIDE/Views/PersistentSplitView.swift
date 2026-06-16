@@ -301,18 +301,27 @@ private struct Pane2ReopenRail: View {
     @State private var isHovered = false
 
     var body: some View {
-        Button(action: onExpand) {
-            Image(systemName: "sidebar.left")
-                .font(.system(size: DS.Icon.small, weight: .semibold))
-                .foregroundStyle(isHovered ? .primary : .secondary)
-                .frame(width: width)
-                .frame(maxHeight: .infinity)
-                .background(Color.primary.opacity(isHovered ? 0.06 : 0.0))
-                .contentShape(Rectangle())
+        VStack(spacing: 0) {
+            // Toggle sits in a header-height band at the top so it lines up
+            // with the other panes' header icons rather than floating mid-rail.
+            Button(action: onExpand) {
+                Image(systemName: "sidebar.left")
+                    .font(.system(size: DS.Icon.small, weight: .semibold))
+                    .foregroundStyle(isHovered ? .primary : .secondary)
+                    .frame(width: width, height: DS.Control.header)
+                    .background(Color.primary.opacity(isHovered ? 0.08 : 0.0))
+                    .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .onHover { isHovered = $0 }
+            .help("Show file tree (⌘⌥B)")
+
+            Divider()
+            Spacer(minLength: 0)
         }
-        .buttonStyle(.plain)
-        .onHover { isHovered = $0 }
-        .help("Show file tree (⌘⌥B)")
+        .frame(width: width)
+        .frame(maxHeight: .infinity)
+        .background(.regularMaterial)
         .overlay(alignment: .trailing) {
             Rectangle()
                 .fill(Color(nsColor: .separatorColor))

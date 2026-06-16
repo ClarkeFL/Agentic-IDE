@@ -51,19 +51,14 @@ final class ProjectSession: Identifiable {
 
     // MARK: - Workspaces
 
-    /// Ensures a freshly-activated project always has at least one workspace so
-    /// pane ④ is never blank. No-op once any workspace exists (restore ran, or a
-    /// prior seed).
-    func seedInitialWorkspaceIfEmpty() {
-        guard workspaces.isEmpty else { return }
-        let ws = Workspace(name: "Workspace 1")
-        workspaces.append(ws)
-        activeWorkspaceId = ws.id
-    }
-
+    /// Creates a workspace with the chosen grid size and makes it active. We
+    /// deliberately do NOT auto-create a workspace on project selection — the
+    /// user picks a layout first (see `ProjectWorkspaceView`'s chooser), and
+    /// that choice calls this.
     @discardableResult
-    func addWorkspace() -> Workspace {
+    func addWorkspace(rows: Int = 1, cols: Int = 1) -> Workspace {
         let ws = Workspace(name: nextWorkspaceName())
+        if rows != 1 || cols != 1 { ws.resize(rows: rows, cols: cols) }
         workspaces.append(ws)
         activeWorkspaceId = ws.id
         saveHook?()

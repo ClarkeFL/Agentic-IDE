@@ -294,8 +294,11 @@ struct ProjectSidebarView: View {
                                session.activeWorkspaceId = id
                            },
                            onAddWorkspace: {
+                               // The "+ row" only shows on the selected (expanded)
+                               // project, so its pane ④ is mounted and will catch
+                               // this and show the layout chooser.
                                selectedProjectId = project.id
-                               session.addWorkspace()
+                               NotificationCenter.default.post(name: .newWorkspace, object: nil)
                            },
                            onCloseWorkspace: { id in session.removeWorkspace(id: id) },
                            onRenameWorkspace: { id, name in session.renameWorkspace(id: id, to: name) })
@@ -725,16 +728,13 @@ private struct ProjectRow: View {
                     .font(.body.weight(.medium))
                     .lineLimit(1)
                 Spacer(minLength: 4)
-                // Aggregate status dots across every running cell — collapsed
-                // rows only. When expanded, each workspace row shows its own
-                // dots, so a duplicate header indicator just crowds the title.
-                if !isExpanded, !allRunningCells.isEmpty {
-                    HStack(spacing: 3) {
-                        ForEach(allRunningCells) { cell in
-                            Circle()
-                                .fill(dotColor(for: cell.terminal?.status ?? .idle))
-                                .frame(width: 7, height: 7) // status dot — keep tight
-                                .help(dotHelp(for: cell))
+                // Live mini-grids — collapsed rows only. One glyph per workspace
+                // (capped) shows each grid's shape + per-cell status at a glance.
+                // When expanded, each workspace row shows its own glyph.
+                if !isExpanded, !session.workspaces.isEmpty {
+                    HStack(spacing: DS.Space.xs) {
+                        ForEach(session.workspaces.prefix(4)) { ws in
+                            WorkspaceGridGlyph(workspace: ws, square: 4, gap: 1)
                         }
                     }
                 }
@@ -813,24 +813,6 @@ private struct ProjectRow: View {
         return n == 1 ? "1 workspace" : "\(n) workspaces"
     }
 
-    /// Color for one cell's dot. Idle cells fall back to a muted neutral so the
-    /// count still reads as "N running" — the active-status colours pop against
-    /// that baseline.
-    private func dotColor(for status: TerminalTabStatus) -> Color {
-        if let info = TerminalStatusBadge.info(for: status) {
-            return info.color
-        }
-        return Color.secondary.opacity(0.45)
-    }
-
-    /// Tooltip for one dot — names the cell so hovering disambiguates which
-    /// terminal a coloured dot belongs to.
-    private func dotHelp(for cell: WorkspaceCell) -> String {
-        let title = cell.terminal?.title ?? cell.kind?.label ?? "Terminal"
-        let label = TerminalStatusBadge.info(for: cell.terminal?.status ?? .idle)?.label ?? "Idle"
-        return "\(title) — \(label)"
-    }
-
     /// Start time of the longest-running working cell in this project, or nil
     /// when no agent is working. Multiple working cells collapse into one timer
     /// (the earliest start) so the row answers "how long has AI been busy here".
@@ -880,16 +862,14 @@ private struct WorkspaceChildRow: View {
     @State private var isHovered = false
     @State private var isEditing = false
     @State private var draftName: String = ""
-    @State private var pulseOpacity: Double = 1.0
-    /// Guards against stacking `repeatForever` animations on the same property
-    /// when both `.onAppear` and `.onChange` would otherwise call
-    /// `withAnimation` in quick succession.
-    @State private var isPulsing: Bool = false
     @FocusState private var nameFieldFocused: Bool
 
     var body: some View {
         HStack(spacing: DS.Space.sm) {
-            leadingIcon
+            // Live mini-grid — encodes the layout AND each cell's status
+            // (blue = working, green = done), replacing the old icon + dots.
+            WorkspaceGridGlyph(workspace: workspace, square: 4.5, gap: 1.2)
+                .frame(width: 24, alignment: .leading)
 
             if isEditing {
                 TextField("", text: $draftName)
@@ -903,24 +883,9 @@ private struct WorkspaceChildRow: View {
                     .font(.system(size: DS.FontSize.body, weight: isActive ? .semibold : .regular))
                     .foregroundStyle(isActive ? .primary : .secondary)
                     .lineLimit(1)
-                Text("\(workspace.rows)×\(workspace.cols)")
-                    .font(DS.Font.badge)
-                    .foregroundStyle(.tertiary)
             }
 
             Spacer(minLength: DS.Space.xs)
-
-            // Per-running-cell status dots — the at-a-glance multi-agent view.
-            if !workspace.runningCells.isEmpty, !isEditing {
-                HStack(spacing: 3) {
-                    ForEach(workspace.runningCells) { cell in
-                        Circle()
-                            .fill(dotColor(cell.terminal?.status ?? .idle))
-                            .frame(width: 6, height: 6) // status dot — keep tight
-                            .help(dotHelp(cell))
-                    }
-                }
-            }
             // Reserve close-button space so layout doesn't reflow on hover.
             Color.clear.frame(width: DS.Control.compact, height: DS.Control.badge)
         }
@@ -963,53 +928,6 @@ private struct WorkspaceChildRow: View {
             Divider()
             Button("Close Workspace", role: .destructive) { onClose() }
         }
-        .onChange(of: aggregateWorking) { _, working in
-            updatePulse(working: working)
-        }
-        .onAppear {
-            updatePulse(working: aggregateWorking)
-        }
-    }
-
-    /// Leading glyph: a pulsing status dot when any cell is working / done /
-    /// failed, otherwise the grid icon.
-    @ViewBuilder
-    private var leadingIcon: some View {
-        if let info = TerminalStatusBadge.info(for: aggregateStatus) {
-            Circle()
-                .fill(info.color)
-                .frame(width: 7, height: 7) // status dot — keep tight
-                .frame(width: DS.Tree.iconColumn - 2)
-                .opacity(aggregateWorking ? pulseOpacity : 1.0)
-                .help(info.label)
-        } else {
-            Image(systemName: "square.grid.2x2")
-                .font(DS.Font.control)
-                .foregroundStyle(.secondary)
-                .frame(width: DS.Tree.iconColumn - 2)
-        }
-    }
-
-    /// Highest-priority status across the workspace's running cells:
-    /// working > failed > completed > idle.
-    private var aggregateStatus: TerminalTabStatus {
-        let statuses = workspace.runningCells.compactMap { $0.terminal?.status }
-        if statuses.contains(.working) { return .working }
-        if statuses.contains(.failed) { return .failed }
-        if statuses.contains(.completed) { return .completed }
-        return .idle
-    }
-
-    private var aggregateWorking: Bool { aggregateStatus == .working }
-
-    private func dotColor(_ status: TerminalTabStatus) -> Color {
-        TerminalStatusBadge.info(for: status)?.color ?? Color.secondary.opacity(0.45)
-    }
-
-    private func dotHelp(_ cell: WorkspaceCell) -> String {
-        let title = cell.terminal?.title ?? cell.kind?.label ?? "Terminal"
-        let label = TerminalStatusBadge.info(for: cell.terminal?.status ?? .idle)?.label ?? "Idle"
-        return "\(title) — \(label)"
     }
 
     private func startRename() {
@@ -1022,22 +940,6 @@ private struct WorkspaceChildRow: View {
         let trimmed = draftName.trimmingCharacters(in: .whitespaces)
         if !trimmed.isEmpty { onRename(trimmed) }
         isEditing = false
-    }
-
-    /// Single entry point for starting/stopping the working-state pulse.
-    /// Idempotent — repeated calls with the same `working` value short-circuit
-    /// so a re-render of an already-pulsing row doesn't stack another
-    /// `repeatForever` animation onto `pulseOpacity`.
-    private func updatePulse(working: Bool) {
-        guard working != isPulsing else { return }
-        isPulsing = working
-        if working {
-            withAnimation(.easeInOut(duration: 0.9).repeatForever(autoreverses: true)) {
-                pulseOpacity = 0.35
-            }
-        } else {
-            withAnimation(.easeInOut(duration: 0.2)) { pulseOpacity = 1.0 }
-        }
     }
 }
 

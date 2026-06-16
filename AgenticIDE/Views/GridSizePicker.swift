@@ -4,12 +4,11 @@ import SwiftUI
 /// r×c block under the cursor; clicking commits that size.
 struct GridSizePicker: View {
     let current: (rows: Int, cols: Int)
+    var dotW: CGFloat = 26
+    var dotH: CGFloat = 18
     let onSelect: (Int, Int) -> Void
 
     @State private var hover: (rows: Int, cols: Int)?
-
-    private let dotW: CGFloat = 26
-    private let dotH: CGFloat = 18
 
     var body: some View {
         let preview = hover ?? current

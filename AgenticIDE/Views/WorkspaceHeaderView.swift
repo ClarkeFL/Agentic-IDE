@@ -2,8 +2,8 @@ import SwiftUI
 
 /// Pane ④ header strip. Locked to `DS.Control.header` so it shares its top +
 /// bottom edges with the sidebar `PaneHeader` and the file-tree header. Shows
-/// the active workspace name, the grid-size picker, and the prompt-library +
-/// speaker controls (which used to live in the now-removed tab bar).
+/// the (renameable) active workspace name, a live grid glyph that doubles as
+/// the size picker, and the prompt-library + speaker controls.
 struct WorkspaceHeaderView: View {
     @Bindable var session: ProjectSession
     @Bindable var workspace: Workspace
@@ -11,14 +11,14 @@ struct WorkspaceHeaderView: View {
     let onSpeak: () -> Void
 
     @State private var showGridPicker = false
+    @State private var isEditingName = false
+    @State private var draftName = ""
+    @FocusState private var nameFocused: Bool
 
     var body: some View {
         VStack(spacing: 0) {
             HStack(spacing: DS.Space.sm) {
-                Text(workspace.name)
-                    .font(DS.Font.bodySemibold)
-                    .lineLimit(1)
-                    .truncationMode(.middle)
+                nameView
 
                 gridButton
 
@@ -39,14 +39,38 @@ struct WorkspaceHeaderView: View {
         .background(.regularMaterial)
     }
 
+    @ViewBuilder
+    private var nameView: some View {
+        if isEditingName {
+            TextField("", text: $draftName)
+                .textFieldStyle(.plain)
+                .font(DS.Font.bodySemibold)
+                .frame(maxWidth: 180)
+                .focused($nameFocused)
+                .onSubmit(commitRename)
+                .onExitCommand { isEditingName = false }
+        } else {
+            Text(workspace.name)
+                .font(DS.Font.bodySemibold)
+                .lineLimit(1)
+                .truncationMode(.middle)
+                .contentShape(Rectangle())
+                .onTapGesture(count: 2) { startRename() }
+                .help("Double-click to rename")
+                .contextMenu {
+                    Button("Rename…") { startRename() }
+                }
+        }
+    }
+
     private var gridButton: some View {
         Button { showGridPicker = true } label: {
-            HStack(spacing: 3) {
-                Image(systemName: "square.grid.2x2")
-                    .font(.system(size: DS.Icon.small, weight: .semibold))
+            HStack(spacing: DS.Space.xs) {
+                WorkspaceGridGlyph(workspace: workspace, square: 6, gap: 1.5)
                 Text("\(workspace.rows)×\(workspace.cols)")
                     .font(DS.Font.control)
                     .monospacedDigit()
+                    .foregroundStyle(.secondary)
             }
             .padding(.horizontal, DS.Space.sm)
             .frame(height: DS.Control.standard)
@@ -64,6 +88,17 @@ struct WorkspaceHeaderView: View {
                 showGridPicker = false
             }
         }
+    }
+
+    private func startRename() {
+        draftName = workspace.name
+        isEditingName = true
+        DispatchQueue.main.async { nameFocused = true }
+    }
+
+    private func commitRename() {
+        session.renameWorkspace(id: workspace.id, to: draftName)
+        isEditingName = false
     }
 }
 

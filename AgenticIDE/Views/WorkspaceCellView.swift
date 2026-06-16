@@ -20,9 +20,14 @@ struct WorkspaceCellView: View {
     @State private var showServerPopover = false
 
     var body: some View {
-        ZStack {
+        VStack(spacing: 0) {
             if let tab = cell.terminal {
-                terminalBody(tab)
+                cellHeader(tab)
+                Divider()
+                GhosttyTerminal(view: tab.view,
+                                isActive: isActive,
+                                autoFocus: shouldAutoFocus,
+                                onFocused: { workspace.focusedCellId = cell.id })
             } else {
                 CellLauncherView(onLaunch: launch)
             }
@@ -57,29 +62,14 @@ struct WorkspaceCellView: View {
 
     // MARK: - Terminal
 
-    @ViewBuilder
-    private func terminalBody(_ tab: TerminalTab) -> some View {
-        GhosttyTerminal(view: tab.view,
-                        isActive: isActive,
-                        autoFocus: shouldAutoFocus,
-                        onFocused: { workspace.focusedCellId = cell.id })
-            .overlay(alignment: .top) {
-                if hovering { toolbar(tab) }
-            }
-    }
-
-    /// Only one cell should grab first responder on appear. Prefer the focused
-    /// cell; otherwise the first running cell in the grid.
-    private var shouldAutoFocus: Bool {
-        if let f = workspace.focusedCellId { return f == cell.id }
-        return workspace.runningCells.first?.id == cell.id
-    }
-
-    private func toolbar(_ tab: TerminalTab) -> some View {
+    /// Built-in title bar at the top of a running cell. Part of the layout (a
+    /// VStack row), NOT an overlay — so it never hides terminal output. The
+    /// terminal renders below it and fills the rest of the cell.
+    private func cellHeader(_ tab: TerminalTab) -> some View {
         HStack(spacing: DS.Space.xs) {
-            quickLaunchIcon(name: cell.kind?.icon, size: DS.FontSize.body)
+            quickLaunchIcon(name: cell.kind?.icon, size: DS.FontSize.footnote)
             Text(tab.title)
-                .font(DS.Font.bodyMedium)
+                .font(DS.Font.control)
                 .lineLimit(1)
                 .truncationMode(.middle)
             Spacer(minLength: DS.Space.sm)
@@ -95,10 +85,17 @@ struct WorkspaceCellView: View {
             }
         }
         .padding(.horizontal, DS.Space.sm)
-        .padding(.vertical, DS.Space.xs)
-        .background(.ultraThinMaterial)
-        .clipShape(RoundedRectangle(cornerRadius: DS.Radius.md, style: .continuous))
-        .padding(DS.Space.xs)
+        .frame(height: DS.Control.standard)
+        .background(Color(nsColor: .windowBackgroundColor))
+        .contentShape(Rectangle())
+        .onTapGesture { workspace.focusedCellId = cell.id }
+    }
+
+    /// Only one cell should grab first responder on appear. Prefer the focused
+    /// cell; otherwise the first running cell in the grid.
+    private var shouldAutoFocus: Bool {
+        if let f = workspace.focusedCellId { return f == cell.id }
+        return workspace.runningCells.first?.id == cell.id
     }
 
     // MARK: - Launching
