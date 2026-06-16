@@ -481,9 +481,14 @@ private struct HoverInfoModifier: ViewModifier {
                 }
             }
             .help("\(title) — \(subtitle)")
+            // Drop the card *below* the control (anchored to its bottom edge)
+            // rather than above. For chips that live at the top of a pane
+            // header there's no room above, so an above-anchored popover gets
+            // flipped down onto the header's own button row and blocks it.
+            // Anchoring to the bottom clears the whole row.
             .popover(isPresented: $showPopup,
-                     attachmentAnchor: .point(.top),
-                     arrowEdge: .bottom) {
+                     attachmentAnchor: .point(.bottom),
+                     arrowEdge: .top) {
                 HoverInfoCard(title: title, subtitle: subtitle)
             }
     }
