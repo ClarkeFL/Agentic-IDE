@@ -119,7 +119,9 @@ struct FileTreeView: View {
         .padding(.leading, DS.Gutter.inspector)
         .padding(.trailing, DS.Space.sm)
         .frame(height: DS.Control.header)
-        .background(.regularMaterial)
+        // Solid (not translucent) so the tree scrolling underneath doesn't
+        // blur through the header. Matches the other pane headers.
+        .background(Color(nsColor: .controlBackgroundColor))
         .overlay(alignment: .bottom) {
             Divider()
         }

@@ -302,8 +302,9 @@ private struct Pane2ReopenRail: View {
 
     var body: some View {
         VStack(spacing: 0) {
-            // Toggle sits in a header-height band at the top so it lines up
-            // with the other panes' header icons rather than floating mid-rail.
+            // Just the toggle, sitting in the header band at the top. No
+            // trailing border and no material — the rail blends into the
+            // surrounding panes so the collapsed file tree is unobtrusive.
             Button(action: onExpand) {
                 Image(systemName: "sidebar.left")
                     .font(.system(size: DS.Icon.small, weight: .semibold))
@@ -316,17 +317,11 @@ private struct Pane2ReopenRail: View {
             .onHover { isHovered = $0 }
             .help("Show file tree (⌘⌥B)")
 
-            Divider()
             Spacer(minLength: 0)
         }
         .frame(width: width)
         .frame(maxHeight: .infinity)
-        .background(.regularMaterial)
-        .overlay(alignment: .trailing) {
-            Rectangle()
-                .fill(Color(nsColor: .separatorColor))
-                .frame(width: 1)
-        }
+        .background(Color(nsColor: .windowBackgroundColor))
     }
 }
 

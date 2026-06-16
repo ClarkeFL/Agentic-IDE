@@ -36,7 +36,9 @@ struct WorkspaceHeaderView: View {
             .frame(height: DS.Control.header)
             Divider()
         }
-        .background(.regularMaterial)
+        // Solid (not translucent) — matches the other pane headers and avoids
+        // the faint shaded band the material produced over dark content.
+        .background(Color(nsColor: .controlBackgroundColor))
     }
 
     @ViewBuilder

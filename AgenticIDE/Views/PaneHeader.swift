@@ -32,7 +32,9 @@ struct PaneHeader<Content: View>: View {
                 .frame(height: DS.Control.header)
             Divider()
         }
-        .background(.regularMaterial)
+        // Solid (not translucent) so content scrolling underneath doesn't blur
+        // through the header as a faint shaded band. Matches the editor header.
+        .background(Color(nsColor: .controlBackgroundColor))
     }
 }
 
