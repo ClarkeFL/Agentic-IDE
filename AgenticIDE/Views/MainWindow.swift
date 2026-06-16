@@ -6,6 +6,7 @@ struct MainWindow: View {
     @Environment(SessionManager.self) private var sessions
     @Environment(EditorSessionManager.self) private var editors
     @Environment(GitStatusWatcherStore.self) private var gitWatchers
+    @Environment(LaunchToolStore.self) private var launchTools
     @AppStorage("currentProjectId") private var currentProjectIdString: String = ""
 
     @State private var selectedProjectId: UUID?
@@ -60,7 +61,7 @@ struct MainWindow: View {
                 restoreSelection()
                 // Start the local agent bridge (cell → cell control/observe).
                 // Idempotent; needs the session manager to resolve cells.
-                AgentBridge.shared.start(sessions: sessions)
+                AgentBridge.shared.start(sessions: sessions, store: store, launchTools: launchTools)
                 if !didEvaluateFDA {
                     didEvaluateFDA = true
                     evaluateFullDiskAccess()

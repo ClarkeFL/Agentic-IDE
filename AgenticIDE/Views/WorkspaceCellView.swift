@@ -19,9 +19,9 @@ struct WorkspaceCellView: View {
 
     @State private var hovering = false
     @State private var showServerPopover = false
-    /// Icon of the Server tool the user clicked — captured so the deferred
-    /// spawn (after the Run Server popover) tags the cell with the right glyph.
-    @State private var serverIcon: String = "play.circle"
+    /// The Server tool the user clicked — captured so the deferred spawn (after
+    /// the Run Server popover) launches it with the right icon.
+    @State private var serverTool: LaunchTool?
 
     var body: some View {
         VStack(spacing: 0) {
@@ -50,7 +50,7 @@ struct WorkspaceCellView: View {
                 onSave: { cmd in
                     saveServerCommand(cmd)
                     showServerPopover = false
-                    spawnServer()
+                    if let serverTool { _ = launcher.launch(serverTool, into: cell) }
                 },
                 onCancel: { showServerPopover = false })
         }
@@ -104,49 +104,18 @@ struct WorkspaceCellView: View {
 
     // MARK: - Launching
 
+    private var launcher: CellLauncher {
+        CellLauncher(project: project, session: session, workspace: workspace, store: store)
+    }
+
     private func launch(_ tool: LaunchTool) {
-        switch tool.role {
-        case .server:
-            serverIcon = tool.icon
-            if (serverQuickLaunch?.command ?? "").isEmpty {
-                showServerPopover = true
-            } else {
-                spawnServer()
-            }
-        case .terminal:
-            spawnShell(icon: tool.icon)
-        case .command:
-            spawnCommand(tool)
+        // Server with no command yet needs the popover to set one first.
+        if tool.role == .server, (serverQuickLaunch?.command ?? "").isEmpty {
+            serverTool = tool
+            showServerPopover = true
+            return
         }
-    }
-
-    /// Runs the project's per-project Run Server command.
-    private func spawnServer() {
-        guard let ql = serverQuickLaunch, !ql.command.isEmpty else { return }
-        let cfg = PtyService.quickLaunchConfig(ql, cwd: project.path)
-        let tab = TerminalTab(title: ql.label, config: cfg)
-        session.place(tab, icon: serverIcon, in: cell)
-        store.recordActivity(projectId: project.id, command: ql.command)
-    }
-
-    /// Runs a `.command` tool's command via the login shell. The Claude/Codex
-    /// "dangerous" flags still apply because `quickLaunchConfig` augments by
-    /// executable name.
-    private func spawnCommand(_ tool: LaunchTool) {
-        guard !tool.command.isEmpty else { return }
-        let ql = QuickLaunch(label: tool.name, command: tool.command, icon: tool.icon)
-        let cfg = PtyService.quickLaunchConfig(ql, cwd: project.path)
-        let tab = TerminalTab(title: tool.name, config: cfg)
-        session.place(tab, icon: tool.icon, in: cell)
-        store.recordActivity(projectId: project.id, command: tool.command)
-    }
-
-    private func spawnShell(icon: String) {
-        let cfg = PtyService.defaultShellConfig(cwd: project.path)
-        let shell = (PtyService.defaultShell() as NSString).lastPathComponent
-        let tab = TerminalTab(title: shell, config: cfg)
-        session.place(tab, icon: icon, in: cell)
-        store.recordActivity(projectId: project.id, command: shell)
+        _ = launcher.launch(tool, into: cell)
     }
 
     private func saveServerCommand(_ cmd: String) {

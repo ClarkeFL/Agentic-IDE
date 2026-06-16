@@ -42,12 +42,9 @@ final class LaunchToolStore {
         save()
     }
 
-    @discardableResult
-    func add(name: String, command: String, icon: String) -> LaunchTool {
-        let tool = LaunchTool(name: name, command: command, icon: icon)
+    func add(_ tool: LaunchTool) {
         tools.append(tool)
         save()
-        return tool
     }
 
     func update(_ tool: LaunchTool) {

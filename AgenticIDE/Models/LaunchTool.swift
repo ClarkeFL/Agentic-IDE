@@ -19,6 +19,11 @@ struct LaunchTool: Identifiable, Codable, Hashable {
     var enabled: Bool
     var role: Role
     var isBuiltin: Bool
+    /// Flag this CLI uses to *append* to its system prompt, so the cell-bridge
+    /// note is injected on launch (e.g. `--append-system-prompt`). nil = use the
+    /// auto-detected default for the command's executable, if any. Empty string
+    /// is treated the same as nil. Only used in multi-cell workspaces.
+    var promptFlag: String?
 
     init(id: UUID = UUID(),
          name: String,
@@ -26,7 +31,8 @@ struct LaunchTool: Identifiable, Codable, Hashable {
          icon: String,
          enabled: Bool = true,
          role: Role = .command,
-         isBuiltin: Bool = false) {
+         isBuiltin: Bool = false,
+         promptFlag: String? = nil) {
         self.id = id
         self.name = name
         self.command = command
@@ -34,6 +40,30 @@ struct LaunchTool: Identifiable, Codable, Hashable {
         self.enabled = enabled
         self.role = role
         self.isBuiltin = isBuiltin
+        self.promptFlag = promptFlag
+    }
+
+    /// Verified inline "append to system prompt" flags, keyed by the command's
+    /// executable. These take a single quoted string argument and work while
+    /// launching an interactive session. Other CLIs have no clean inline flag
+    /// (they read AGENTS.md / a context file), so they stay manual unless the
+    /// user sets `promptFlag` themselves.
+    static func knownPromptFlag(forCommand command: String) -> String? {
+        let exe = command.trimmingCharacters(in: .whitespaces)
+            .split(separator: " ").first.map(String.init) ?? ""
+        switch (exe as NSString).lastPathComponent {
+        case "claude":            return "--append-system-prompt"
+        case "qwen":              return "--append-system-prompt"
+        case "cn", "continue":    return "--rule"
+        default:                  return nil
+        }
+    }
+
+    /// The flag actually used at launch: an explicit non-empty `promptFlag`
+    /// wins, otherwise the auto-detected default for the executable.
+    var effectivePromptFlag: String? {
+        if let promptFlag, !promptFlag.isEmpty { return promptFlag }
+        return Self.knownPromptFlag(forCommand: command)
     }
 
     /// Stable ids for the built-ins so their enabled/edited state survives a

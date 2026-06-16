@@ -42,7 +42,7 @@ struct LaunchersSettingsView: View {
                 isNew: item.isNew,
                 onSave: { saved in
                     if item.isNew {
-                        store.add(name: saved.name, command: saved.command, icon: saved.icon)
+                        store.add(saved)
                     } else {
                         store.update(saved)
                     }
@@ -143,6 +143,17 @@ private struct LaunchToolEditor: View {
                         TextField("e.g. aider --model sonnet", text: $draft.command)
                             .textFieldStyle(.roundedBorder)
                             .font(.system(.body, design: .monospaced))
+                    }
+                    labeledField("System-prompt flag (optional)") {
+                        TextField(LaunchTool.knownPromptFlag(forCommand: draft.command) ?? "—",
+                                  text: Binding(get: { draft.promptFlag ?? "" },
+                                                set: { draft.promptFlag = $0.isEmpty ? nil : $0 }))
+                            .textFieldStyle(.roundedBorder)
+                            .font(.system(.body, design: .monospaced))
+                        Text("Flag this CLI uses to append to its system prompt, so it learns about the `agentide` cell-bridge on launch (multi-cell workspaces only). Auto-detected for claude / qwen / continue — leave blank to use the default.")
+                            .font(.caption2)
+                            .foregroundStyle(.secondary)
+                            .fixedSize(horizontal: false, vertical: true)
                     }
                 } else {
                     Text(draft.role == .server

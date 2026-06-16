@@ -37,13 +37,15 @@ final class AgentBridge {
 
     /// Idempotent. Wires the session manager (so cells can be resolved), writes
     /// the helper script, and starts the listener once.
-    func start(sessions: SessionManager) {
+    func start(sessions: SessionManager, store: ProjectStore, launchTools: LaunchToolStore) {
         if started {
             cellBus?.sessions = sessions
+            cellBus?.store = store
+            cellBus?.launchTools = launchTools
             return
         }
         started = true
-        cellBus = CellBus(sessions: sessions)
+        cellBus = CellBus(sessions: sessions, store: store, launchTools: launchTools)
         writeHelperScript()
         openSocket()
     }
@@ -76,12 +78,16 @@ final class AgentBridge {
 
         usage() {
           cat >&2 <<'USAGE'
-        Control & observe the other cells in your workspace.
-          agentide cells            List cells (number, what's running, status).
-          agentide send <n> <text>  Type <text> into cell <n> and press Enter.
-          agentide read <n>         Print cell <n>'s screen, to review its progress.
-          agentide status <n>       Print cell <n>'s status (idle/working/completed/failed).
-          agentide wait <n> [secs]  Block until cell <n> finishes (default 600s).
+        Build out & orchestrate the other cells in your workspace.
+          agentide cells              List cells (number, what's running, status).
+          agentide tools              List the launchers you can start (claude, codex, ...).
+          agentide grid <rows> <cols> Resize the grid (max 2 rows by 4 cols).
+          agentide launch <n> <tool>  Launch <tool> in cell <n>.
+          agentide close <n>          Close the program in cell <n>.
+          agentide send <n> <text>    Type <text> into cell <n> and press Enter.
+          agentide read <n>           Print cell <n>'s screen, to review its progress.
+          agentide status <n>         Print cell <n>'s status (idle/working/completed/failed).
+          agentide wait <n> [secs]    Block until cell <n> finishes (default 600s).
         USAGE
         }
 
@@ -92,9 +98,13 @@ final class AgentBridge {
         cmd="$1"; [ $# -gt 0 ] && shift
         case "$cmd" in
           cells)  req "cells $sid" ;;
+          tools)  req "tools $sid" ;;
           read)   req "read $sid $1" ;;
           status) req "status $sid $1" ;;
+          close)  req "close $sid $1" ;;
+          grid)   req "grid $sid $1 $2" ;;
           send)   n="$1"; shift; req "send $sid $n" "$*" ;;
+          launch) n="$1"; shift; req "launch $sid $n" "$*" ;;
           wait)
             n="$1"; secs="${2:-600}"; deadline=$(( $(date +%s) + secs ))
             while :; do
@@ -187,17 +197,17 @@ final class AgentBridge {
             ? String(decoding: data[textStart...], as: UTF8.self)
             : nil
 
-        let parts = header.split(separator: " ", maxSplits: 2).map(String.init)
-        guard parts.count >= 2, let surfaceId = UUID(uuidString: parts[1]) else {
+        let tokens = header.split(separator: " ").map(String.init)
+        guard tokens.count >= 2, let surfaceId = UUID(uuidString: tokens[1]) else {
             return "error: malformed request\n"
         }
-        let verb = parts[0]
-        let cellNumber = parts.count >= 3 ? Int(parts[2]) : nil
+        let verb = tokens[0]
+        let args = Array(tokens.dropFirst(2))
 
         var response = "error: app not ready"
         let bus = cellBus
         DispatchQueue.main.sync {
-            response = bus?.handle(verb: verb, surfaceId: surfaceId, cell: cellNumber, text: text)
+            response = bus?.handle(verb: verb, surfaceId: surfaceId, args: args, body: text)
                 ?? "error: app not ready"
         }
         return response.hasSuffix("\n") ? response : response + "\n"
