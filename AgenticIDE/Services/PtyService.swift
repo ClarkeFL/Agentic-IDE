@@ -16,7 +16,10 @@ enum PtyService {
             "CLICOLOR": "1",
             "COLORTERM": "truecolor",
             "TERM_PROGRAM": "AgenticIDE",
-            "TERM_PROGRAM_VERSION": appVersion()
+            "TERM_PROGRAM_VERSION": appVersion(),
+            // Socket the `agentide` helper talks to so a cell's agent can
+            // drive/observe sibling cells.
+            "AGENTIDE_SOCK": AgentBridge.socketURL.path
         ]
         let inherited = ProcessInfo.processInfo.environment
         if let value = inherited["LSCOLORS"], !value.isEmpty {
@@ -60,7 +63,10 @@ enum PtyService {
     /// being launched from this development session, every child CLI inside
     /// the embedded terminal is forced into monochrome mode.
     private static func terminalBootstrapCommand() -> String {
-        "unset NO_COLOR"
+        // Also prepend the bridge helper's bin dir to PATH (after the login
+        // profile has run) so `agentide` is available in every cell.
+        let bin = AgentBridge.binDirectoryURL.path
+        return "unset NO_COLOR; export PATH=\"\(bin):$PATH\""
     }
 
     /// Existing saved sessions contain the full command line that was built

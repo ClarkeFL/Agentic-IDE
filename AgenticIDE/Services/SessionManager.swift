@@ -128,6 +128,19 @@ final class SessionManager {
         sessions[projectId]
     }
 
+    /// The workspace whose grid contains a cell running the terminal with this
+    /// surface id. Used by the agent bridge to resolve "which cells can the
+    /// caller address" — it can only reach siblings in its own workspace.
+    func workspace(containingSurfaceId id: UUID) -> Workspace? {
+        for (_, session) in sessions {
+            for ws in session.workspaces
+            where ws.cells.contains(where: { $0.terminal?.id == id }) {
+                return ws
+            }
+        }
+        return nil
+    }
+
     /// Cheap persisted workspace count for projects that haven't been activated
     /// in this run yet. Does not restore or spawn any terminal surfaces.
     func savedWorkspaceCount(for projectId: UUID) -> Int {

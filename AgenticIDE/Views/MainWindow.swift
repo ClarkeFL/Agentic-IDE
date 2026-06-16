@@ -58,6 +58,9 @@ struct MainWindow: View {
             .navigationTitle(activeProject?.name ?? "Agentic IDE")
             .onAppear {
                 restoreSelection()
+                // Start the local agent bridge (cell → cell control/observe).
+                // Idempotent; needs the session manager to resolve cells.
+                AgentBridge.shared.start(sessions: sessions)
                 if !didEvaluateFDA {
                     didEvaluateFDA = true
                     evaluateFullDiskAccess()

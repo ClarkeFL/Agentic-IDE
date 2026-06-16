@@ -645,6 +645,54 @@ final class GhosttyTerminalView: NSView, NSTextInputClient {
         return s.isEmpty ? nil : s
     }
 
+    /// Reads the full screen (scrollback + viewport) of this surface as plain
+    /// text. Used by the agent bridge so an orchestrator cell can review what
+    /// another cell's agent is doing. Must be called on the main thread.
+    func readScreenText() -> String? {
+        guard let surface else { return nil }
+        let topLeft = ghostty_point_s(tag: GHOSTTY_POINT_SCREEN,
+                                      coord: GHOSTTY_POINT_COORD_TOP_LEFT, x: 0, y: 0)
+        let bottomRight = ghostty_point_s(tag: GHOSTTY_POINT_SCREEN,
+                                          coord: GHOSTTY_POINT_COORD_BOTTOM_RIGHT, x: 0, y: 0)
+        var selection = ghostty_selection_s(top_left: topLeft,
+                                            bottom_right: bottomRight,
+                                            rectangle: false)
+        var text = ghostty_text_s()
+        let ok = ghostty_surface_read_text(surface, selection, &text)
+        guard ok, let ptr = text.text else { return nil }
+        let s = String(cString: ptr)
+        ghostty_surface_free_text(surface, &text)
+        return s
+    }
+
+    /// Types `text` into this surface's PTY as if the user typed it, optionally
+    /// pressing Return to submit. Used by the agent bridge so an orchestrator
+    /// cell can dispatch a task into another cell. Must be called on the main
+    /// thread.
+    func sendInput(_ text: String, submit: Bool) {
+        guard let surface else { return }
+        if !text.isEmpty {
+            text.withCString { ptr in
+                ghostty_surface_text(surface, ptr, UInt(strlen(ptr)))
+            }
+        }
+        if submit {
+            // A real Return key event (not a `\r` of text) so it submits the
+            // line / prompt rather than inserting a carriage return.
+            var key = ghostty_input_key_s()
+            key.mods = GHOSTTY_MODS_NONE
+            key.consumed_mods = GHOSTTY_MODS_NONE
+            key.keycode = UInt32(kVK_Return)
+            key.text = nil
+            key.unshifted_codepoint = 0
+            key.composing = false
+            key.action = GHOSTTY_ACTION_PRESS
+            _ = ghostty_surface_key(surface, key)
+            key.action = GHOSTTY_ACTION_RELEASE
+            _ = ghostty_surface_key(surface, key)
+        }
+    }
+
     @objc func paste(_ sender: Any?) {
         guard surface != nil else { return }
         let pb = NSPasteboard.general
