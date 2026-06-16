@@ -114,6 +114,11 @@ private struct LayoutChooserView: View {
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .padding(DS.Space.xxl)
-        .background(Color(nsColor: .windowBackgroundColor))
+        // controlBackgroundColor (not windowBackgroundColor) so the canvas
+        // matches the rest of the app and renders identically whether the
+        // window is active or not — windowBackgroundColor is wallpaper-tinted
+        // only for the active app, which made this pane look lighter/"off" on
+        // the inactive (e.g. release) window.
+        .background(Color(nsColor: .controlBackgroundColor))
     }
 }

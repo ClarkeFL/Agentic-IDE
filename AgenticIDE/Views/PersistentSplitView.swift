@@ -337,7 +337,10 @@ private struct Pane2ReopenRail: View {
         }
         .frame(width: width)
         .frame(maxHeight: .infinity)
-        .background(Color(nsColor: .windowBackgroundColor))
+        // Match the surrounding control-surface panes (and avoid the
+        // wallpaper-tinted windowBackgroundColor) so the collapsed rail blends
+        // in regardless of window-active state.
+        .background(Color(nsColor: .controlBackgroundColor))
     }
 }
 
