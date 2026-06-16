@@ -25,7 +25,11 @@ struct WorkspaceGridView: View {
         // Flush on the leading (divider) side — the line-less divider zone is
         // the gap; breathing room top (header), bottom + trailing (window edge).
         .padding(EdgeInsets(top: gap, leading: 0, bottom: DS.Space.md, trailing: DS.Space.md))
-        .background(Color(nsColor: .windowBackgroundColor))
+        // Stable surface color shared with the rest of the app. Avoids
+        // windowBackgroundColor, which macOS wallpaper-tints only on the
+        // active window — that made this canvas render lighter/"off" on the
+        // inactive (release) window vs. the focused dev build.
+        .background(Color(nsColor: .controlBackgroundColor))
     }
 
     private var grid: some View {
