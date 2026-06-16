@@ -80,6 +80,7 @@ struct CellLauncher {
         `agentide send <n> "<text>"` (type text and press Enter in cell n, e.g. to ask another agent a question or give it a task); \
         `agentide read <n>` (view the screen of cell n to see its reply); \
         `agentide wait <n>` (block until cell n finishes). \
+        Also, if you need to run a long-running process such as a dev server, file watcher, or build, run it in a separate cell — grid to make room if needed, then `agentide launch <n> terminal` and `agentide send <n> "<command>"`, or use the Server launcher with `agentide launch <n> server` — instead of running it in your own shell where it would block you. \
         Example — to open two codex and ask who they are: grid to at least 3 cells, launch codex into two empty cells, send each "who are you", then read each.
         """
     }
