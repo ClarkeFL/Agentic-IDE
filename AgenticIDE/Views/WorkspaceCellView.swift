@@ -78,6 +78,14 @@ struct WorkspaceCellView: View {
                 .truncationMode(.middle)
             Spacer(minLength: DS.Space.sm)
             ToolbarIconButton(
+                systemName: "point.3.connected.trianglepath.dotted",
+                help: cell.isOrchestrator
+                    ? "Orchestrator — coordinates other cells. Click to stand down."
+                    : "Make this cell the Orchestrator (drives the other cells)",
+                isActive: cell.isOrchestrator) {
+                    toggleOrchestrator(tab)
+                }
+            ToolbarIconButton(
                 systemName: isZoomed
                     ? "arrow.down.right.and.arrow.up.left"
                     : "arrow.up.left.and.arrow.down.right",
@@ -100,6 +108,23 @@ struct WorkspaceCellView: View {
     private var shouldAutoFocus: Bool {
         if let f = workspace.focusedCellId { return f == cell.id }
         return workspace.runningCells.first?.id == cell.id
+    }
+
+    /// 1-based position of this cell in the grid, matching the numbering the
+    /// agent bridge uses.
+    private var cellNumber: Int {
+        (workspace.cells.firstIndex(where: { $0.id == cell.id }) ?? 0) + 1
+    }
+
+    /// Promote/demote this cell as the workspace Orchestrator. Promoting a live
+    /// agent also briefs it immediately (its launch-time system prompt is
+    /// already fixed); the flag persists so a relaunch reuses the orchestrator
+    /// system prompt.
+    private func toggleOrchestrator(_ tab: TerminalTab) {
+        cell.isOrchestrator.toggle()
+        if cell.isOrchestrator {
+            tab.view.sendInput(CellLauncher.orchestratorBriefing(cellNumber: cellNumber), submit: true)
+        }
     }
 
     // MARK: - Launching
@@ -134,6 +159,8 @@ struct WorkspaceCellView: View {
 private struct ToolbarIconButton: View {
     let systemName: String
     let help: String
+    /// Renders the button in a persistent "on" state (accent tint + fill).
+    var isActive: Bool = false
     let action: () -> Void
 
     @State private var isHovered = false
@@ -142,10 +169,15 @@ private struct ToolbarIconButton: View {
         Button(action: action) {
             Image(systemName: systemName)
                 .font(.system(size: DS.Icon.small, weight: .semibold))
+                .foregroundStyle(isActive ? Color.accentColor : Color.primary)
                 .frame(width: DS.Control.compact, height: DS.Control.compact)
                 .background(
                     RoundedRectangle(cornerRadius: DS.Radius.sm, style: .continuous)
-                        .fill(Color.primary.opacity(isHovered ? 0.12 : 0.0))
+                        .fill(Color.accentColor.opacity(isActive ? 0.18 : 0.0))
+                )
+                .background(
+                    RoundedRectangle(cornerRadius: DS.Radius.sm, style: .continuous)
+                        .fill(Color.primary.opacity(isHovered && !isActive ? 0.12 : 0.0))
                 )
                 .contentShape(Rectangle())
         }
