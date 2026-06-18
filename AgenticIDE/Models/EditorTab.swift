@@ -29,6 +29,10 @@ final class EditorTab: Identifiable, Hashable {
     /// True when the user has toggled the side-by-side HEAD-vs-working diff
     /// view for this tab. Lives on the tab so it survives tab switches.
     var showingDiff: Bool = false
+    /// True when the user has toggled the rendered Markdown preview for this
+    /// tab (only meaningful for Markdown files). Lives on the tab so it
+    /// survives tab switches. Mutually exclusive with `showingDiff`.
+    var showingPreview: Bool = false
     /// Cached HEAD-version contents for the diff view's "before" panel.
     /// Populated lazily the first time the diff toggle is flipped on.
     var headText: String?
