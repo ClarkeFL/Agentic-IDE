@@ -60,7 +60,9 @@ final class SyntaxHighlighter {
     /// name. Returns nil for unknown extensions — the editor should then
     /// skip highlighting and just use the default text colour.
     func languageName(forExtension ext: String) -> String? {
-        switch ext.lowercased() {
+        let e = ext.lowercased()
+        if Self.markdownExtensions.contains(e) { return "markdown" }
+        switch e {
         case "swift": return "swift"
         case "js", "jsx", "mjs", "cjs": return "javascript"
         case "ts", "tsx": return "typescript"
@@ -80,7 +82,6 @@ final class SyntaxHighlighter {
         case "yaml", "yml": return "yaml"
         case "toml": return "ini"
         case "ini", "conf", "cfg": return "ini"
-        case "md", "markdown", "mdx", "mdown", "mkd", "mkdn", "mdwn", "mdtxt": return "markdown"
         case "html", "htm", "svelte", "vue": return "xml"
         case "xml", "plist", "xib", "storyboard": return "xml"
         case "css": return "css"
@@ -147,6 +148,21 @@ final class SyntaxHighlighter {
         default:
             return false
         }
+    }
+
+    /// Markdown file extensions (no leading dot). Single source of truth so
+    /// the editor's "Preview" affordance and the highlighter's grammar
+    /// selection always agree on what counts as Markdown.
+    static let markdownExtensions: Set<String> = [
+        "md", "markdown", "mdx", "mdown", "mkd", "mkdn", "mdwn", "mdtxt"
+    ]
+
+    /// Whether `url` is a Markdown document — by extension (`.md`, `.markdown`,
+    /// …) or by the by-convention bare filenames (`README`, `CHANGELOG`, …).
+    /// Used by the editor to decide whether to offer a rendered preview.
+    static func isMarkdown(_ url: URL) -> Bool {
+        if isMarkdownFilename(url.lastPathComponent.lowercased()) { return true }
+        return markdownExtensions.contains(url.pathExtension.lowercased())
     }
 
     /// Skip highlighting if the document is too large — JSContext is

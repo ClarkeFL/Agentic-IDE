@@ -15,6 +15,7 @@ struct EditorPaneView: View {
             EditorTabBar(editor: editor,
                          gitWatcher: gitWatcher,
                          onToggleDiff: toggleDiff,
+                         onTogglePreview: togglePreview,
                          onOpenInBrowser: openActiveInBrowser)
             content
         }
@@ -46,6 +47,8 @@ struct EditorPaneView: View {
                             .font(.caption).foregroundStyle(.secondary)
                     }
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
+                } else if tab.showingPreview && Self.isMarkdown(tab.url) {
+                    MarkdownPreviewView(text: tab.text)
                 } else if tab.showingDiff {
                     unifiedDiff(tab: tab)
                 } else {
@@ -134,7 +137,20 @@ struct EditorPaneView: View {
         guard let tab = editor.activeTab else { return }
         tab.showingDiff.toggle()
         if tab.showingDiff {
+            tab.showingPreview = false  // diff and preview are mutually exclusive
             Task { await editor.loadHeadIfNeeded(tab, projectRoot: project.path) }
+        }
+    }
+
+    /// Toggle the rendered Markdown preview for the active tab. Turning it on
+    /// drops out of diff mode (they can't both occupy the content area); the
+    /// underlying buffer is untouched, so flipping back returns to the
+    /// editable source exactly as it was.
+    private func togglePreview() {
+        guard let tab = editor.activeTab else { return }
+        tab.showingPreview.toggle()
+        if tab.showingPreview {
+            tab.showingDiff = false
         }
     }
 
@@ -151,6 +167,13 @@ struct EditorPaneView: View {
         let ext = url.pathExtension.lowercased()
         return ext == "html" || ext == "htm"
     }
+
+    /// Whether the active file is Markdown — drives the "Preview" pill and the
+    /// rendered-preview content branch. Delegates to `SyntaxHighlighter` so the
+    /// preview and the syntax highlighter agree on what counts as Markdown.
+    static func isMarkdown(_ url: URL) -> Bool {
+        SyntaxHighlighter.isMarkdown(url)
+    }
 }
 
 // MARK: - Tab bar
@@ -166,6 +189,9 @@ struct EditorTabBar: View {
     /// kick off the HEAD-content load alongside the state flip — the bar
     /// itself doesn't know about the project root.
     let onToggleDiff: () -> Void
+    /// Fires the "Preview" pill that appears for Markdown tabs — flips the
+    /// active tab between rendered preview and editable source.
+    let onTogglePreview: () -> Void
     /// Fires the "Open in Browser" pill that appears for HTML tabs. The bar
     /// otherwise has no business knowing whether a file is HTML.
     let onOpenInBrowser: () -> Void
@@ -178,11 +204,18 @@ struct EditorTabBar: View {
         return gitWatcher.status(for: tab.url)
     }
 
-    /// Whether the active tab is an HTML file — drives whether the Preview
-    /// pill is shown in the tab strip.
+    /// Whether the active tab is an HTML file — drives whether the "Open in
+    /// Browser" pill is shown in the tab strip.
     private var activeIsHTML: Bool {
         guard let tab = editor.activeTab else { return false }
         return EditorPaneView.isHTML(tab.url)
+    }
+
+    /// Whether the active tab is a Markdown file — drives whether the
+    /// "Preview" pill is shown in the tab strip.
+    private var activeIsMarkdown: Bool {
+        guard let tab = editor.activeTab else { return false }
+        return EditorPaneView.isMarkdown(tab.url)
     }
 
     var body: some View {
@@ -225,6 +258,14 @@ struct EditorTabBar: View {
                     }
                 }
                 Spacer(minLength: 0)
+
+                if activeIsMarkdown {
+                    MarkdownPreviewButton(
+                        isOn: editor.activeTab?.showingPreview ?? false,
+                        action: onTogglePreview
+                    )
+                    .padding(.trailing, DS.Space.xs)
+                }
 
                 if activeIsHTML {
                     OpenInBrowserButton(action: onOpenInBrowser)
@@ -372,6 +413,64 @@ private struct OpenInBrowserButton: View {
         .buttonStyle(.plain)
         .onHover { isHovered = $0 }
         .help("Open this file in your default browser")
+    }
+}
+
+/// Compact "rich text" glyph + "Preview", shown in the editor tab strip when
+/// the active file is Markdown. A toggle — flips the tab between the rendered
+/// preview and the editable source. Highlighted when preview is on; visually
+/// mirrors `DiffToggleButton`/`OpenInBrowserButton` so the pills line up.
+private struct MarkdownPreviewButton: View {
+    let isOn: Bool
+    let action: () -> Void
+
+    @State private var isHovered = false
+
+    var body: some View {
+        Button(action: action) {
+            HStack(spacing: 4) {
+                Image(systemName: "doc.richtext")
+                    .font(.system(size: 10, weight: .semibold))
+                    .foregroundStyle(isOn ? Color.white : .secondary)
+                Text("Preview")
+                    .font(.system(size: 11, weight: .semibold))
+                    .foregroundStyle(isOn ? Color.white : .primary)
+            }
+            .padding(.horizontal, 8)
+            .padding(.vertical, 3)
+            .background(
+                RoundedRectangle(cornerRadius: 4, style: .continuous)
+                    .fill(isOn
+                          ? Color.accentColor
+                          : Color.primary.opacity(isHovered ? 0.10 : 0.05))
+            )
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .onHover { isHovered = $0 }
+        .help(isOn ? "Hide preview (return to editing the source)"
+                   : "Preview the rendered Markdown")
+    }
+}
+
+/// Rendered Markdown preview for a `.md` / README-style tab. Reuses the chat's
+/// `AskMarkdownView` renderer (headings, lists, inline styles, fenced code
+/// cards) inside a scrollable, padded reading column so the document reads
+/// like a rendered page instead of raw source. The underlying editor buffer
+/// is untouched — this is a read-only view layered over it.
+private struct MarkdownPreviewView: View {
+    let text: String
+
+    var body: some View {
+        ScrollView {
+            AskMarkdownView(text: text)
+                .padding(.horizontal, DS.Space.xxl)
+                .padding(.vertical, DS.Space.xl)
+                .frame(maxWidth: 760, alignment: .leading)
+                .frame(maxWidth: .infinity, alignment: .topLeading)
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .background(Color(nsColor: .textBackgroundColor))
     }
 }
 
