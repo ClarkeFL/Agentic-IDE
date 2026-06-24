@@ -5,6 +5,58 @@
         <description>Updates for AgenticIDE</description>
         <language>en</language>
         <item>
+            <title>Version 3.2.0</title>
+            <link>https://github.com/ClarkeFL/Agentic-IDE/releases/tag/v3.2.0</link>
+            <sparkle:version>47</sparkle:version>
+            <sparkle:shortVersionString>3.2.0</sparkle:shortVersionString>
+            <sparkle:releaseNotesLink>https://github.com/ClarkeFL/Agentic-IDE/releases/tag/v3.2.0</sparkle:releaseNotesLink>
+            <pubDate>Thu, 18 Jun 2026 08:04:30 +0000</pubDate>
+            <enclosure
+                url="https://github.com/ClarkeFL/Agentic-IDE/releases/download/v3.2.0/AgenticIDE-3.2.0.zip"
+                sparkle:edSignature="LK4ObgnmnbHgFbCH/kZONe1Qy+XeGw2JNTrWQcy7PEMqwvLy9frfackcIy75G4T+LxAONxuNlb9H53P+PBh/AQ=="
+                length="10046584"
+                type="application/octet-stream" />
+        </item>
+        <item>
+            <title>Version 3.1.0</title>
+            <link>https://github.com/ClarkeFL/Agentic-IDE/releases/tag/v3.1.0</link>
+            <sparkle:version>46</sparkle:version>
+            <sparkle:shortVersionString>3.1.0</sparkle:shortVersionString>
+            <sparkle:releaseNotesLink>https://github.com/ClarkeFL/Agentic-IDE/releases/tag/v3.1.0</sparkle:releaseNotesLink>
+            <pubDate>Wed, 17 Jun 2026 01:03:48 +0000</pubDate>
+            <enclosure
+                url="https://github.com/ClarkeFL/Agentic-IDE/releases/download/v3.1.0/AgenticIDE-3.1.0.zip"
+                sparkle:edSignature="cAfKn14inzok6mMuYXZbkqSM0/sAfudqao8mcbLVDpTUlgXRUzHJvEQ3u6GnAigkDojJMOCK2eqbmk9QVc5eBA=="
+                length="10043410"
+                type="application/octet-stream" />
+        </item>
+        <item>
+            <title>Version 3.0.1</title>
+            <link>https://github.com/ClarkeFL/Agentic-IDE/releases/tag/v3.0.1</link>
+            <sparkle:version>45</sparkle:version>
+            <sparkle:shortVersionString>3.0.1</sparkle:shortVersionString>
+            <sparkle:releaseNotesLink>https://github.com/ClarkeFL/Agentic-IDE/releases/tag/v3.0.1</sparkle:releaseNotesLink>
+            <pubDate>Tue, 16 Jun 2026 10:05:38 +0000</pubDate>
+            <enclosure
+                url="https://github.com/ClarkeFL/Agentic-IDE/releases/download/v3.0.1/AgenticIDE-3.0.1.zip"
+                sparkle:edSignature="5cNASnKQXMG/zH53qTRTnTAqIHcrwzPI/5G60RH3frevaKtT6Z9DJrHBpC4Fb52mxw59gjmhw9m0wfldxN/DCg=="
+                length="10038873"
+                type="application/octet-stream" />
+        </item>
+        <item>
+            <title>Version 3.0.0</title>
+            <link>https://github.com/ClarkeFL/Agentic-IDE/releases/tag/v3.0.0</link>
+            <sparkle:version>44</sparkle:version>
+            <sparkle:shortVersionString>3.0.0</sparkle:shortVersionString>
+            <sparkle:releaseNotesLink>https://github.com/ClarkeFL/Agentic-IDE/releases/tag/v3.0.0</sparkle:releaseNotesLink>
+            <pubDate>Tue, 16 Jun 2026 09:53:13 +0000</pubDate>
+            <enclosure
+                url="https://github.com/ClarkeFL/Agentic-IDE/releases/download/v3.0.0/AgenticIDE-3.0.0.zip"
+                sparkle:edSignature="vmc39v33EwL74Oa2qGhwByJk2NfEk+cS4aUx2m6nOBqG2Dx9dZoH7CmONtj3ExLzWlW1yaappHMGfmZ7bnyhAA=="
+                length="10038886"
+                type="application/octet-stream" />
+        </item>
+        <item>
             <title>Version 2.5.0</title>
             <link>https://github.com/ClarkeFL/Agentic-IDE/releases/tag/v2.5.0</link>
             <sparkle:version>43</sparkle:version>
