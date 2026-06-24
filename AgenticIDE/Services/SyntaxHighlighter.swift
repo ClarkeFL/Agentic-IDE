@@ -10,16 +10,23 @@ import Highlightr
 /// expensive to spin up (~30 ms cold) but is reused across calls; we run
 /// the highlight off main and only touch the storage on main.
 final class SyntaxHighlighter {
-    private let highlightr: Highlightr?
+    /// Highlightr wraps a JavaScriptCore context. Keep all access to that
+    /// context serialized; racing calls can intermittently produce plain
+    /// output for otherwise-supported grammars.
+    private let renderQueue = DispatchQueue(label: "com.fabio.AgenticIDE.SyntaxHighlighter.render")
+    private var highlightr: Highlightr?
     /// Files larger than this skip highlighting entirely. The JSContext
     /// is ~quadratic on some grammars and a 5MB minified JS file pinned
     /// the main thread for several seconds in early testing.
     private static let maxBytesToHighlight: Int = 512 * 1024
 
     init(theme: String = SyntaxHighlighter.defaultTheme()) {
-        let h = Highlightr()
-        _ = h?.setTheme(to: theme)
-        self.highlightr = h
+        renderQueue.sync {
+            let h = Highlightr()
+            h?.ignoreIllegals = true
+            _ = h?.setTheme(to: theme)
+            self.highlightr = h
+        }
     }
 
     /// System-aware default theme. Switches between a clean dark theme
@@ -78,7 +85,8 @@ final class SyntaxHighlighter {
         case "mm": return "objectivec"
         case "cs": return "csharp"
         case "php": return "php"
-        case "json", "json5": return "json"
+        case "json", "json5", "jsonc", "jsonl", "ndjson", "geojson", "map", "webmanifest", "har":
+            return "json"
         case "yaml", "yml": return "yaml"
         case "toml": return "ini"
         case "ini", "conf", "cfg": return "ini"
@@ -154,7 +162,7 @@ final class SyntaxHighlighter {
     /// the editor's "Preview" affordance and the highlighter's grammar
     /// selection always agree on what counts as Markdown.
     static let markdownExtensions: Set<String> = [
-        "md", "markdown", "mdx", "mdown", "mkd", "mkdn", "mdwn", "mdtxt"
+        "md", "markdown", "mdx", "mdc", "mdown", "mkd", "mkdn", "mdwn", "mdtxt"
     ]
 
     /// Whether `url` is a Markdown document — by extension (`.md`, `.markdown`,
@@ -180,7 +188,9 @@ final class SyntaxHighlighter {
         // Highlightr reuses its internal JSContext, so this is just a
         // string-in / string-out call. Still, it's synchronous CPU work
         // that we want off the main thread for big files.
-        return highlightr?.highlight(text, as: language, fastRender: true)
+        renderQueue.sync {
+            highlightr?.highlight(text, as: language, fastRender: true)
+        }
     }
 
     /// Apply the foreground-colour ranges from `attributed` onto `storage`,
@@ -188,12 +198,15 @@ final class SyntaxHighlighter {
     /// `attributed` off the main thread; this method must run on main
     /// because `NSTextStorage` is not thread-safe.
     @MainActor
-    func applyForegroundColors(_ attributed: NSAttributedString, to storage: NSTextStorage) {
+    func applyForegroundColors(_ attributed: NSAttributedString,
+                               to storage: NSTextStorage,
+                               expectedText: String? = nil) {
         // Avoid drift: if the storage's text has changed since `attributed`
         // was computed (user typed during the highlight roundtrip),
-        // applying stale ranges could clobber unrelated regions. Bail
-        // when lengths disagree and let the next debounce tick re-run.
+        // applying stale ranges could clobber unrelated regions. Bail and
+        // let the next debounce tick re-run.
         guard attributed.length == storage.length else { return }
+        if let expectedText, storage.string != expectedText { return }
         storage.beginEditing()
         let full = NSRange(location: 0, length: storage.length)
         storage.removeAttribute(.foregroundColor, range: full)
