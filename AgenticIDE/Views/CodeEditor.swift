@@ -268,9 +268,11 @@ struct CodeEditor: NSViewRepresentable {
                 guard !Task.isCancelled, let attributed, let storage else { return }
                 await MainActor.run {
                     // The user may have typed since we computed `attributed`;
-                    // `applyForegroundColors` length-checks the storage and
-                    // bails if so — we'll re-fire on the next debounce.
-                    highlighter.applyForegroundColors(attributed, to: storage)
+                    // `applyForegroundColors` verifies the exact snapshot and
+                    // bails if stale — we'll re-fire on the next debounce.
+                    highlighter.applyForegroundColors(attributed,
+                                                      to: storage,
+                                                      expectedText: snapshot)
                 }
                 _ = self // hold a ref so the task isn't reclaimed mid-flight
             }
