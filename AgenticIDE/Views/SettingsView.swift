@@ -214,6 +214,9 @@ private struct NotificationsSettingsView: View {
     @AppStorage(AppSettings.Keys.completionSoundName)
     private var soundName: String = "Glass"
 
+    @AppStorage(AppSettings.Keys.completionSoundVolume)
+    private var soundVolume: Double = 1
+
     @AppStorage(AppSettings.Keys.customCompletionSoundPath)
     private var customSoundPath: String = ""
 
@@ -240,6 +243,19 @@ private struct NotificationsSettingsView: View {
                         Divider()
                         Text("Custom — \(customSoundFileName)")
                             .tag(CompletionSoundPlayer.customSoundToken)
+                    }
+                }
+
+                VStack(alignment: .leading, spacing: DS.Space.xxs) {
+                    Slider(value: $soundVolume, in: 0...1)
+                    HStack {
+                        Text("Quiet").font(.caption).foregroundStyle(.secondary)
+                        Spacer()
+                        Text("Volume \(soundVolumePercentage)")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                        Spacer()
+                        Text("Loud").font(.caption).foregroundStyle(.secondary)
                     }
                 }
 
@@ -272,6 +288,10 @@ private struct NotificationsSettingsView: View {
 
     private var customSoundFileName: String {
         (customSoundPath as NSString).lastPathComponent
+    }
+
+    private var soundVolumePercentage: String {
+        "\(Int((soundVolume * 100).rounded()))%"
     }
 
     private func chooseCustomSound() {

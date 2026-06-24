@@ -38,6 +38,8 @@ enum AppSettings {
         /// Name of the completion sound: a system sound name (e.g. "Glass")
         /// or `CompletionSoundPlayer.customSoundToken` for the imported file.
         static let completionSoundName = "notifications.completionSoundName"
+        /// Playback volume for completion sounds (`0.0...1.0`).
+        static let completionSoundVolume = "notifications.completionSoundVolume"
         /// Absolute path of the imported custom sound inside
         /// `~/Library/Application Support/AgenticIDE/sounds/`.
         static let customCompletionSoundPath = "notifications.customCompletionSoundPath"
