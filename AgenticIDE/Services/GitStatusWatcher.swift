@@ -25,6 +25,8 @@ final class GitStatusWatcher {
     var changes: [GitChange] = []
     /// Current branch name (or "(<sha>)" when detached). Nil = not a repo.
     var branch: String?
+    /// Local branch names (recent first). Backs the footer's switch menu.
+    var localBranches: [String] = []
     /// How many local commits aren't on the upstream. Drives the Push
     /// badge.
     var ahead: Int = 0
@@ -70,10 +72,12 @@ final class GitStatusWatcher {
         async let statusTask = GitService.status(at: rootPath)
         async let branchTask = GitService.currentBranch(at: rootPath)
         async let aheadBehindTask = GitService.aheadBehind(at: rootPath)
+        async let branchesTask = GitService.localBranches(at: rootPath)
 
         let statusResult = await statusTask
         let branchResult = await branchTask
         let aheadBehindResult = await aheadBehindTask
+        let branchesResult = await branchesTask
 
         guard let raw = statusResult else {
             isGitRepo = false
@@ -81,6 +85,7 @@ final class GitStatusWatcher {
             folderStatuses = [:]
             changes = []
             branch = nil
+            localBranches = []
             ahead = 0
             behind = 0
             hasUpstream = false
@@ -89,6 +94,7 @@ final class GitStatusWatcher {
         }
         isGitRepo = true
         branch = branchResult
+        localBranches = branchesResult
         async let pullRequestTask = GitService.pullRequest(at: rootPath)
         if let pair = aheadBehindResult {
             ahead = pair.ahead

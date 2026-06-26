@@ -16,6 +16,9 @@ struct ExplorerView: View {
     @State private var dragStart: CGFloat?
 
     private let treeMin: CGFloat = 180
+    // ponytail: fixed cap on the folder view — it can't usefully grow wider
+    // than this; the editor (and the pane overall) stays fluid past it.
+    private let treeMax: CGFloat = 360
     private let editorMin: CGFloat = 300
     private static let autosaveKey = "AgenticIDE.ExplorerTreeWidth"
 
@@ -47,27 +50,21 @@ struct ExplorerView: View {
             }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
-        .background(Color(nsColor: .textBackgroundColor))
-        .clipShape(RoundedRectangle(cornerRadius: DS.Radius.lg, style: .continuous))
-        .overlay(
-            RoundedRectangle(cornerRadius: DS.Radius.lg, style: .continuous)
-                .strokeBorder(Color(nsColor: .separatorColor), lineWidth: 1)
-        )
-        // Flush on the divider-facing sides — the (now line-less) divider zone
-        // supplies the gap, so the cards sit tight against it.
-        .padding(EdgeInsets(top: DS.Space.xs, leading: 0,
-                            bottom: DS.Space.md, trailing: 0))
+        // Shared pane-card chrome. Flush (0) on both divider-facing sides — the
+        // (now line-less) divider zone supplies the gap, so the cards sit tight
+        // against it.
+        .paneCard(fill: Color(nsColor: .textBackgroundColor))
     }
 
     private func clampedTreeWidth(total: CGFloat) -> CGFloat {
-        let maxTree = max(treeMin, total - editorMin - ExplorerDivider.width)
+        let maxTree = min(treeMax, max(treeMin, total - editorMin - ExplorerDivider.width))
         return min(max(treeWidth, treeMin), maxTree)
     }
 
     private func dragTree(delta: CGFloat, total: CGFloat) {
         let start = dragStart ?? treeWidth
         if dragStart == nil { dragStart = start }
-        let maxTree = max(treeMin, total - editorMin - ExplorerDivider.width)
+        let maxTree = min(treeMax, max(treeMin, total - editorMin - ExplorerDivider.width))
         treeWidth = min(max(start + delta, treeMin), maxTree)
     }
 

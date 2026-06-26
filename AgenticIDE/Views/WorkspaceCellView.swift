@@ -38,10 +38,14 @@ struct WorkspaceCellView: View {
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .background(Color(nsColor: .textBackgroundColor))
-        .clipShape(RoundedRectangle(cornerRadius: DS.Radius.lg, style: .continuous))
+        // Seamless tile inside the workspace pane card — no rounded border of
+        // its own. The inter-cell gap is the only rest-state separator; the
+        // focused cell gets an accent edge so you can still see where keystrokes
+        // land. Corner tiles are rounded by the pane card's own clip.
         .overlay(
-            RoundedRectangle(cornerRadius: DS.Radius.lg, style: .continuous)
-                .strokeBorder(borderColor, lineWidth: isFocused ? 1.5 : 1)
+            Rectangle()
+                .strokeBorder(Color.accentColor.opacity(0.7), lineWidth: 1.5)
+                .opacity(isFocused ? 1 : 0)
         )
         .onHover { hovering = $0 }
         .popover(isPresented: $showServerPopover, arrowEdge: .top) {
@@ -50,7 +54,10 @@ struct WorkspaceCellView: View {
                 onSave: { cmd in
                     saveServerCommand(cmd)
                     showServerPopover = false
-                    if let serverTool { _ = launcher.launch(serverTool, into: cell) }
+                    if let serverTool {
+                        workspace.focusedCellId = cell.id
+                        _ = launcher.launch(serverTool, into: cell)
+                    }
                 },
                 onCancel: { showServerPopover = false })
         }
@@ -58,10 +65,6 @@ struct WorkspaceCellView: View {
 
     private var isFocused: Bool {
         workspace.focusedCellId == cell.id && cell.terminal != nil
-    }
-
-    private var borderColor: Color {
-        isFocused ? Color.accentColor.opacity(0.7) : Color(nsColor: .separatorColor)
     }
 
     // MARK: - Terminal
@@ -140,6 +143,10 @@ struct WorkspaceCellView: View {
             showServerPopover = true
             return
         }
+        // Focus the new cell so the fresh terminal grabs first responder on
+        // attach (shouldAutoFocus keys off focusedCellId) — otherwise keystrokes
+        // keep landing in the previously selected cell.
+        workspace.focusedCellId = cell.id
         _ = launcher.launch(tool, into: cell)
     }
 

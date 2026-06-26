@@ -115,6 +115,10 @@ struct AgenticIDEApp: App {
                     NotificationCenter.default.post(name: .toggleFileTree, object: nil)
                 }
                 .keyboardShortcut(keybindings.shortcut(for: .toggleExplorer))
+                Button("Toggle Notes") {
+                    NotificationCenter.default.post(name: .toggleNotes, object: nil)
+                }
+                .keyboardShortcut(keybindings.shortcut(for: .toggleNotes))
                 Divider()
                 Button("Zoom Cell") {
                     NotificationCenter.default.post(name: .toggleCellZoom, object: nil)
@@ -167,6 +171,10 @@ extension Notification.Name {
     /// Posted by View → Toggle File Tree (⌘⌥B). Observed by `MainWindow`,
     /// which collapses/expands the file-tree pane (②).
     static let toggleFileTree = Notification.Name("AgenticIDE.toggleFileTree")
+    /// Posted by View → Toggle Notes (⇧⌘N), the workspace header's note button,
+    /// and the Notes pane's close button. Observed by `MainWindow`, which
+    /// shows/hides the per-project Notes pane (⑤).
+    static let toggleNotes = Notification.Name("AgenticIDE.toggleNotes")
 }
 
 /// Lives only to make termination unrefusable. macOS sends a quit AppleEvent

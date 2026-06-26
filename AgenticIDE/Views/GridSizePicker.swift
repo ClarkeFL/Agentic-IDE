@@ -1,43 +1,61 @@
 import SwiftUI
 
-/// Notion-style hover-to-select grid picker (≤2×4). Hovering highlights the
-/// r×c block under the cursor; clicking commits that size.
-struct GridSizePicker: View {
-    let current: (rows: Int, cols: Int)
-    var dotW: CGFloat = 26
-    var dotH: CGFloat = 18
-    let onSelect: (Int, Int) -> Void
+/// Palette of preset layouts grouped by cell count. Each thumbnail is a live
+/// mini-map of the layout's shape (including uneven ones like a tall left
+/// column or a wide top row); clicking commits it. Replaces the old Notion-style
+/// rows×cols drag picker now that layouts aren't a plain rectangle.
+struct GridLayoutPicker: View {
+    /// The current layout, highlighted in the palette. nil when creating a new
+    /// workspace (nothing pre-selected).
+    var current: GridLayout?
+    let onSelect: (GridLayout) -> Void
 
-    @State private var hover: (rows: Int, cols: Int)?
+    /// Three thumbnails per row keeps each count's options compact.
+    private let columns = Array(repeating: GridItem(.flexible(), spacing: DS.Space.sm), count: 3)
 
     var body: some View {
-        let preview = hover ?? current
-        VStack(spacing: DS.Space.sm) {
-            VStack(spacing: 4) {
-                ForEach(1...Workspace.maxRows, id: \.self) { r in
-                    HStack(spacing: 4) {
-                        ForEach(1...Workspace.maxCols, id: \.self) { c in
-                            dot(row: r, col: c, preview: preview)
+        ScrollView {
+            VStack(alignment: .leading, spacing: DS.Space.md) {
+                ForEach(GridLayout.presetsByCount, id: \.count) { group in
+                    VStack(alignment: .leading, spacing: DS.Space.xs) {
+                        Text("\(group.count) cell\(group.count == 1 ? "" : "s")")
+                            .font(DS.Font.control)
+                            .foregroundStyle(.secondary)
+                        LazyVGrid(columns: columns, spacing: DS.Space.sm) {
+                            ForEach(Array(group.layouts.enumerated()), id: \.offset) { _, layout in
+                                thumbnail(layout)
+                            }
                         }
                     }
                 }
             }
-            Text("\(preview.rows) × \(preview.cols)")
-                .font(DS.Font.control)
-                .monospacedDigit()
-                .foregroundStyle(.secondary)
+            .padding(DS.Space.md)
         }
-        .padding(DS.Space.md)
-        .onHover { inside in if !inside { hover = nil } }
+        .frame(width: 360, height: 460)
     }
 
-    private func dot(row: Int, col: Int, preview: (rows: Int, cols: Int)) -> some View {
-        let filled = row <= preview.rows && col <= preview.cols
-        return RoundedRectangle(cornerRadius: 3, style: .continuous)
-            .fill(filled ? Color.accentColor : Color.primary.opacity(0.12))
-            .frame(width: dotW, height: dotH)
+    private func thumbnail(_ layout: GridLayout) -> some View {
+        let selected = layout == current
+        return Button { onSelect(layout) } label: {
+            LayoutGlyph(layout: layout, square: 10, gap: 3) { _, _ in
+                selected ? Color.accentColor : Color.primary.opacity(0.3)
+            }
+            .frame(width: 52, height: 52)
+            .padding(DS.Space.xs)
+            .frame(maxWidth: .infinity)
+            .background(
+                RoundedRectangle(cornerRadius: DS.Radius.md, style: .continuous)
+                    .fill(Color.accentColor.opacity(selected ? 0.12 : 0.0))
+            )
+            .overlay(
+                RoundedRectangle(cornerRadius: DS.Radius.md, style: .continuous)
+                    .strokeBorder(selected ? Color.accentColor : Color.primary.opacity(0.1),
+                                  lineWidth: selected ? 1.5 : 1)
+            )
             .contentShape(Rectangle())
-            .onHover { inside in if inside { hover = (row, col) } }
-            .onTapGesture { onSelect(row, col) }
+        }
+        .buttonStyle(.plain)
+        .help(layout.cellCount == 1 ? "Single cell"
+              : "\(layout.cellCount) cells · \(layout.counts.map(String.init).joined(separator: "+")) \(layout.axis.rawValue)")
     }
 }

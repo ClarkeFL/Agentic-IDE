@@ -8,6 +8,10 @@ struct ProjectWorkspaceView: View {
     @Environment(SystemSpeaker.self) private var speaker
 
     let project: Project
+    /// Trailing margin of the pane card. `DS.Space.md` when this is the
+    /// rightmost pane (window edge); `0` when the Notes pane sits to its right,
+    /// so the divider zone alone supplies the gap (matching the other seams).
+    var trailingInset: CGFloat = DS.Space.md
 
     /// Set when the user asks for a new workspace (sidebar +, ⌘T) so the
     /// chooser shows even if there's already an active workspace.
@@ -20,8 +24,8 @@ struct ProjectWorkspaceView: View {
             if showLayoutChooser || session.activeWorkspace == nil {
                 LayoutChooserView(
                     canCancel: session.activeWorkspace != nil,
-                    onSelect: { rows, cols in
-                        session.addWorkspace(rows: rows, cols: cols)
+                    onSelect: { layout in
+                        session.addWorkspace(layout: layout)
                         showLayoutChooser = false
                     },
                     onCancel: { showLayoutChooser = false })
@@ -30,9 +34,22 @@ struct ProjectWorkspaceView: View {
                                     workspace: workspace,
                                     isSpeaking: speaker.isSpeaking,
                                     onSpeak: { speakSelection(in: session) })
+                // Header sits inside the rounded card now, so a hairline rule
+                // separates it from the cell grid below (the cells lost their
+                // own borders to become seamless tiles).
+                Divider()
                 WorkspaceGridView(project: project, session: session, workspace: workspace)
+                Divider()
+                ServerBar(project: project, session: session)
             }
         }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        // Same floating-card chrome as the explorer + sidebar panes. Flush (0)
+        // against the divider on its leading side; the trailing margin is the
+        // window edge (or 0 when the Notes pane is open to its right).
+        .paneCard(fill: Color(nsColor: .controlBackgroundColor),
+                  insets: EdgeInsets(top: DS.Space.xs, leading: 0,
+                                     bottom: DS.Space.md, trailing: trailingInset))
         .onReceive(NotificationCenter.default.publisher(for: .speakSelection)) { _ in
             speakSelection(in: session)
         }
@@ -40,7 +57,15 @@ struct ProjectWorkspaceView: View {
             toggleZoomFocused(in: session)
         }
         .onReceive(NotificationCenter.default.publisher(for: .newWorkspace)) { _ in
-            showLayoutChooser = true
+            // Already have a workspace → create + switch immediately (1×1) so it
+            // shows in the sidebar right away; resize from the header grid
+            // picker. The chooser is only for the empty-project first workspace,
+            // where pane ④ has nothing else to show.
+            if session.activeWorkspace == nil {
+                showLayoutChooser = true
+            } else {
+                session.addWorkspace()
+            }
         }
         .onChange(of: project.id) { _, _ in
             // Different project — drop any transient chooser state.
@@ -81,7 +106,7 @@ struct ProjectWorkspaceView: View {
 /// new one). Picking a size is what actually creates the workspace.
 private struct LayoutChooserView: View {
     let canCancel: Bool
-    let onSelect: (Int, Int) -> Void
+    let onSelect: (GridLayout) -> Void
     let onCancel: () -> Void
 
     var body: some View {
@@ -94,7 +119,7 @@ private struct LayoutChooserView: View {
                     .foregroundStyle(.secondary)
             }
 
-            GridSizePicker(current: (1, 1), dotW: 46, dotH: 34, onSelect: onSelect)
+            GridLayoutPicker(current: nil, onSelect: onSelect)
                 .padding(DS.Space.md)
                 .background(
                     RoundedRectangle(cornerRadius: DS.Radius.lg, style: .continuous)

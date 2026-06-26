@@ -195,3 +195,28 @@ enum DS {
         static let trafficLightInset: CGFloat = 78
     }
 }
+
+extension View {
+    /// Shared rounded-card chrome for a main-window pane: a filled,
+    /// separator-bordered `RoundedRectangle` inset from its neighbours so the
+    /// pane reads as a floating card. Edges that face a draggable divider pass
+    /// `0` (the divider zone supplies the gap); edges that face the window pass
+    /// a margin. One definition so the sidebar, explorer, and workspace panes
+    /// are visually identical instead of each inventing its own border.
+    ///
+    /// Apply on a view that already fills its pane (`.frame(maxWidth:.infinity,
+    /// maxHeight:.infinity)`); the padding is the outermost step, so the margin
+    /// shows the window background behind the card.
+    func paneCard(fill: Color,
+                  insets: EdgeInsets = EdgeInsets(top: DS.Space.xs, leading: 0,
+                                                  bottom: DS.Space.md, trailing: 0)) -> some View {
+        self
+            .background(fill)
+            .clipShape(RoundedRectangle(cornerRadius: DS.Radius.lg, style: .continuous))
+            .overlay(
+                RoundedRectangle(cornerRadius: DS.Radius.lg, style: .continuous)
+                    .strokeBorder(Color(nsColor: .separatorColor), lineWidth: 1)
+            )
+            .padding(insets)
+    }
+}

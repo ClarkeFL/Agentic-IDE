@@ -57,11 +57,11 @@ final class CellBus {
             return "ok: closed cell \(args.first ?? "?")"
 
         case "grid":
-            guard let rows = intArg(args, 0), let cols = intArg(args, 1) else {
-                return "error: usage: grid <rows> <cols>  (max 2 rows by 4 cols)"
+            guard let layout = parseLayout(args) else {
+                return "error: usage: grid <rows> <cols>  OR  grid rows|cols <n> <n>...  (max 8 cells)"
             }
-            session.resizeWorkspace(workspace, rows: rows, cols: cols)
-            return "ok: grid is now \(workspace.rows)x\(workspace.cols)"
+            session.resizeWorkspace(workspace, layout: layout)
+            return "ok: grid is now \(workspace.layoutDescription) (\(workspace.cellCount) cells)"
 
         case "launch":
             guard let cell = nthCell(workspace, intArg(args, 0)) else { return noCell(args, 0) }
@@ -95,7 +95,7 @@ final class CellBus {
     // MARK: - Listings
 
     private func listing(_ workspace: Workspace, callerId: UUID) -> String {
-        var lines: [String] = ["grid: \(workspace.rows)x\(workspace.cols)"]
+        var lines: [String] = ["grid: \(workspace.layoutDescription)"]
         for (i, cell) in workspace.cells.enumerated() {
             let n = i + 1
             let isSelf = cell.terminal?.id == callerId
@@ -129,6 +129,20 @@ final class CellBus {
 
     private func intArg(_ args: [String], _ i: Int) -> Int? {
         i < args.count ? Int(args[i]) : nil
+    }
+
+    /// Accepts either the legacy `grid <rows> <cols>` (a uniform rectangle) or
+    /// the new `grid rows|cols <n> <n>...` (uneven groups). Returns nil on
+    /// unparseable input; `apply` clamps anything out of range.
+    private func parseLayout(_ args: [String]) -> GridLayout? {
+        if let axis = args.first.flatMap({ LayoutAxis(rawValue: $0.lowercased()) }) {
+            let counts = args.dropFirst().compactMap { Int($0) }.filter { $0 > 0 }
+            return counts.isEmpty ? nil : GridLayout(axis: axis, counts: counts)
+        }
+        if let rows = intArg(args, 0), let cols = intArg(args, 1), rows > 0, cols > 0 {
+            return GridLayout(axis: .rows, counts: Array(repeating: cols, count: rows))
+        }
+        return nil
     }
 
     private func noCell(_ args: [String], _ i: Int) -> String {

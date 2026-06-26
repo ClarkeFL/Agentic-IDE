@@ -109,6 +109,20 @@ enum GitService {
         return nil
     }
 
+    /// Local branch names, most-recently-committed first. Empty if not a
+    /// repo. Powers the branch-switch menu in the footer.
+    static func localBranches(at root: URL) async -> [String] {
+        let raw = await run(args: ["-C", root.path, "for-each-ref",
+                                    "--sort=-committerdate",
+                                    "--format=%(refname:short)", "refs/heads"],
+                            in: root,
+                            allowNonZeroExit: true)
+        guard let raw else { return [] }
+        return raw.split(separator: "\n")
+            .map { $0.trimmingCharacters(in: .whitespaces) }
+            .filter { !$0.isEmpty }
+    }
+
     /// Returns `(ahead, behind)` relative to the upstream branch — i.e.
     /// how many commits the local has that upstream doesn't, and vice
     /// versa. `nil` when there's no upstream configured (e.g. a fresh
@@ -213,6 +227,25 @@ enum GitService {
         return await runReportingExit(args: ["-C", root.path,
                                               "commit", "-m", trimmed],
                                        in: root)
+    }
+
+    /// `git switch <name>` — checks out an existing local branch. Fails (and
+    /// surfaces git's message) if the working tree would be clobbered.
+    static func switchBranch(_ name: String, at root: URL) async -> (ok: Bool, output: String) {
+        await runReportingExit(args: ["-C", root.path, "switch", name], in: root)
+    }
+
+    /// `git switch -c <name>` — creates a branch from the current HEAD and
+    /// switches to it. Fails if the name already exists or is invalid.
+    static func createBranch(_ name: String, at root: URL) async -> (ok: Bool, output: String) {
+        await runReportingExit(args: ["-C", root.path, "switch", "-c", name], in: root)
+    }
+
+    /// `git branch -d|-D <name>` — deletes a local branch. `-d` refuses
+    /// unmerged branches (caller can retry with `force: true` → `-D`).
+    static func deleteBranch(_ name: String, at root: URL, force: Bool) async -> (ok: Bool, output: String) {
+        await runReportingExit(args: ["-C", root.path, "branch",
+                                       force ? "-D" : "-d", name], in: root)
     }
 
     /// Same shape as `run` but always returns whether the exit was zero

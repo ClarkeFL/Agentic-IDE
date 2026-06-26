@@ -56,9 +56,9 @@ final class ProjectSession: Identifiable {
     /// user picks a layout first (see `ProjectWorkspaceView`'s chooser), and
     /// that choice calls this.
     @discardableResult
-    func addWorkspace(rows: Int = 1, cols: Int = 1) -> Workspace {
+    func addWorkspace(layout: GridLayout = GridLayout(axis: .rows, counts: [1])) -> Workspace {
         let ws = Workspace(name: nextWorkspaceName())
-        if rows != 1 || cols != 1 { ws.resize(rows: rows, cols: cols) }
+        ws.apply(layout)
         workspaces.append(ws)
         activeWorkspaceId = ws.id
         saveHook?()
@@ -85,8 +85,8 @@ final class ProjectSession: Identifiable {
         saveHook?()
     }
 
-    func resizeWorkspace(_ ws: Workspace, rows: Int, cols: Int) {
-        let dropped = ws.resize(rows: rows, cols: cols)
+    func resizeWorkspace(_ ws: Workspace, layout: GridLayout) {
+        let dropped = ws.apply(layout)
         for cell in dropped { cell.terminal?.view.tearDown() }
         saveHook?()
     }

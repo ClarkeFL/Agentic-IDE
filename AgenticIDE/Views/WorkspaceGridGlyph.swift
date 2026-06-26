@@ -1,10 +1,51 @@
 import SwiftUI
 
-/// A miniature live map of a workspace's grid: one tiny square per cell, laid
-/// out in the workspace's actual rows × cols, each square coloured by its
-/// cell's terminal status (grey = empty, muted = idle, blue = working,
-/// green = done, red = failed). Replaces the old "1×1" dims text + status dots
-/// — it conveys both the layout and per-cell state at a glance.
+/// A miniature map of a `GridLayout`: one tiny rounded rect per cell, laid out
+/// in the layout's actual shape so a spanning row/column reads as a wider/taller
+/// tile. `fill` colours each cell by (group, index-within-group).
+struct LayoutGlyph: View {
+    let layout: GridLayout
+    var square: CGFloat = 5
+    var gap: CGFloat = 1.5
+    var corner: CGFloat = 1.2
+    let fill: (Int, Int) -> Color
+
+    var body: some View {
+        let isRows = layout.axis == .rows
+        let maxCount = max(1, layout.counts.max() ?? 1)
+        // The long-axis length every group spans, so a 1-cell group fills it.
+        let span = CGFloat(maxCount) * square + CGFloat(maxCount - 1) * gap
+        outerStack(isRows) {
+            ForEach(Array(layout.counts.enumerated()), id: \.offset) { g, c in
+                innerStack(isRows) {
+                    ForEach(0..<c, id: \.self) { i in
+                        let len = (span - gap * CGFloat(c - 1)) / CGFloat(c)
+                        RoundedRectangle(cornerRadius: corner, style: .continuous)
+                            .fill(fill(g, i))
+                            .frame(width: isRows ? len : square,
+                                   height: isRows ? square : len)
+                    }
+                }
+            }
+        }
+    }
+
+    @ViewBuilder
+    private func outerStack<C: View>(_ isRows: Bool, @ViewBuilder _ content: () -> C) -> some View {
+        if isRows { VStack(spacing: gap, content: content) }
+        else { HStack(spacing: gap, content: content) }
+    }
+
+    @ViewBuilder
+    private func innerStack<C: View>(_ isRows: Bool, @ViewBuilder _ content: () -> C) -> some View {
+        if isRows { HStack(spacing: gap, content: content) }
+        else { VStack(spacing: gap, content: content) }
+    }
+}
+
+/// A live `LayoutGlyph` for a workspace: each cell coloured by its terminal
+/// status (grey = empty, muted = idle, blue = working, green = done, red =
+/// failed). Conveys both the layout and per-cell state at a glance.
 struct WorkspaceGridGlyph: View {
     @Bindable var workspace: Workspace
     var square: CGFloat = 5
@@ -12,31 +53,9 @@ struct WorkspaceGridGlyph: View {
     var corner: CGFloat = 1.2
 
     var body: some View {
-        VStack(spacing: gap) {
-            ForEach(rowChunks, id: \.index) { chunk in
-                HStack(spacing: gap) {
-                    ForEach(chunk.cells) { cell in
-                        RoundedRectangle(cornerRadius: corner, style: .continuous)
-                            .fill(color(for: cell))
-                            .frame(width: square, height: square)
-                    }
-                }
-            }
+        LayoutGlyph(layout: workspace.layout, square: square, gap: gap, corner: corner) { g, i in
+            color(for: workspace.cellAt(group: g, index: i))
         }
-    }
-
-    private struct RowChunk { let index: Int; let cells: [WorkspaceCell] }
-
-    private var rowChunks: [RowChunk] {
-        let cols = workspace.cols
-        var out: [RowChunk] = []
-        for r in 0..<workspace.rows {
-            let start = r * cols
-            let end = min(start + cols, workspace.cells.count)
-            guard start < end else { continue }
-            out.append(RowChunk(index: r, cells: Array(workspace.cells[start..<end])))
-        }
-        return out
     }
 
     private func color(for cell: WorkspaceCell) -> Color {

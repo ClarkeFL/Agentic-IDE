@@ -639,6 +639,8 @@ private struct FileDirectoryRow: View {
             )
         }
         .buttonStyle(.plain)
+        // Full name on hover, since long folder names truncate in the row.
+        .help(node.name)
     }
 }
 
