@@ -94,6 +94,13 @@ final class ProjectStore {
         save()
     }
 
+    /// Replaces a project's server list and persists.
+    func updateServers(projectId: UUID, _ servers: [QuickLaunch]) {
+        guard let idx = projects.firstIndex(where: { $0.id == projectId }) else { return }
+        projects[idx].servers = servers
+        save()
+    }
+
     func recordActivity(projectId: UUID, command: String) {
         guard let idx = projects.firstIndex(where: { $0.id == projectId }) else { return }
         projects[idx].lastActivityAt = Date()

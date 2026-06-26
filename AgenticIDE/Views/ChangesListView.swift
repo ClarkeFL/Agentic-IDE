@@ -146,6 +146,11 @@ struct GitFooterBar: View {
     /// the corresponding glyph. Only one action runs at a time.
     @State private var busy: Action?
 
+    /// Drives the branch picker popover. We use a popover (not a `Menu`) so it
+    /// opens *upward* — `arrowEdge: .top` — instead of dropping down off the
+    /// bottom-pinned footer. SwiftUI `Menu` offers no direction control.
+    @State private var showBranchMenu = false
+
     private enum Action: Equatable { case fetch, pull, push, commit }
 
     var body: some View {
@@ -192,21 +197,39 @@ struct GitFooterBar: View {
             }
             .padding(.horizontal, DS.Space.sm)
             .frame(height: 34)
-            .background(.regularMaterial)
+            // Solid surface that matches the file-tree header/body — the old
+            // .regularMaterial let the desktop wallpaper tint bleed through, so
+            // the footer read as a different pane than the folder viewer above.
+            .background(Color(nsColor: .controlBackgroundColor))
             .overlay(alignment: .top) { Divider() }
         }
     }
 
     private var branchLabel: some View {
         HStack(spacing: 4) {
-            Image(systemName: "arrow.triangle.branch")
-                .font(.system(size: 10, weight: .semibold))
-                .foregroundStyle(.secondary)
-            Text(gitWatcher.branch ?? "—")
-                .font(DS.Font.control)
-                .foregroundStyle(.primary)
-                .lineLimit(1)
-                .truncationMode(.middle)
+            Button {
+                showBranchMenu = true
+            } label: {
+                HStack(spacing: 4) {
+                    Image(systemName: "arrow.triangle.branch")
+                        .font(.system(size: 10, weight: .semibold))
+                        .foregroundStyle(.secondary)
+                    Text(gitWatcher.branch ?? "—")
+                        .font(DS.Font.control)
+                        .foregroundStyle(.primary)
+                        .lineLimit(1)
+                        .truncationMode(.middle)
+                    Image(systemName: "chevron.up")
+                        .font(.system(size: 8, weight: .semibold))
+                        .foregroundStyle(.tertiary)
+                }
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .fixedSize()
+            .popover(isPresented: $showBranchMenu, arrowEdge: .top) {
+                branchMenuContent
+            }
             if let pullRequest = gitWatcher.pullRequest {
                 pullRequestBadge(pullRequest)
             }
@@ -218,6 +241,64 @@ struct GitFooterBar: View {
             }
         }
         .help(statusTooltip)
+    }
+
+    @ViewBuilder
+    private var branchMenuContent: some View {
+        VStack(alignment: .leading, spacing: DS.Space.xs) {
+            Text("Switch to")
+                .font(.system(size: 10, weight: .semibold))
+                .foregroundStyle(.secondary)
+                .padding(.horizontal, DS.Space.xs)
+            ScrollView {
+                VStack(alignment: .leading, spacing: 0) {
+                    ForEach(gitWatcher.localBranches, id: \.self) { name in
+                        Button {
+                            showBranchMenu = false
+                            Task { await switchTo(name) }
+                        } label: {
+                            HStack(spacing: 6) {
+                                Image(systemName: "checkmark")
+                                    .font(.system(size: 10, weight: .semibold))
+                                    .opacity(name == gitWatcher.branch ? 1 : 0)
+                                Text(name)
+                                    .lineLimit(1)
+                                    .truncationMode(.middle)
+                                Spacer(minLength: 0)
+                            }
+                            .padding(.vertical, 3)
+                            .padding(.horizontal, DS.Space.xs)
+                            .contentShape(Rectangle())
+                        }
+                        .disabled(name == gitWatcher.branch)
+                    }
+                }
+            }
+            .frame(maxHeight: 220)
+            Divider()
+            Button("New Branch…") {
+                showBranchMenu = false
+                promptNewBranch()
+            }
+            .padding(.horizontal, DS.Space.xs)
+            let deletable = gitWatcher.localBranches.filter { $0 != gitWatcher.branch }
+            if !deletable.isEmpty {
+                Menu("Delete Branch") {
+                    ForEach(deletable, id: \.self) { name in
+                        Button(name, role: .destructive) {
+                            showBranchMenu = false
+                            promptDeleteBranch(name)
+                        }
+                    }
+                }
+                .menuStyle(.borderlessButton)
+                .fixedSize()
+                .padding(.horizontal, DS.Space.xs)
+            }
+        }
+        .buttonStyle(.plain)
+        .padding(DS.Space.sm)
+        .frame(width: 240, alignment: .leading)
     }
 
     private func pullRequestBadge(_ pullRequest: GitService.PullRequestInfo) -> some View {
@@ -340,6 +421,73 @@ struct GitFooterBar: View {
         let raw = input.stringValue.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !raw.isEmpty else { return }
         Task { await runAction(.commit, message: raw) }
+    }
+
+    @MainActor
+    private func switchTo(_ name: String) async {
+        let result = await GitService.switchBranch(name, at: project.path)
+        if !result.ok {
+            showAlert(title: "Switch to \(name) failed",
+                      detail: result.output.isEmpty ? "git exited non-zero." : result.output)
+        }
+        await gitWatcher.refresh()
+    }
+
+    /// NSAlert with a name field. Creates a branch off HEAD and switches to it.
+    private func promptNewBranch() {
+        let alert = NSAlert()
+        alert.messageText = "New branch"
+        alert.informativeText = "Creates a branch from the current HEAD and switches to it."
+        alert.addButton(withTitle: "Create")
+        alert.addButton(withTitle: "Cancel")
+        let input = NSTextField(frame: NSRect(x: 0, y: 0, width: 320, height: 24))
+        input.placeholderString = "branch-name"
+        alert.accessoryView = input
+        alert.window.initialFirstResponder = input
+        guard alert.runModal() == .alertFirstButtonReturn else { return }
+        let name = input.stringValue.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !name.isEmpty else { return }
+        Task {
+            let result = await GitService.createBranch(name, at: project.path)
+            if !result.ok {
+                showAlert(title: "Create \(name) failed",
+                          detail: result.output.isEmpty ? "git exited non-zero." : result.output)
+            }
+            await gitWatcher.refresh()
+        }
+    }
+
+    /// Confirm + delete a local branch. `-d` first; if git refuses an
+    /// unmerged branch, offer a force (`-D`) follow-up rather than dead-ending.
+    private func promptDeleteBranch(_ name: String) {
+        let alert = NSAlert()
+        alert.messageText = "Delete branch \"\(name)\"?"
+        alert.informativeText = "Removes the local branch. Unmerged commits may be lost."
+        alert.alertStyle = .warning
+        alert.addButton(withTitle: "Delete")
+        alert.addButton(withTitle: "Cancel")
+        guard alert.runModal() == .alertFirstButtonReturn else { return }
+        Task {
+            var result = await GitService.deleteBranch(name, at: project.path, force: false)
+            if !result.ok {
+                let force = NSAlert()
+                force.messageText = "Branch \"\(name)\" isn't fully merged"
+                force.informativeText = result.output.isEmpty
+                    ? "Force-delete anyway? Unmerged commits will be lost."
+                    : result.output
+                force.alertStyle = .warning
+                force.addButton(withTitle: "Force Delete")
+                force.addButton(withTitle: "Cancel")
+                if force.runModal() == .alertFirstButtonReturn {
+                    result = await GitService.deleteBranch(name, at: project.path, force: true)
+                }
+            }
+            if !result.ok {
+                showAlert(title: "Delete \(name) failed",
+                          detail: result.output.isEmpty ? "git exited non-zero." : result.output)
+            }
+            await gitWatcher.refresh()
+        }
     }
 
     private func showAlert(title: String, detail: String) {

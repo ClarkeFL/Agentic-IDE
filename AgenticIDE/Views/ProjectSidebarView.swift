@@ -86,6 +86,13 @@ struct ProjectSidebarView: View {
                 .padding(.horizontal, DS.Space.md)
                 .padding(.vertical, DS.Space.sm)
         }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        // Same floating-card chrome as the explorer + workspace panes. Leftmost
+        // pane, so it carries the window-edge margin on its leading side and
+        // sits flush (0) against the divider on its trailing side.
+        .paneCard(fill: Color(nsColor: .controlBackgroundColor),
+                  insets: EdgeInsets(top: DS.Space.xs, leading: DS.Space.md,
+                                     bottom: DS.Space.md, trailing: 0))
         // Menu-bar commands (File → New Project / Add Existing Project) post
         // these; the sidebar owns the panels + store so it observes here.
         .onReceive(NotificationCenter.default.publisher(for: .newProject)) { _ in

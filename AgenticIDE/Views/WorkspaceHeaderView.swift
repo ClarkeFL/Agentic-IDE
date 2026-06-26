@@ -27,6 +27,10 @@ struct WorkspaceHeaderView: View {
                 PromptLibraryMenu()
                     .padding(.trailing, DS.Space.xs)
 
+                HeaderButton(systemName: "note.text",
+                             help: "Notes (⇧⌘N)",
+                             action: { NotificationCenter.default.post(name: .toggleNotes, object: nil) })
+
                 HeaderButton(systemName: isSpeaking ? "stop.circle.fill" : "speaker.wave.2",
                              help: isSpeaking ? "Stop speaking (⇧⌘.)" : "Speak selection (⇧⌘S)",
                              action: onSpeak)
@@ -70,7 +74,7 @@ struct WorkspaceHeaderView: View {
         Button { showGridPicker = true } label: {
             HStack(spacing: DS.Space.xs) {
                 WorkspaceGridGlyph(workspace: workspace, square: 6, gap: 1.5)
-                Text("\(workspace.rows)×\(workspace.cols)")
+                Text(workspace.layoutDescription)
                     .font(DS.Font.control)
                     .monospacedDigit()
                     .foregroundStyle(.secondary)
@@ -84,10 +88,10 @@ struct WorkspaceHeaderView: View {
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
-        .help("Choose grid size (up to \(Workspace.maxRows)×\(Workspace.maxCols))")
+        .help("Choose a layout (up to \(Workspace.maxCells) cells)")
         .popover(isPresented: $showGridPicker, arrowEdge: .bottom) {
-            GridSizePicker(current: (workspace.rows, workspace.cols)) { r, c in
-                session.resizeWorkspace(workspace, rows: r, cols: c)
+            GridLayoutPicker(current: workspace.layout) { layout in
+                session.resizeWorkspace(workspace, layout: layout)
                 showGridPicker = false
             }
         }

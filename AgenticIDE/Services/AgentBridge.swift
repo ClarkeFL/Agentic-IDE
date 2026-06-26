@@ -27,7 +27,15 @@ final class AgentBridge {
         let fm = FileManager.default
         let base = (try? fm.url(for: .applicationSupportDirectory, in: .userDomainMask,
                                 appropriateFor: nil, create: true)) ?? fm.temporaryDirectory
+        // Namespace the control socket + helper by bundle id so a dev build
+        // (com.fabio.AgenticIDE.dev) and the release build don't share — and
+        // fight over — one agentide.sock. Whichever launched second used to
+        // unlink() the other's socket on startup, silently breaking every
+        // orchestrated cell in the first instance. The App Support root stays
+        // "AgenticIDE" so projects.json/sessions.json remain shared as before.
+        let bundleId = Bundle.main.bundleIdentifier ?? "com.fabio.AgenticIDE"
         return base.appendingPathComponent("AgenticIDE", isDirectory: true)
+                   .appendingPathComponent(bundleId, isDirectory: true)
     }
     static var socketURL: URL { directoryURL.appendingPathComponent("agentide.sock") }
     static var binDirectoryURL: URL { directoryURL.appendingPathComponent("bin", isDirectory: true) }
@@ -81,7 +89,9 @@ final class AgentBridge {
         Build out & orchestrate the other cells in your workspace.
           agentide cells              List cells (number, what's running, status).
           agentide tools              List the launchers you can start (claude, codex, ...).
-          agentide grid <rows> <cols> Resize the grid (max 2 rows by 4 cols).
+          agentide grid <rows> <cols> Resize to a uniform grid (max 8 cells), or
+          agentide grid rows|cols <n>... Uneven layout: groups along the axis,
+                                      e.g. 'grid cols 1 2' = tall left + 2 stacked.
           agentide launch <n> <tool>  Launch <tool> in cell <n>.
           agentide close <n>          Close the program in cell <n>.
           agentide send <n> <text>    Type <text> into cell <n> and press Enter.
@@ -102,7 +112,7 @@ final class AgentBridge {
           read)   req "read $sid $1" ;;
           status) req "status $sid $1" ;;
           close)  req "close $sid $1" ;;
-          grid)   req "grid $sid $1 $2" ;;
+          grid)   req "grid $sid $*" ;;
           send)   n="$1"; shift; req "send $sid $n" "$*" ;;
           launch) n="$1"; shift; req "launch $sid $n" "$*" ;;
           wait)

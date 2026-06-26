@@ -77,6 +77,7 @@ enum ShortcutAction: String, CaseIterable, Identifiable {
     case toggleExplorer
     case zoomCell
     case newWorkspace
+    case toggleNotes
 
     var id: String { rawValue }
 
@@ -92,6 +93,7 @@ enum ShortcutAction: String, CaseIterable, Identifiable {
         case .toggleExplorer: return "Toggle Explorer"
         case .zoomCell:       return "Zoom Cell"
         case .newWorkspace:   return "New Workspace"
+        case .toggleNotes:    return "Toggle Notes"
         }
     }
 
@@ -107,6 +109,7 @@ enum ShortcutAction: String, CaseIterable, Identifiable {
         case .toggleExplorer: return Keybinding("b", command: true, option: true)
         case .zoomCell:       return Keybinding("f", command: true, control: true)
         case .newWorkspace:   return Keybinding("t", command: true)
+        case .toggleNotes:    return Keybinding("n", command: true, shift: true)
         }
     }
 }

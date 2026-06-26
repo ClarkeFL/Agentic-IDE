@@ -1,3 +1,4 @@
+import AppKit
 import SwiftUI
 import UniformTypeIdentifiers
 
@@ -27,6 +28,15 @@ struct MainWindow: View {
     /// choice survives relaunch. Toggled by the ⌘⌥B command (`.toggleFileTree`)
     /// and the file-tree header's collapse button.
     @AppStorage("fileTreeCollapsed") private var fileTreeCollapsed = false
+    /// Shows pane ⑤ — the per-project Notes scratchpad (notes.md). Persisted so
+    /// the choice survives relaunch. Toggled by ⌘⇧N (`.toggleNotes`), the
+    /// workspace header's note button, and the pane's own close button.
+    @AppStorage("notesPaneOpen") private var notesPaneOpen = false
+    /// True while the window is in macOS fullscreen. Windowed: keep the top
+    /// safe area so the cards sit below the title bar and the floating traffic
+    /// lights get their own strip. Fullscreen: no title bar, so reclaim the top
+    /// for the cards (`ignoresSafeArea(.top)`).
+    @State private var isFullScreen = false
 
     var body: some View {
         ZStack {
@@ -47,6 +57,11 @@ struct MainWindow: View {
                 fileTreeCollapsed.toggle()
             }
         }
+        .onReceive(NotificationCenter.default.publisher(for: .toggleNotes)) { _ in
+            withAnimation(.easeInOut(duration: 0.18)) {
+                notesPaneOpen.toggle()
+            }
+        }
     }
 
     /// Split view + every long-lived modifier. Extracted so the body's
@@ -55,9 +70,14 @@ struct MainWindow: View {
     /// reasonable time" budget once the AskOverlay branch was added.
     private var mainContent: some View {
         splitView
+            // Windowed → keep the top safe area so the cards sit below the
+            // title-bar strip (the traffic lights get their own room).
+            // Fullscreen → no title bar, so reclaim the top for the cards.
+            .ignoresSafeArea(.container, edges: isFullScreen ? .top : [])
             .frame(maxWidth: .infinity, maxHeight: .infinity)
             .navigationTitle(activeProject?.name ?? "Agentic IDE")
             .onAppear {
+                syncFullScreenState()
                 restoreSelection()
                 // Start the local agent bridge (cell → cell control/observe).
                 // Idempotent; needs the session manager to resolve cells.
@@ -76,6 +96,21 @@ struct MainWindow: View {
             .sheet(isPresented: $showFDAOnboarding) {
                 FullDiskAccessOnboarding(gate: fda, isPresented: $showFDAOnboarding)
             }
+            .onReceive(NotificationCenter.default.publisher(for: NSWindow.didEnterFullScreenNotification)) { _ in
+                isFullScreen = true
+            }
+            .onReceive(NotificationCenter.default.publisher(for: NSWindow.didExitFullScreenNotification)) { _ in
+                isFullScreen = false
+            }
+    }
+
+    /// Best-effort initial read of the window's fullscreen state — the
+    /// enter/exit notifications cover every change after launch, but a window
+    /// restored straight into fullscreen never fires one.
+    private func syncFullScreenState() {
+        if let window = NSApp.windows.first(where: { $0.isVisible }) {
+            isFullScreen = window.styleMask.contains(.fullScreen)
+        }
     }
 
     /// Pulled out of `body` because the four-pane initialiser plus its
@@ -85,11 +120,12 @@ struct MainWindow: View {
         PersistentSplitView(
             autosaveName: "AgenticIDE.MainSplit",
             pane1Min: 160, pane1Initial: 200, pane1Max: 360,
-            // Pane 2 is now the Explorer card (file tree + editor). It needs to
-            // grow wide enough to hold both comfortably, so the max is large.
-            // The min is raised while a file is open so the workspace pane can't
-            // shrink the editor below a usable width.
-            pane2Min: explorerMinWidth, pane2Initial: 300, pane2Max: 1100,
+            // Pane 2 is now the Explorer card (file tree + editor). The min is
+            // raised while a file is open so the workspace pane can't shrink the
+            // editor below a usable width; the max is capped to the folder-view
+            // width when no file is open (a bare tree can't usefully be wider)
+            // and only opens up once the editor needs room.
+            pane2Min: explorerMinWidth, pane2Initial: 300, pane2Max: explorerMaxWidth,
             pane2Collapsed: fileTreeCollapsed,
             onExpandPane2: {
                 withAnimation(.easeInOut(duration: 0.18)) { fileTreeCollapsed = false }
@@ -103,12 +139,18 @@ struct MainWindow: View {
             // so the workspace takes whatever width is left.
             pane3Collapsed: true,
             pane4Min: 540, pane4Initial: 720, pane4Max: 1400,
+            // Pane 5 is the optional Notes scratchpad on the far right.
+            // Collapsed (removed) unless opened and a project is selected.
+            pane5Min: 240, pane5Initial: 340, pane5Max: 680,
+            pane5Collapsed: !(notesPaneOpen && fileAccessProject != nil),
             pane1: { sidebarPane },
             pane2: { explorerPane },
             pane3: { Color.clear },
-            pane4: { terminalsPane }
+            pane4: { terminalsPane },
+            pane5: { notesPane }
         )
         .animation(.easeInOut(duration: 0.18), value: fileTreeCollapsed)
+        .animation(.easeInOut(duration: 0.18), value: notesPaneOpen)
     }
 
     /// Target width for the Explorer pane: wide enough to edit comfortably when
@@ -127,6 +169,14 @@ struct MainWindow: View {
     private var explorerMinWidth: CGFloat {
         guard let project = fileAccessProject else { return 200 }
         return editors.session(for: project.id).tabs.isEmpty ? 200 : 480
+    }
+
+    /// Upper bound for the Explorer pane. With no file open it's just the folder
+    /// tree, so cap it at the tree's max width (240) — dragging wider only makes
+    /// an empty card. With a file open the editor needs room, so let it grow.
+    private var explorerMaxWidth: CGFloat {
+        guard let project = fileAccessProject else { return 240 }
+        return editors.session(for: project.id).tabs.isEmpty ? 240 : 1100
     }
 
     // MARK: - Pane 1: Sidebar
@@ -155,10 +205,18 @@ struct MainWindow: View {
 
     // MARK: - Pane 4: Terminals
 
+    /// True when the Notes pane (⑤) is actually on screen to the right of the
+    /// workspace. Mirrors the `pane5Collapsed` condition so the workspace card
+    /// can drop its trailing window-edge margin and let the divider be the seam.
+    private var notesPaneVisible: Bool {
+        notesPaneOpen && fileAccessProject != nil
+    }
+
     @ViewBuilder
     private var terminalsPane: some View {
         if let project = activeProject {
-            ProjectWorkspaceView(project: project)
+            ProjectWorkspaceView(project: project,
+                                 trailingInset: notesPaneVisible ? 0 : DS.Space.md)
                 .environment(store)
                 .environment(sessions)
         } else if store.projects.filter({ !$0.archived }).isEmpty {
@@ -175,6 +233,21 @@ struct MainWindow: View {
         } else {
             paneEmptyState(systemImage: "terminal",
                            text: "Select a project to launch terminals.")
+        }
+    }
+
+    // MARK: - Pane 5: Notes
+
+    @ViewBuilder
+    private var notesPane: some View {
+        if let project = fileAccessProject {
+            NotesPanel(project: project,
+                       onClose: {
+                           withAnimation(.easeInOut(duration: 0.18)) { notesPaneOpen = false }
+                       })
+                .id(project.id)
+        } else {
+            Color.clear
         }
     }
 

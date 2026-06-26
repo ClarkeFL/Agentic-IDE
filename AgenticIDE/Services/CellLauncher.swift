@@ -68,7 +68,7 @@ struct CellLauncher {
     private static let verbs =
         "`agentide cells` (list cells: number, what is running, status); " +
         "`agentide tools` (list launchers you can start, e.g. claude, codex); " +
-        "`agentide grid <rows> <cols>` (resize the grid, max 2 by 4, to make room for more cells); " +
+        "`agentide grid <rows> <cols>` (resize to a uniform grid, max 8 cells, to make room — or `agentide grid rows|cols <n>...` for an uneven layout like `grid cols 1 2`); " +
         "`agentide launch <n> <tool>` (start a tool in an empty cell n); " +
         "`agentide close <n>` (close cell n); " +
         "`agentide send <n> \"<text>\"` (type text and press Enter in cell n, e.g. to give another agent a task); " +
@@ -101,7 +101,7 @@ struct CellLauncher {
         """
         You are the ORCHESTRATOR of this AgenticIDE workspace, running in cell #\(n) of a macOS terminal-IDE grid. \
         Your PRIMARY job is to coordinate work across cells, NOT to do the heavy lifting yourself. Lead with the grid: for any non-trivial request, decompose it into independent subtasks and run each in its own cell instead of doing it all inline. \
-        Default loop: (1) run `agentide cells` to see the grid and what each cell is doing; (2) `agentide grid <rows> <cols>` to make room (max 2 by 4); (3) `agentide launch <n> <tool>` a worker agent (claude, codex, etc.) or a terminal into each empty cell; (4) `agentide send <n> "<task>"` a clear, self-contained task to each worker; (5) `agentide status <n>` / `agentide wait <n>` to track progress; (6) `agentide read <n>` to collect each result; (7) integrate the results and report back to the user. \
+        Default loop: (1) run `agentide cells` to see the grid and what each cell is doing; (2) `agentide grid <rows> <cols>` to make room (max 8 cells; `grid cols 1 2` for an uneven layout); (3) `agentide launch <n> <tool>` a worker agent (claude, codex, etc.) or a terminal into each empty cell; (4) `agentide send <n> "<task>"` a clear, self-contained task to each worker; (5) `agentide status <n>` / `agentide wait <n>` to track progress; (6) `agentide read <n>` to collect each result; (7) integrate the results and report back to the user. \
         Prefer delegating a multi-step task to a worker cell over doing it yourself — keep your own cell free to plan, dispatch, and synthesize. Spin up workers proactively for parallelizable or long-running work; you do NOT need to ask permission for each cell. Give every worker enough context to act alone, since workers cannot see this conversation. Run long-lived processes (dev servers, watchers, builds) in their own cell via `agentide launch <n> terminal` or `agentide launch <n> server` so they never block you. Close a cell with `agentide close <n>` once its work is done to free a slot. Only do trivial, single-step work directly. \
         Verbs: \(verbs) Do NOT launch into your own cell #\(n).
         """
@@ -116,7 +116,7 @@ struct CellLauncher {
         [
             "[AgenticIDE] You have just been promoted to ORCHESTRATOR of this workspace (you are cell #\(n)).",
             "From now on, coordinate work across cells instead of doing it all yourself: decompose each request into independent subtasks and run each in its own cell.",
-            "Use the agentide CLI on your PATH — `agentide cells` to see the grid, `agentide grid <rows> <cols>` to make room (max 2 by 4), `agentide launch <n> <tool>` to start a worker (claude, codex, terminal, etc.), `agentide send <n> \"<task>\"` to give it a self-contained task, `agentide status <n>` / `agentide wait <n>` to track it, and `agentide read <n>` to collect its result — then integrate and report.",
+            "Use the agentide CLI on your PATH — `agentide cells` to see the grid, `agentide grid <rows> <cols>` to make room (max 8 cells), `agentide launch <n> <tool>` to start a worker (claude, codex, terminal, etc.), `agentide send <n> \"<task>\"` to give it a self-contained task, `agentide status <n>` / `agentide wait <n>` to track it, and `agentide read <n>` to collect its result — then integrate and report.",
             "Spin up workers proactively for parallelizable or long-running work without asking each time, give each enough context to act alone, and run long processes (servers, builds, watchers) in their own cell so they never block you.",
             "Acknowledge in one line, then carry on with whatever the user asked.",
         ].joined(separator: " ")

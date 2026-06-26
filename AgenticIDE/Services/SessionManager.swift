@@ -110,8 +110,9 @@ final class SessionManager {
                 }
                 let ws = Workspace(id: wsSnap.id,
                                    name: wsSnap.name,
-                                   rows: wsSnap.rows,
-                                   cols: wsSnap.cols,
+                                   layout: wsSnap.gridLayout,
+                                   outerWeights: wsSnap.outerWeights,
+                                   innerWeights: wsSnap.innerWeights,
                                    cells: cells)
                 session.workspaces.append(ws)
             }
@@ -192,8 +193,10 @@ final class SessionManager {
                 WorkspaceSnapshot(
                     id: ws.id,
                     name: ws.name,
-                    rows: ws.rows,
-                    cols: ws.cols,
+                    axis: ws.axis.rawValue,
+                    counts: ws.counts,
+                    outerWeights: ws.outerWeights,
+                    innerWeights: ws.innerWeights,
                     cells: ws.cells.map { cell in
                         CellSnapshot(id: cell.id,
                                      icon: cell.icon,
@@ -254,13 +257,32 @@ struct SessionSnapshot: Codable {
     var workspaces: [WorkspaceSnapshot]
 }
 
-/// Per-workspace snapshot: grid shape + cells.
+/// Per-workspace snapshot: grid shape + cells. `axis`/`counts`/weights describe
+/// the (possibly uneven) layout; the legacy `rows`/`cols` are still read so
+/// pre-existing `sessions.json` files restore as a uniform grid.
 struct WorkspaceSnapshot: Codable {
     var id: UUID
     var name: String
-    var rows: Int
-    var cols: Int
+    var axis: String?
+    var counts: [Int]?
+    var outerWeights: [Double]?
+    var innerWeights: [[Double]]?
+    // Legacy (pre-uneven-layouts) fields, read-only.
+    var rows: Int?
+    var cols: Int?
     var cells: [CellSnapshot]
+
+    /// The layout to restore: prefer the new axis/counts, else fall back to the
+    /// legacy rows×cols rectangle, else a single cell.
+    var gridLayout: GridLayout {
+        if let axis, let a = LayoutAxis(rawValue: axis), let counts, !counts.isEmpty {
+            return GridLayout(axis: a, counts: counts)
+        }
+        if let rows, let cols {
+            return GridLayout(axis: .rows, counts: Array(repeating: cols, count: max(1, rows)))
+        }
+        return GridLayout(axis: .rows, counts: [1])
+    }
 }
 
 /// Per-cell snapshot. Command + cwd is enough to re-spawn the surface; kind +
@@ -288,8 +310,10 @@ extension Array where Element == SessionSnapshot {
             for ws in snap.workspaces {
                 hasher.combine(ws.id)
                 hasher.combine(ws.name)
-                hasher.combine(ws.rows)
-                hasher.combine(ws.cols)
+                hasher.combine(ws.axis)
+                hasher.combine(ws.counts)
+                hasher.combine(ws.outerWeights)
+                hasher.combine(ws.innerWeights)
                 for cell in ws.cells {
                     hasher.combine(cell.id)
                     hasher.combine(cell.icon)
