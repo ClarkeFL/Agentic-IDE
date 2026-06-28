@@ -27,13 +27,6 @@ struct GridLayout: Equatable {
 
     var cellCount: Int { counts.reduce(0, +) }
 
-    var equalOuterWeights: [Double] {
-        Array(repeating: 1.0 / Double(counts.count), count: counts.count)
-    }
-    var equalInnerWeights: [[Double]] {
-        counts.map { Array(repeating: 1.0 / Double($0), count: $0) }
-    }
-
     /// Force the shape inside the ceilings, trimming the tail until it fits.
     func clamped() -> GridLayout {
         var c = counts.map { max(1, min(Self.maxGroup, $0)) }
@@ -91,9 +84,8 @@ struct GridLayout: Equatable {
 /// A grid of terminal cells inside a project. A project owns several of these;
 /// each is an independent layout (≤8 cells) the user switches between from the
 /// sidebar. Cells are stored flat in reading order; `counts` slices that array
-/// into the rows/columns described by `axis`. `outerWeights` size the groups
-/// along the axis and `innerWeights[g]` size the cells within group g — both
-/// mutated in place when the user drags a divider.
+/// into the rows/columns described by `axis`. Cells are always equal-sized — a
+/// fixed grid, no draggable seams.
 @Observable
 final class Workspace: Identifiable {
     /// Hard ceiling on cell count. Mirrors `GridLayout.maxCells`.
@@ -103,11 +95,6 @@ final class Workspace: Identifiable {
     var name: String
     private(set) var axis: LayoutAxis
     private(set) var counts: [Int]
-    /// Fractions (sum 1) sizing each group along the axis. `var` so the grid's
-    /// draggable seams can rebalance them.
-    var outerWeights: [Double]
-    /// Per-group fractions (each sub-array sums to 1) sizing the cells inside.
-    var innerWeights: [[Double]]
     private(set) var cells: [WorkspaceCell]
 
     /// When set, only this cell is shown, filling the workspace. nil = full grid.
@@ -122,15 +109,13 @@ final class Workspace: Identifiable {
     convenience init(name: String) {
         self.init(id: UUID(), name: name,
                   layout: GridLayout(axis: .rows, counts: [1]),
-                  outerWeights: nil, innerWeights: nil,
                   cells: [WorkspaceCell()])
     }
 
     /// Full init used by restore. Pads/truncates `cells` to the layout's cell
-    /// count and validates the weights, so a malformed snapshot can never desync
-    /// the grid from its cell array.
-    init(id: UUID, name: String, layout rawLayout: GridLayout,
-         outerWeights: [Double]?, innerWeights: [[Double]]?, cells rawCells: [WorkspaceCell]) {
+    /// count so a malformed snapshot can never desync the grid from its cell
+    /// array.
+    init(id: UUID, name: String, layout rawLayout: GridLayout, cells rawCells: [WorkspaceCell]) {
         self.id = id
         self.name = name
         let layout = rawLayout.clamped()
@@ -140,10 +125,6 @@ final class Workspace: Identifiable {
         while fixed.count < layout.cellCount { fixed.append(WorkspaceCell()) }
         if fixed.count > layout.cellCount { fixed = Array(fixed.prefix(layout.cellCount)) }
         self.cells = fixed
-        self.outerWeights = Self.normalized(outerWeights, count: layout.counts.count)
-            ?? layout.equalOuterWeights
-        self.innerWeights = Self.normalizedInner(innerWeights, counts: layout.counts)
-            ?? layout.equalInnerWeights
     }
 
     /// 0-based flat index of the first cell in group `g`.
@@ -162,8 +143,8 @@ final class Workspace: Identifiable {
     }
 
     /// Apply a new layout shape, preserving cells by reading order (dropping the
-    /// tail that no longer fits) and resetting seam weights to equal. Returns the
-    /// dropped cells so the caller can tear down their terminals.
+    /// tail that no longer fits). Returns the dropped cells so the caller can
+    /// tear down their terminals.
     @discardableResult
     func apply(_ rawLayout: GridLayout) -> [WorkspaceCell] {
         let next = rawLayout.clamped()
@@ -180,8 +161,6 @@ final class Workspace: Identifiable {
 
         axis = next.axis
         counts = next.counts
-        outerWeights = next.equalOuterWeights
-        innerWeights = next.equalInnerWeights
         if let z = zoomedCellId, !cells.contains(where: { $0.id == z }) { zoomedCellId = nil }
         if let f = focusedCellId, !cells.contains(where: { $0.id == f }) { focusedCellId = nil }
         return dropped
@@ -194,23 +173,5 @@ final class Workspace: Identifiable {
         }
         let joined = counts.map(String.init).joined(separator: "+")
         return "\(joined) \(axis.rawValue)"
-    }
-
-    // MARK: - Weight validation
-
-    private static func normalized(_ w: [Double]?, count: Int) -> [Double]? {
-        guard let w, w.count == count, w.allSatisfy({ $0 > 0 }) else { return nil }
-        let s = w.reduce(0, +)
-        return s > 0 ? w.map { $0 / s } : nil
-    }
-
-    private static func normalizedInner(_ w: [[Double]]?, counts: [Int]) -> [[Double]]? {
-        guard let w, w.count == counts.count else { return nil }
-        var out: [[Double]] = []
-        for (g, sub) in w.enumerated() {
-            guard let v = normalized(sub, count: counts[g]) else { return nil }
-            out.append(v)
-        }
-        return out
     }
 }

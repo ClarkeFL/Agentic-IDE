@@ -115,6 +115,9 @@ final class ProjectSession: Identifiable {
         guard let tab = cell.terminal else { return }
         cell.terminal = nil
         cell.icon = nil
+        // If this cell was zoomed, the empty launcher has no restore button —
+        // drop back to the grid so the user isn't stuck on a single empty cell.
+        for ws in workspaces where ws.zoomedCellId == cell.id { ws.zoomedCellId = nil }
         // Defer teardown one runloop turn so the visible swap to the launcher
         // is instant and the Ghostty surface_free happens off the critical path.
         DispatchQueue.main.async { tab.view.tearDown() }

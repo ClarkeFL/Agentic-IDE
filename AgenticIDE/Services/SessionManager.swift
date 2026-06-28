@@ -111,8 +111,6 @@ final class SessionManager {
                 let ws = Workspace(id: wsSnap.id,
                                    name: wsSnap.name,
                                    layout: wsSnap.gridLayout,
-                                   outerWeights: wsSnap.outerWeights,
-                                   innerWeights: wsSnap.innerWeights,
                                    cells: cells)
                 session.workspaces.append(ws)
             }
@@ -195,8 +193,6 @@ final class SessionManager {
                     name: ws.name,
                     axis: ws.axis.rawValue,
                     counts: ws.counts,
-                    outerWeights: ws.outerWeights,
-                    innerWeights: ws.innerWeights,
                     cells: ws.cells.map { cell in
                         CellSnapshot(id: cell.id,
                                      icon: cell.icon,
@@ -257,16 +253,15 @@ struct SessionSnapshot: Codable {
     var workspaces: [WorkspaceSnapshot]
 }
 
-/// Per-workspace snapshot: grid shape + cells. `axis`/`counts`/weights describe
-/// the (possibly uneven) layout; the legacy `rows`/`cols` are still read so
-/// pre-existing `sessions.json` files restore as a uniform grid.
+/// Per-workspace snapshot: grid shape + cells. `axis`/`counts` describe the
+/// (possibly uneven) layout; the legacy `rows`/`cols` are still read so
+/// pre-existing `sessions.json` files restore as a uniform grid. Any
+/// `outerWeights`/`innerWeights` from old files are simply ignored on decode.
 struct WorkspaceSnapshot: Codable {
     var id: UUID
     var name: String
     var axis: String?
     var counts: [Int]?
-    var outerWeights: [Double]?
-    var innerWeights: [[Double]]?
     // Legacy (pre-uneven-layouts) fields, read-only.
     var rows: Int?
     var cols: Int?
@@ -312,8 +307,6 @@ extension Array where Element == SessionSnapshot {
                 hasher.combine(ws.name)
                 hasher.combine(ws.axis)
                 hasher.combine(ws.counts)
-                hasher.combine(ws.outerWeights)
-                hasher.combine(ws.innerWeights)
                 for cell in ws.cells {
                     hasher.combine(cell.id)
                     hasher.combine(cell.icon)
