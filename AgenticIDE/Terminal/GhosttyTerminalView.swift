@@ -100,14 +100,18 @@ final class GhosttyTerminalView: NSView, NSTextInputClient {
         self.config = config
         super.init(frame: .zero)
         commonInit()
-        attachSurfaceIfNeeded()
+        // Surface is created lazily on first window attach (viewDidMoveToWindow),
+        // not here. Creating it now — while the view is detached (frame .zero, no
+        // window/screen) — spawns the PTY against a sizeless, display-less surface
+        // that never recovers a valid size/scale once mounted, so a *restored*
+        // cell came back blank/frozen. Deferring to attach ties surface birth to
+        // the known-good moment a fresh launch already hits: in a live window.
     }
 
     required init?(coder: NSCoder) {
         self.config = SurfaceConfig(command: nil, workingDirectory: nil, env: [:])
         super.init(coder: coder)
         commonInit()
-        attachSurfaceIfNeeded()
     }
 
     private func commonInit() {
@@ -324,6 +328,11 @@ final class GhosttyTerminalView: NSView, NSTextInputClient {
         super.viewDidMoveToWindow()
         updateScreenObserver()
         guard window != nil else { return }
+        // Create the surface the first time we land in a window (idempotent —
+        // guarded by surface == nil, so re-attaching on a workspace switch keeps
+        // the same running process). This is the moment we have a real screen +
+        // scale, and layout will hand us a real size right after.
+        attachSurfaceIfNeeded()
         syncSurfaceToCurrentScreen()
         DispatchQueue.main.async { [weak self] in self?.syncSurfaceToCurrentScreen() }
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) { [weak self] in
@@ -375,7 +384,10 @@ final class GhosttyTerminalView: NSView, NSTextInputClient {
     }
 
     /// Creates the underlying ghostty_surface_t, binding it to this NSView.
-    /// Must be called once. The surface owns the spawned PTY process.
+    /// Idempotent (guarded by `surface == nil`) and called from
+    /// `viewDidMoveToWindow`, so the surface is born once — when the view first
+    /// enters a window — and survives detach/re-attach across workspace switches.
+    /// The surface owns the spawned PTY process.
     private func attachSurfaceIfNeeded() {
         guard surface == nil else { return }
         guard let app = GhosttyApp.shared.app else {
