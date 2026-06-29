@@ -50,5 +50,12 @@ struct WorkspaceGridView: View {
                           isActive: true,
                           isZoomed: isZoomed)
             .frame(maxWidth: .infinity, maxHeight: .infinity)
+            // Identity must follow the cell, not its grid position. The ForEach
+            // above keys by position, so two workspaces with the same shape share
+            // structural identity at each slot — SwiftUI then keeps the previous
+            // workspace's mounted NSView (Ghostty surface) and never calls
+            // makeNSView for the new cell, so the wrong terminal shows until a
+            // zoom/resize rebuilds the subtree. cell.id is unique per workspace.
+            .id(cell.id)
     }
 }
