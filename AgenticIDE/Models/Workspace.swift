@@ -133,8 +133,12 @@ final class Workspace: Identifiable {
     }
 
     /// The cell at (group, index-within-group), mapped onto the flat array.
-    func cellAt(group g: Int, index i: Int) -> WorkspaceCell {
-        cells[groupOffset(g) + i]
+    /// Returns nil when out of range: during a shrink, SwiftUI re-evaluates the
+    /// vanishing cell's content against the already-trimmed `cells` array, so a
+    /// hard subscript would crash. Callers skip nil.
+    func cellAt(group g: Int, index i: Int) -> WorkspaceCell? {
+        let idx = groupOffset(g) + i
+        return cells.indices.contains(idx) ? cells[idx] : nil
     }
 
     /// All cells currently running a process.

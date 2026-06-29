@@ -35,11 +35,17 @@ struct WorkspaceGridView: View {
             ForEach(Array(workspace.counts.enumerated()), id: \.offset) { g, count in
                 inner {
                     ForEach(Array(0..<count), id: \.self) { i in
-                        cellView(workspace.cellAt(group: g, index: i), isZoomed: false)
+                        if let cell = workspace.cellAt(group: g, index: i) {
+                            cellView(cell, isZoomed: false)
+                        }
                     }
                 }
             }
         }
+        // The 1px stack spacing reveals this colour as the inter-cell seam; a
+        // dedicated separator colour stays visible in both light and dark (the
+        // card fill behind is too close to the cell fill in dark mode).
+        .background(Color(nsColor: .separatorColor))
     }
 
     private func cellView(_ cell: WorkspaceCell, isZoomed: Bool) -> some View {

@@ -58,8 +58,8 @@ struct WorkspaceGridGlyph: View {
         }
     }
 
-    private func color(for cell: WorkspaceCell) -> Color {
-        guard let tab = cell.terminal else { return Color.primary.opacity(0.16) }
+    private func color(for cell: WorkspaceCell?) -> Color {
+        guard let tab = cell?.terminal else { return Color.primary.opacity(0.16) }
         if let info = TerminalStatusBadge.info(for: tab.status) { return info.color }
         return Color.secondary.opacity(0.55)
     }
