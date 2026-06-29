@@ -159,7 +159,7 @@ struct GitFooterBar: View {
             // branch name (e.g. "fabio/intake-work" + PR badge) gets the full
             // width below instead of crowding the buttons onto one line.
             VStack(alignment: .leading, spacing: DS.Space.xs) {
-                HStack(spacing: DS.Space.sm) {
+                HStack(spacing: DS.Space.xs) {
                     actionButtons
                     Spacer(minLength: 0)
                 }
@@ -251,6 +251,10 @@ struct GitFooterBar: View {
                     .lineLimit(1)
             }
         }
+        // Indent so the branch glyph lands in the same left column as the
+        // first action icon above (which the button's tap-target inset pushes
+        // ~5pt right of the footer edge).
+        .padding(.leading, 5)
         .help(statusTooltip)
     }
 
@@ -528,8 +532,11 @@ private struct FooterActionButton: View {
 
     @State private var isHovered = false
 
-    private let buttonWidth: CGFloat = 30
-    private let buttonHeight: CGFloat = 26
+    // Outer frame is the tap/hover target; the inner 16-pt box normalises every
+    // glyph to the same optical width so the four icons keep an even rhythm
+    // regardless of each SF Symbol's intrinsic width.
+    private let buttonWidth: CGFloat = 24
+    private let buttonHeight: CGFloat = 24
 
     var body: some View {
         Button(action: action) {
@@ -544,6 +551,7 @@ private struct FooterActionButton: View {
                             .font(.system(size: 13, weight: .semibold))
                     }
                 }
+                .frame(width: 16, height: 16)
                 .frame(width: buttonWidth, height: buttonHeight)
                 .foregroundStyle(enabled ? AnyShapeStyle(.primary) : AnyShapeStyle(.tertiary))
                 .background(
@@ -556,10 +564,10 @@ private struct FooterActionButton: View {
                         .font(.system(size: 9, weight: .bold, design: .rounded))
                         .monospacedDigit()
                         .foregroundStyle(.white)
-                        .padding(.horizontal, 4)
-                        .frame(minWidth: 14, minHeight: 13)
+                        .padding(.horizontal, 3)
+                        .frame(minWidth: 13, minHeight: 13)
                         .background(Capsule().fill(Color.accentColor))
-                        .offset(x: 4, y: -3)
+                        .offset(x: 3, y: -2)
                         .allowsHitTesting(false)
                 }
             }
