@@ -26,6 +26,7 @@ final class GhosttyTerminalView: NSView, NSTextInputClient {
     private var markedText = NSMutableAttributedString()
     private var imeMarkedRange = NSRange(location: NSNotFound, length: 0)
     private var imeSelectedRange = NSRange(location: NSNotFound, length: 0)
+    private var keyTextAccumulator: [String]?
 
     // MARK: - Smart-rename hook
     //
@@ -468,19 +469,130 @@ final class GhosttyTerminalView: NSView, NSTextInputClient {
     // MARK: - Keyboard
 
     override func keyDown(with event: NSEvent) {
-        observeForLineBuffer(event)
-        if let surface {
-            var key = ghostty_input_key_s()
-            key.action = GHOSTTY_ACTION_PRESS
-            key.mods = mods(from: event.modifierFlags)
-            key.consumed_mods = GHOSTTY_MODS_NONE
-            key.keycode = UInt32(event.keyCode)
-            key.text = nil
-            key.unshifted_codepoint = 0
-            key.composing = false
-            if ghostty_surface_key(surface, key) { return }
+        guard surface != nil else {
+            interpretKeyEvents([event])
+            return
         }
+
+        let action = event.isARepeat ? GHOSTTY_ACTION_REPEAT : GHOSTTY_ACTION_PRESS
+        let markedTextBefore = hasMarkedText()
+        if !markedTextBefore {
+            observeForLineBuffer(event)
+        }
+
+        // Control combinations must bypass AppKit's editing commands so the
+        // terminal can encode them as PTY control bytes (for example Ctrl+X).
+        if !markedTextBefore,
+           event.modifierFlags.contains(.control),
+           !event.modifierFlags.contains(.command) {
+            _ = sendKey(action, event: event, text: Self.ghosttyText(for: event))
+            return
+        }
+
+        // Resolve keyboard layout, dead keys, and IME input first, then send a
+        // single complete key event. Sending a raw event before insertText and
+        // a separate text write afterward duplicates printable keys in TUIs.
+        keyTextAccumulator = []
         interpretKeyEvents([event])
+        let textParts = keyTextAccumulator ?? []
+        keyTextAccumulator = nil
+
+        if textParts.isEmpty {
+            _ = sendKey(action, event: event, text: Self.ghosttyText(for: event),
+                        composing: markedTextBefore || hasMarkedText())
+        } else {
+            for text in textParts {
+                _ = sendKey(action, event: event, text: text)
+            }
+        }
+    }
+
+    override func performKeyEquivalent(with event: NSEvent) -> Bool {
+        // Command shortcuts stay in the normal menu/responder path. In
+        // particular, Cmd+V must continue to invoke paste(_:).
+        if event.modifierFlags.contains(.command) {
+            return super.performKeyEquivalent(with: event)
+        }
+        guard event.type == .keyDown,
+              window?.firstResponder === self,
+              event.modifierFlags.contains(.control) else {
+            return super.performKeyEquivalent(with: event)
+        }
+        if NSApp.mainMenu?.performKeyEquivalent(with: event) == true {
+            return true
+        }
+        keyDown(with: event)
+        return true
+    }
+
+    override func doCommand(by selector: Selector) {
+        // Special keys are forwarded to Ghostty after AppKit resolves text.
+        // Swallow AppKit's unhandled editing command to avoid an alert beep.
+    }
+
+    /// Builds a Ghostty key event from an NSEvent, mirroring how Ghostty.app's
+    /// own SurfaceView does it: real keycode, unshifted codepoint, and the
+    /// consumed-mods heuristic (control/command never contribute to text
+    /// translation). Leaving these zeroed breaks Ghostty's key encoder — ctrl
+    /// combos produce nothing and kitty-keyboard-protocol apps (opencode)
+    /// receive garbage events.
+    private func inputKey(_ action: ghostty_input_action_e, event: NSEvent) -> ghostty_input_key_s {
+        var key = ghostty_input_key_s()
+        key.action = action
+        key.keycode = UInt32(event.keyCode)
+        key.text = nil
+        key.composing = false
+        key.mods = mods(from: event.modifierFlags)
+        key.consumed_mods = mods(from: event.modifierFlags.subtracting([.control, .command]))
+        key.unshifted_codepoint = 0
+        if event.type == .keyDown || event.type == .keyUp,
+           let chars = event.characters(byApplyingModifiers: []),
+           let cp = chars.unicodeScalars.first {
+            key.unshifted_codepoint = cp.value
+        }
+        return key
+    }
+
+    @discardableResult
+    private func sendKey(_ action: ghostty_input_action_e,
+                         event: NSEvent,
+                         text: String? = nil,
+                         composing: Bool = false) -> Bool {
+        guard let surface else { return false }
+        var key = inputKey(action, event: event)
+        key.composing = composing
+
+        // Ghostty derives C0 bytes from the physical key and Control modifier.
+        // Printable text is borrowed only for the duration of this C call.
+        if let text, let first = text.utf8.first, first >= 0x20 {
+            return text.withCString { pointer in
+                key.text = pointer
+                return ghostty_surface_key(surface, key)
+            }
+        }
+        return ghostty_surface_key(surface, key)
+    }
+
+    /// The text a key event carries into Ghostty, if any. Control characters
+    /// are returned without the control modifier applied (Ghostty encodes
+    /// them itself); PUA codepoints (arrows, F-keys) carry no text.
+    private static func ghosttyText(for event: NSEvent) -> String? {
+        guard let characters = event.characters, !characters.isEmpty else { return nil }
+        if characters.count == 1, let scalar = characters.unicodeScalars.first {
+            if scalar.value < 0x20 {
+                return event.characters(byApplyingModifiers: event.modifierFlags.subtracting(.control))
+            }
+            if (0xF700...0xF8FF).contains(scalar.value) { return nil }
+        }
+        return characters
+    }
+
+    /// Captures printable input for the smart-rename buffer. Filters out
+    /// control characters (Return/Tab arrive separately as keyDown events
+    /// and are tracked via observeForLineBuffer).
+    private func appendPrintableToLineBuffer(_ text: String) {
+        let printable = text.filter { !$0.isNewline && $0 != "\t" && !($0.asciiValue.map { $0 < 0x20 } ?? false) }
+        if !printable.isEmpty { lineBuffer.append(printable) }
     }
 
     /// Updates `lineBuffer` based on which control key was pressed. Printable
@@ -516,15 +628,7 @@ final class GhosttyTerminalView: NSView, NSTextInputClient {
 
     override func keyUp(with event: NSEvent) {
         guard let surface else { return }
-        var key = ghostty_input_key_s()
-        key.action = GHOSTTY_ACTION_RELEASE
-        key.mods = mods(from: event.modifierFlags)
-        key.consumed_mods = GHOSTTY_MODS_NONE
-        key.keycode = UInt32(event.keyCode)
-        key.text = nil
-        key.unshifted_codepoint = 0
-        key.composing = false
-        _ = ghostty_surface_key(surface, key)
+        _ = ghostty_surface_key(surface, inputKey(GHOSTTY_ACTION_RELEASE, event: event))
     }
 
     private func mods(from flags: NSEvent.ModifierFlags) -> ghostty_input_mods_e {
@@ -584,15 +688,15 @@ final class GhosttyTerminalView: NSView, NSTextInputClient {
         else if let s = string as? NSAttributedString { text = s.string }
         else { return }
         guard let surface, !text.isEmpty else { return }
-        // Capture printable input for the smart-rename buffer. Filter out
-        // control characters (Return/Tab arrive separately as keyDown events
-        // and are tracked via observeForLineBuffer).
-        let printable = text.filter { !$0.isNewline && $0 != "\t" && !($0.asciiValue.map { $0 < 0x20 } ?? false) }
-        if !printable.isEmpty { lineBuffer.append(printable) }
+        appendPrintableToLineBuffer(text)
+        unmarkText()
+        if keyTextAccumulator != nil {
+            keyTextAccumulator?.append(text)
+            return
+        }
         text.withCString { ptr in
             ghostty_surface_text(surface, ptr, UInt(strlen(ptr)))
         }
-        unmarkText()
     }
 
     func setMarkedText(_ string: Any, selectedRange: NSRange, replacementRange: NSRange) {
