@@ -1,9 +1,8 @@
 import SwiftUI
 
-/// Bottom strip of the workspace pane: one chip per configured server (green =
-/// running, grey = stopped), plus Run all / Stop all / Edit. Clicking a running
-/// chip jumps to its terminal in the "Servers" workspace; a stopped chip runs
-/// just that one. When no servers are set up yet, shows a single setup button.
+/// Bottom strip of the workspace pane: workspace navigation plus one chip per
+/// configured server (green = running, grey = stopped), Run all / Stop all /
+/// Edit. The strip stays visible before the first workspace has been created.
 struct ServerBar: View {
     @Environment(ProjectStore.self) private var store
     let project: Project
@@ -55,6 +54,9 @@ struct ServerBar: View {
                 .menuIndicator(.hidden)
                 .fixedSize()
             }
+
+            WorkspacePager(session: session)
+                .layoutPriority(1)
         }
         .padding(.horizontal, DS.Space.lg - 2)
         .frame(height: DS.Control.header)
@@ -67,6 +69,62 @@ struct ServerBar: View {
                           },
                           onCancel: { showEditor = false })
         }
+    }
+}
+
+private struct WorkspacePager: View {
+    @Bindable var session: ProjectSession
+
+    private var activeIndex: Int? {
+        guard let activeId = session.activeWorkspace?.id else { return nil }
+        return session.workspaces.firstIndex { $0.id == activeId }
+    }
+
+    var body: some View {
+        HStack(spacing: DS.Space.xs) {
+            Button { move(by: -1) } label: {
+                Image(systemName: "chevron.left")
+                    .font(.system(size: DS.Icon.micro, weight: .semibold))
+                    .frame(width: DS.Control.compact, height: DS.Control.compact)
+                    .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .disabled(session.workspaces.count < 2)
+            .help("Previous workspace")
+
+            HStack(spacing: DS.Space.xs) {
+                ForEach(session.workspaces) { workspace in
+                    Button { session.activeWorkspaceId = workspace.id } label: {
+                        Circle()
+                            .fill(session.activeWorkspace?.id == workspace.id
+                                  ? Color.accentColor
+                                  : Color.secondary.opacity(0.35))
+                            .frame(width: DS.Space.sm, height: DS.Space.sm)
+                            .frame(width: DS.Control.micro, height: DS.Control.compact)
+                            .contentShape(Rectangle())
+                    }
+                    .buttonStyle(.plain)
+                    .help(workspace.name)
+                }
+            }
+
+            Button { move(by: 1) } label: {
+                Image(systemName: "chevron.right")
+                    .font(.system(size: DS.Icon.micro, weight: .semibold))
+                    .frame(width: DS.Control.compact, height: DS.Control.compact)
+                    .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .disabled(session.workspaces.count < 2)
+            .help("Next workspace")
+        }
+        .fixedSize()
+    }
+
+    private func move(by offset: Int) {
+        guard let activeIndex, session.workspaces.count > 1 else { return }
+        let nextIndex = (activeIndex + offset + session.workspaces.count) % session.workspaces.count
+        session.activeWorkspaceId = session.workspaces[nextIndex].id
     }
 }
 

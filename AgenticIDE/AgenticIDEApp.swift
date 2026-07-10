@@ -8,7 +8,6 @@ struct AgenticIDEApp: App {
     @State private var sessions = SessionManager()
     @State private var editors = EditorSessionManager()
     @State private var gitWatchers = GitStatusWatcherStore()
-    @State private var speaker = SystemSpeaker()
     @State private var resources = ResourceMonitor()
     /// In-memory, project-agnostic chat thread powering the Ask overlay
     /// (⌘⇧A). Owned at the app level so the conversation persists across
@@ -42,7 +41,6 @@ struct AgenticIDEApp: App {
                 .environment(sessions)
                 .environment(editors)
                 .environment(gitWatchers)
-                .environment(speaker)
                 .environment(resources)
                 .environment(ask)
                 .environment(launchTools)
@@ -82,17 +80,6 @@ struct AgenticIDEApp: App {
                 }
                 .keyboardShortcut(keybindings.shortcut(for: .closeTab))
             }
-            // Speak selection from the active terminal. ProjectWorkspaceView
-            // observes the notification and calls into its active tab.
-            CommandMenu("Speech") {
-                Button("Speak Selection") {
-                    NotificationCenter.default.post(name: .speakSelection, object: nil)
-                }
-                .keyboardShortcut(keybindings.shortcut(for: .speak))
-                Button("Stop Speaking") { speaker.stop() }
-                    .keyboardShortcut(keybindings.shortcut(for: .stopSpeak))
-                    .disabled(!speaker.isSpeaking)
-            }
             // Sparkle-driven update flow. Sits in the app menu where macOS
             // users expect it.
             CommandGroup(after: .appInfo) {
@@ -131,11 +118,9 @@ struct AgenticIDEApp: App {
             }
         }
 
-        // Standard macOS Settings… scene (gives ⌘, automatically). The
-        // Speech tab uses the shared SystemSpeaker for the Preview button.
+        // Standard macOS Settings… scene (gives ⌘, automatically).
         Settings {
             SettingsView()
-                .environment(speaker)
                 .environment(launchTools)
                 .environment(keybindings)
         }
@@ -150,9 +135,6 @@ extension Notification.Name {
     /// Posted by File → New Project… (⌘N) and the footer "+" menu. Observed by
     /// `ProjectSidebarView`, which creates a new folder on disk and adds it.
     static let newProject = Notification.Name("AgenticIDE.newProject")
-    /// Posted by the Speech menu command. Observed by `ProjectWorkspaceView`,
-    /// which forwards the active tab's selected text to the shared `Speaker`.
-    static let speakSelection = Notification.Name("AgenticIDE.speakSelection")
     /// Posted by File → Save (⌘S). Observed by `EditorPaneView`, which writes
     /// the active editor tab's buffer to disk.
     static let saveActiveEditorTab = Notification.Name("AgenticIDE.saveActiveEditorTab")
