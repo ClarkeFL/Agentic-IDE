@@ -1,3 +1,4 @@
+import AppKit
 import SwiftUI
 
 /// Pane ④: the active workspace's header + grid. When a project has no
@@ -41,6 +42,11 @@ struct ProjectWorkspaceView: View {
             ServerBar(project: project, session: session)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .background {
+            WorkspaceSwipeMonitor { deltaX in
+                session.moveWorkspace(by: deltaX < 0 ? 1 : -1)
+            }
+        }
         // Same floating-card chrome as the explorer + sidebar panes. Flush (0)
         // against the divider on its leading side; the trailing margin is the
         // window edge (or 0 when the Notes pane is open to its right).
@@ -77,6 +83,59 @@ struct ProjectWorkspaceView: View {
             ?? ws.cells.first?.id
         guard let id = target else { return }
         session.toggleZoom(cellId: id, in: ws)
+    }
+}
+
+/// Listens for AppKit's page-swipe event without adding a drag gesture that
+/// would interfere with selecting text inside terminal cells.
+private struct WorkspaceSwipeMonitor: NSViewRepresentable {
+    let onSwipe: (CGFloat) -> Void
+
+    func makeNSView(context: Context) -> WorkspaceSwipeNSView {
+        let view = WorkspaceSwipeNSView()
+        view.onSwipe = onSwipe
+        return view
+    }
+
+    func updateNSView(_ nsView: WorkspaceSwipeNSView, context: Context) {
+        nsView.onSwipe = onSwipe
+    }
+}
+
+private final class WorkspaceSwipeNSView: NSView {
+    var onSwipe: ((CGFloat) -> Void)?
+    private var eventMonitor: Any?
+
+    override var acceptsFirstResponder: Bool { false }
+
+    override func hitTest(_ point: NSPoint) -> NSView? {
+        nil
+    }
+
+    override func viewDidMoveToWindow() {
+        super.viewDidMoveToWindow()
+        removeEventMonitor()
+        guard window != nil else { return }
+
+        eventMonitor = NSEvent.addLocalMonitorForEvents(matching: .swipe) { [weak self] event in
+            guard let self,
+                  event.window === window,
+                  bounds.contains(convert(event.locationInWindow, from: nil)),
+                  abs(event.deltaX) > abs(event.deltaY),
+                  abs(event.deltaX) > 0 else { return event }
+            onSwipe?(event.deltaX)
+            return nil
+        }
+    }
+
+    deinit {
+        removeEventMonitor()
+    }
+
+    private func removeEventMonitor() {
+        guard let eventMonitor else { return }
+        NSEvent.removeMonitor(eventMonitor)
+        self.eventMonitor = nil
     }
 }
 

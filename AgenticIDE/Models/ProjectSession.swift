@@ -85,6 +85,14 @@ final class ProjectSession: Identifiable {
         saveHook?()
     }
 
+    func moveWorkspace(by offset: Int) {
+        guard workspaces.count > 1,
+              let activeWorkspace,
+              let activeIndex = workspaces.firstIndex(where: { $0.id == activeWorkspace.id }) else { return }
+        let nextIndex = (activeIndex + offset + workspaces.count) % workspaces.count
+        activeWorkspaceId = workspaces[nextIndex].id
+    }
+
     func resizeWorkspace(_ ws: Workspace, layout: GridLayout) {
         let dropped = ws.apply(layout)
         for cell in dropped { cell.terminal?.view.tearDown() }
