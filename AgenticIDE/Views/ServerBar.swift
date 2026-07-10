@@ -75,14 +75,9 @@ struct ServerBar: View {
 private struct WorkspacePager: View {
     @Bindable var session: ProjectSession
 
-    private var activeIndex: Int? {
-        guard let activeId = session.activeWorkspace?.id else { return nil }
-        return session.workspaces.firstIndex { $0.id == activeId }
-    }
-
     var body: some View {
         HStack(spacing: DS.Space.xs) {
-            Button { move(by: -1) } label: {
+            Button { session.moveWorkspace(by: -1) } label: {
                 Image(systemName: "chevron.left")
                     .font(.system(size: DS.Icon.micro, weight: .semibold))
                     .frame(width: DS.Control.compact, height: DS.Control.compact)
@@ -108,7 +103,7 @@ private struct WorkspacePager: View {
                 }
             }
 
-            Button { move(by: 1) } label: {
+            Button { session.moveWorkspace(by: 1) } label: {
                 Image(systemName: "chevron.right")
                     .font(.system(size: DS.Icon.micro, weight: .semibold))
                     .frame(width: DS.Control.compact, height: DS.Control.compact)
@@ -119,12 +114,6 @@ private struct WorkspacePager: View {
             .help("Next workspace")
         }
         .fixedSize()
-    }
-
-    private func move(by offset: Int) {
-        guard let activeIndex, session.workspaces.count > 1 else { return }
-        let nextIndex = (activeIndex + offset + session.workspaces.count) % session.workspaces.count
-        session.activeWorkspaceId = session.workspaces[nextIndex].id
     }
 }
 
