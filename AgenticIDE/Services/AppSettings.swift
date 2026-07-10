@@ -10,12 +10,6 @@ enum AppSettings {
         /// `codex --dangerously-bypass-approvals-and-sandbox` — same idea for
         /// the OpenAI Codex CLI ("yolo" mode).
         static let codexDangerousBypass = "codex.dangerouslyBypassApprovalsAndSandbox"
-        /// AVSpeechSynthesisVoice identifier for the Speak Selection feature.
-        /// Empty/missing falls back to the system default for the current locale.
-        static let speechVoiceIdentifier = "speech.voiceIdentifier"
-        /// AVSpeechUtterance.rate (0.0…1.0). Missing falls back to the SDK
-        /// default (`AVSpeechUtteranceDefaultSpeechRate`).
-        static let speechRate = "speech.rate"
         /// Bundle identifier of the user's preferred external IDE/editor.
         static let preferredIDE = "editor.preferredIDE"
         /// Prefix invocation for the Ask overlay (⌘⇧A). The user's prompt is

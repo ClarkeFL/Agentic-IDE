@@ -71,8 +71,6 @@ enum ShortcutAction: String, CaseIterable, Identifiable {
     case addProject
     case save
     case closeTab
-    case speak
-    case stopSpeak
     case ask
     case toggleExplorer
     case zoomCell
@@ -87,8 +85,6 @@ enum ShortcutAction: String, CaseIterable, Identifiable {
         case .addProject:     return "Add Existing Project"
         case .save:           return "Save"
         case .closeTab:       return "Close Editor Tab"
-        case .speak:          return "Speak Selection"
-        case .stopSpeak:      return "Stop Speaking"
         case .ask:            return "Ask"
         case .toggleExplorer: return "Toggle Explorer"
         case .zoomCell:       return "Zoom Cell"
@@ -103,8 +99,6 @@ enum ShortcutAction: String, CaseIterable, Identifiable {
         case .addProject:     return Keybinding("o", command: true, shift: true)
         case .save:           return Keybinding("s", command: true)
         case .closeTab:       return Keybinding("w", command: true, shift: true)
-        case .speak:          return Keybinding("s", command: true, shift: true)
-        case .stopSpeak:      return Keybinding(".", command: true, shift: true)
         case .ask:            return Keybinding("a", command: true, shift: true)
         case .toggleExplorer: return Keybinding("b", command: true, option: true)
         case .zoomCell:       return Keybinding("f", command: true, control: true)

@@ -158,15 +158,17 @@ struct GitFooterBar: View {
             // Two rows: the action buttons sit on their own line above so a long
             // branch name (e.g. "fabio/intake-work" + PR badge) gets the full
             // width below instead of crowding the buttons onto one line.
-            VStack(alignment: .leading, spacing: DS.Space.xs) {
+            VStack(alignment: .leading, spacing: DS.Space.md) {
                 HStack(spacing: DS.Space.xs) {
+                    Spacer(minLength: 0)
                     actionButtons
                     Spacer(minLength: 0)
                 }
                 branchLabel
             }
             .padding(.horizontal, DS.Space.sm)
-            .padding(.vertical, DS.Space.xs)
+            .padding(.vertical, DS.Space.sm)
+            .frame(minHeight: 68)
             .frame(maxWidth: .infinity, alignment: .leading)
             // Solid surface that matches the file-tree header/body — the old
             // .regularMaterial let the desktop wallpaper tint bleed through, so
@@ -532,11 +534,11 @@ private struct FooterActionButton: View {
 
     @State private var isHovered = false
 
-    // Outer frame is the tap/hover target; the inner 16-pt box normalises every
+    // Outer frame is the tap/hover target; the inner 18-pt box normalises every
     // glyph to the same optical width so the four icons keep an even rhythm
     // regardless of each SF Symbol's intrinsic width.
-    private let buttonWidth: CGFloat = 24
-    private let buttonHeight: CGFloat = 24
+    private let buttonWidth: CGFloat = DS.Control.header
+    private let buttonHeight: CGFloat = DS.Control.header
 
     var body: some View {
         Button(action: action) {
@@ -548,10 +550,10 @@ private struct FooterActionButton: View {
                             .scaleEffect(0.6)
                     } else {
                         Image(systemName: systemName)
-                            .font(.system(size: 13, weight: .semibold))
+                            .font(.system(size: 15, weight: .semibold))
                     }
                 }
-                .frame(width: 16, height: 16)
+                .frame(width: 18, height: 18)
                 .frame(width: buttonWidth, height: buttonHeight)
                 .foregroundStyle(enabled ? AnyShapeStyle(.primary) : AnyShapeStyle(.tertiary))
                 .background(

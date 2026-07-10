@@ -3,12 +3,10 @@ import SwiftUI
 /// Pane ④ header strip. Locked to `DS.Control.header` so it shares its top +
 /// bottom edges with the sidebar `PaneHeader` and the file-tree header. Shows
 /// the (renameable) active workspace name, a live grid glyph that doubles as
-/// the size picker, and the prompt-library + speaker controls.
+/// the size picker, and the notes control.
 struct WorkspaceHeaderView: View {
     @Bindable var session: ProjectSession
     @Bindable var workspace: Workspace
-    let isSpeaking: Bool
-    let onSpeak: () -> Void
 
     @State private var showGridPicker = false
     @State private var isEditingName = false
@@ -24,16 +22,9 @@ struct WorkspaceHeaderView: View {
 
                 Spacer(minLength: DS.Space.sm)
 
-                PromptLibraryMenu()
-                    .padding(.trailing, DS.Space.xs)
-
                 HeaderButton(systemName: "note.text",
                              help: "Notes (⇧⌘N)",
                              action: { NotificationCenter.default.post(name: .toggleNotes, object: nil) })
-
-                HeaderButton(systemName: isSpeaking ? "stop.circle.fill" : "speaker.wave.2",
-                             help: isSpeaking ? "Stop speaking (⇧⌘.)" : "Speak selection (⇧⌘S)",
-                             action: onSpeak)
             }
             .padding(.leading, DS.Space.lg - 2)
             .padding(.trailing, DS.Space.lg - 2)
