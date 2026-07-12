@@ -16,35 +16,46 @@ struct ProjectWorkspaceView: View {
     /// Set when the user asks for a new workspace (sidebar +, ⌘T) so the
     /// chooser shows even if there's already an active workspace.
     @State private var showLayoutChooser = false
+    @State private var swipeDirection = 1
 
     var body: some View {
         let session = sessions.session(for: project.id)
 
         VStack(spacing: 0) {
-            if showLayoutChooser || session.activeWorkspace == nil {
-                LayoutChooserView(
-                    canCancel: session.activeWorkspace != nil,
-                    onSelect: { layout in
-                        session.addWorkspace(layout: layout)
-                        showLayoutChooser = false
-                    },
-                    onCancel: { showLayoutChooser = false })
-            } else if let workspace = session.activeWorkspace {
-                WorkspaceHeaderView(session: session,
-                                    workspace: workspace)
-                // Header sits inside the rounded card now, so a hairline rule
-                // separates it from the cell grid below (the cells lost their
-                // own borders to become seamless tiles).
-                Divider()
-                WorkspaceGridView(project: project, session: session, workspace: workspace)
+            ZStack {
+                if showLayoutChooser || session.activeWorkspace == nil {
+                    LayoutChooserView(
+                        canCancel: session.activeWorkspace != nil,
+                        onSelect: { layout in
+                            session.addWorkspace(layout: layout)
+                            showLayoutChooser = false
+                        },
+                        onCancel: { showLayoutChooser = false })
+                } else if let workspace = session.activeWorkspace {
+                    VStack(spacing: 0) {
+                        WorkspaceHeaderView(session: session,
+                                            workspace: workspace)
+                        // Header sits inside the rounded card now, so a hairline rule
+                        // separates it from the cell grid below (the cells lost their
+                        // own borders to become seamless tiles).
+                        Divider()
+                        WorkspaceGridView(project: project, session: session, workspace: workspace)
+                    }
+                    .id(workspace.id)
+                    .transition(workspaceTransition)
+                }
             }
+            .clipped()
             Divider()
             ServerBar(project: project, session: session)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .background {
-            WorkspaceSwipeMonitor { deltaX in
-                session.moveWorkspace(by: deltaX < 0 ? 1 : -1)
+            WorkspaceSwipeMonitor { direction in
+                swipeDirection = direction
+                withAnimation(.easeInOut(duration: 0.22)) {
+                    session.moveWorkspace(by: direction)
+                }
             }
         }
         // Same floating-card chrome as the explorer + sidebar panes. Flush (0)
@@ -84,12 +95,19 @@ struct ProjectWorkspaceView: View {
         guard let id = target else { return }
         session.toggleZoom(cellId: id, in: ws)
     }
+
+    private var workspaceTransition: AnyTransition {
+        .asymmetric(
+            insertion: .move(edge: swipeDirection > 0 ? .trailing : .leading),
+            removal: .move(edge: swipeDirection > 0 ? .leading : .trailing)
+        )
+    }
 }
 
 /// Listens for AppKit's page-swipe event without adding a drag gesture that
 /// would interfere with selecting text inside terminal cells.
 private struct WorkspaceSwipeMonitor: NSViewRepresentable {
-    let onSwipe: (CGFloat) -> Void
+    let onSwipe: (Int) -> Void
 
     func makeNSView(context: Context) -> WorkspaceSwipeNSView {
         let view = WorkspaceSwipeNSView()
@@ -103,8 +121,21 @@ private struct WorkspaceSwipeMonitor: NSViewRepresentable {
 }
 
 private final class WorkspaceSwipeNSView: NSView {
-    var onSwipe: ((CGFloat) -> Void)?
+    var onSwipe: ((Int) -> Void)?
     private var eventMonitor: Any?
+    private var horizontalScroll: CGFloat = 0
+    private var touchCount = 0
+    private var didNavigate = false
+    private var lastNavigationTime: TimeInterval = 0
+
+    override init(frame frameRect: NSRect) {
+        super.init(frame: frameRect)
+        allowedTouchTypes = [.indirect]
+    }
+
+    required init?(coder: NSCoder) {
+        fatalError("init(coder:) has not been implemented")
+    }
 
     override var acceptsFirstResponder: Bool { false }
 
@@ -117,14 +148,9 @@ private final class WorkspaceSwipeNSView: NSView {
         removeEventMonitor()
         guard window != nil else { return }
 
-        eventMonitor = NSEvent.addLocalMonitorForEvents(matching: .swipe) { [weak self] event in
-            guard let self,
-                  event.window === window,
-                  bounds.contains(convert(event.locationInWindow, from: nil)),
-                  abs(event.deltaX) > abs(event.deltaY),
-                  abs(event.deltaX) > 0 else { return event }
-            onSwipe?(event.deltaX)
-            return nil
+        let mask: NSEvent.EventTypeMask = [.swipe, .scrollWheel, .beginGesture, .endGesture]
+        eventMonitor = NSEvent.addLocalMonitorForEvents(matching: mask) { [weak self] event in
+            self?.handle(event) ?? event
         }
     }
 
@@ -136,6 +162,62 @@ private final class WorkspaceSwipeNSView: NSView {
         guard let eventMonitor else { return }
         NSEvent.removeMonitor(eventMonitor)
         self.eventMonitor = nil
+    }
+
+    private func handle(_ event: NSEvent) -> NSEvent? {
+        guard let window,
+              event.windowNumber == window.windowNumber,
+              bounds.contains(convert(event.locationInWindow, from: nil)) else { return event }
+
+        switch event.type {
+        case .beginGesture:
+            resetGesture()
+            updateTouchCount(from: event)
+        case .scrollWheel:
+            updateTouchCount(from: event)
+            guard touchCount == 3,
+                  event.momentumPhase.isEmpty,
+                  abs(event.scrollingDeltaX) > abs(event.scrollingDeltaY) else { return event }
+
+            horizontalScroll += event.scrollingDeltaX
+            if !didNavigate, abs(horizontalScroll) >= 36 {
+                navigate(horizontalScroll < 0 ? 1 : -1)
+                didNavigate = true
+            }
+            return nil
+        case .swipe:
+            guard abs(event.deltaX) > abs(event.deltaY), abs(event.deltaX) > 0 else { return event }
+            navigate(event.deltaX < 0 ? 1 : -1)
+            return nil
+        case .endGesture:
+            resetGesture()
+        default:
+            break
+        }
+        return event
+    }
+
+    private func updateTouchCount(from event: NSEvent) {
+        let current = event.touches(matching: .touching, in: self).count
+        if current > 0 { touchCount = current }
+    }
+
+    private func navigate(_ direction: Int) {
+        // Some trackpads emit a discrete swipe after the scroll-phase gesture.
+        // Treat both deliveries as one navigation action.
+        guard eventTimestampNow - lastNavigationTime > 0.25 else { return }
+        lastNavigationTime = eventTimestampNow
+        onSwipe?(direction)
+    }
+
+    private var eventTimestampNow: TimeInterval {
+        ProcessInfo.processInfo.systemUptime
+    }
+
+    private func resetGesture() {
+        horizontalScroll = 0
+        touchCount = 0
+        didNavigate = false
     }
 }
 
