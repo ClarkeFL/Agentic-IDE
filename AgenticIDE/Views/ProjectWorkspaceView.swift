@@ -52,10 +52,7 @@ struct ProjectWorkspaceView: View {
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .background {
             WorkspaceSwipeMonitor { direction in
-                swipeDirection = direction
-                withAnimation(.easeInOut(duration: 0.22)) {
-                    session.moveWorkspace(by: direction)
-                }
+                slide(direction, in: session)
             }
         }
         // Same floating-card chrome as the explorer + sidebar panes. Flush (0)
@@ -66,6 +63,10 @@ struct ProjectWorkspaceView: View {
                                      bottom: DS.Space.md, trailing: trailingInset))
         .onReceive(NotificationCenter.default.publisher(for: .toggleCellZoom)) { _ in
             toggleZoomFocused(in: session)
+        }
+        .onReceive(NotificationCenter.default.publisher(for: .moveWorkspace)) { note in
+            guard let direction = note.object as? Int else { return }
+            slide(direction, in: session)
         }
         .onReceive(NotificationCenter.default.publisher(for: .newWorkspace)) { _ in
             // Already have a workspace → create + switch immediately (1×1) so it
@@ -94,6 +95,13 @@ struct ProjectWorkspaceView: View {
             ?? ws.cells.first?.id
         guard let id = target else { return }
         session.toggleZoom(cellId: id, in: ws)
+    }
+
+    private func slide(_ direction: Int, in session: ProjectSession) {
+        swipeDirection = direction
+        withAnimation(.easeInOut(duration: 0.22)) {
+            session.moveWorkspace(by: direction)
+        }
     }
 
     private var workspaceTransition: AnyTransition {
