@@ -115,6 +115,14 @@ struct AgenticIDEApp: App {
                     NotificationCenter.default.post(name: .newWorkspace, object: nil)
                 }
                 .keyboardShortcut(keybindings.shortcut(for: .newWorkspace))
+                Button("Previous Workspace") {
+                    NotificationCenter.default.post(name: .moveWorkspace, object: -1)
+                }
+                .keyboardShortcut(.leftArrow, modifiers: .command)
+                Button("Next Workspace") {
+                    NotificationCenter.default.post(name: .moveWorkspace, object: 1)
+                }
+                .keyboardShortcut(.rightArrow, modifiers: .command)
             }
         }
 
@@ -150,6 +158,10 @@ extension Notification.Name {
     /// Posted by View → New Workspace (⌘T). Observed by `ProjectWorkspaceView`,
     /// which adds a fresh workspace to the active project's session.
     static let newWorkspace = Notification.Name("AgenticIDE.newWorkspace")
+    /// Posted by View → Previous/Next Workspace (⌘←/⌘→) with an `Int` direction
+    /// as the object. Observed by `ProjectWorkspaceView`, which slides to the
+    /// adjacent workspace with the same animation as a trackpad swipe.
+    static let moveWorkspace = Notification.Name("AgenticIDE.moveWorkspace")
     /// Posted by View → Toggle File Tree (⌘⌥B). Observed by `MainWindow`,
     /// which collapses/expands the file-tree pane (②).
     static let toggleFileTree = Notification.Name("AgenticIDE.toggleFileTree")

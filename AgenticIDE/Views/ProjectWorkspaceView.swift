@@ -52,10 +52,7 @@ struct ProjectWorkspaceView: View {
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .background {
             WorkspaceSwipeMonitor { direction in
-                swipeDirection = direction
-                withAnimation(.easeInOut(duration: 0.22)) {
-                    session.moveWorkspace(by: direction)
-                }
+                slide(direction, in: session)
             }
         }
         // Same floating-card chrome as the explorer + sidebar panes. Flush (0)
@@ -66,6 +63,10 @@ struct ProjectWorkspaceView: View {
                                      bottom: DS.Space.md, trailing: trailingInset))
         .onReceive(NotificationCenter.default.publisher(for: .toggleCellZoom)) { _ in
             toggleZoomFocused(in: session)
+        }
+        .onReceive(NotificationCenter.default.publisher(for: .moveWorkspace)) { note in
+            guard let direction = note.object as? Int else { return }
+            slide(direction, in: session)
         }
         .onReceive(NotificationCenter.default.publisher(for: .newWorkspace)) { _ in
             // Already have a workspace → create + switch immediately (1×1) so it
@@ -96,6 +97,13 @@ struct ProjectWorkspaceView: View {
         session.toggleZoom(cellId: id, in: ws)
     }
 
+    private func slide(_ direction: Int, in session: ProjectSession) {
+        swipeDirection = direction
+        withAnimation(.easeInOut(duration: 0.22)) {
+            session.moveWorkspace(by: direction)
+        }
+    }
+
     private var workspaceTransition: AnyTransition {
         .asymmetric(
             insertion: .move(edge: swipeDirection > 0 ? .trailing : .leading),
@@ -123,19 +131,6 @@ private struct WorkspaceSwipeMonitor: NSViewRepresentable {
 private final class WorkspaceSwipeNSView: NSView {
     var onSwipe: ((Int) -> Void)?
     private var eventMonitor: Any?
-    private var horizontalScroll: CGFloat = 0
-    private var touchCount = 0
-    private var didNavigate = false
-    private var lastNavigationTime: TimeInterval = 0
-
-    override init(frame frameRect: NSRect) {
-        super.init(frame: frameRect)
-        allowedTouchTypes = [.indirect]
-    }
-
-    required init?(coder: NSCoder) {
-        fatalError("init(coder:) has not been implemented")
-    }
 
     override var acceptsFirstResponder: Bool { false }
 
@@ -148,9 +143,18 @@ private final class WorkspaceSwipeNSView: NSView {
         removeEventMonitor()
         guard window != nil else { return }
 
-        let mask: NSEvent.EventTypeMask = [.swipe, .scrollWheel, .beginGesture, .endGesture]
-        eventMonitor = NSEvent.addLocalMonitorForEvents(matching: mask) { [weak self] event in
-            self?.handle(event) ?? event
+        // ponytail: .swipe only — never intercept scrollWheel, that ate
+        // terminal scrolling. Requires System Settings › Trackpad › More
+        // Gestures › "Swipe between pages" to include swiping; macOS owns
+        // three-finger swipes otherwise.
+        eventMonitor = NSEvent.addLocalMonitorForEvents(matching: .swipe) { [weak self] event in
+            guard let self, let window,
+                  event.window === window,
+                  bounds.contains(convert(event.locationInWindow, from: nil)),
+                  abs(event.deltaX) > abs(event.deltaY),
+                  abs(event.deltaX) > 0 else { return event }
+            onSwipe?(event.deltaX < 0 ? 1 : -1)
+            return nil
         }
     }
 
@@ -162,62 +166,6 @@ private final class WorkspaceSwipeNSView: NSView {
         guard let eventMonitor else { return }
         NSEvent.removeMonitor(eventMonitor)
         self.eventMonitor = nil
-    }
-
-    private func handle(_ event: NSEvent) -> NSEvent? {
-        guard let window,
-              event.windowNumber == window.windowNumber,
-              bounds.contains(convert(event.locationInWindow, from: nil)) else { return event }
-
-        switch event.type {
-        case .beginGesture:
-            resetGesture()
-            updateTouchCount(from: event)
-        case .scrollWheel:
-            updateTouchCount(from: event)
-            guard touchCount == 3,
-                  event.momentumPhase.isEmpty,
-                  abs(event.scrollingDeltaX) > abs(event.scrollingDeltaY) else { return event }
-
-            horizontalScroll += event.scrollingDeltaX
-            if !didNavigate, abs(horizontalScroll) >= 36 {
-                navigate(horizontalScroll < 0 ? 1 : -1)
-                didNavigate = true
-            }
-            return nil
-        case .swipe:
-            guard abs(event.deltaX) > abs(event.deltaY), abs(event.deltaX) > 0 else { return event }
-            navigate(event.deltaX < 0 ? 1 : -1)
-            return nil
-        case .endGesture:
-            resetGesture()
-        default:
-            break
-        }
-        return event
-    }
-
-    private func updateTouchCount(from event: NSEvent) {
-        let current = event.touches(matching: .touching, in: self).count
-        if current > 0 { touchCount = current }
-    }
-
-    private func navigate(_ direction: Int) {
-        // Some trackpads emit a discrete swipe after the scroll-phase gesture.
-        // Treat both deliveries as one navigation action.
-        guard eventTimestampNow - lastNavigationTime > 0.25 else { return }
-        lastNavigationTime = eventTimestampNow
-        onSwipe?(direction)
-    }
-
-    private var eventTimestampNow: TimeInterval {
-        ProcessInfo.processInfo.systemUptime
-    }
-
-    private func resetGesture() {
-        horizontalScroll = 0
-        touchCount = 0
-        didNavigate = false
     }
 }
 
