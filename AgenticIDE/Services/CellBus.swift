@@ -86,6 +86,7 @@ final class CellBus {
         }
         let manager = BrowserManager.shared
         let usage = "error: usage: browser open <url> | browser read | browser eval <js> | "
+            + "browser errors | browser screenshot | "
             + "browser viewport <fit|desktop|laptop|tablet|mobile> | browser close"
 
         switch args.first ?? "" {
@@ -117,6 +118,20 @@ final class CellBus {
                 return
             }
             session.eval(js) { completion(String($0.prefix(8000))) }
+
+        case "errors":
+            guard let session = manager.session(ownerId: ownerTab.id) else {
+                completion("error: no browser open — use `agentide browser open <url>` first")
+                return
+            }
+            session.consoleErrors { completion(String($0.prefix(8000))) }
+
+        case "screenshot":
+            guard let session = manager.session(ownerId: ownerTab.id) else {
+                completion("error: no browser open — use `agentide browser open <url>` first")
+                return
+            }
+            session.screenshot(completion: completion)
 
         case "viewport":
             guard let session = manager.session(ownerId: ownerTab.id) else {

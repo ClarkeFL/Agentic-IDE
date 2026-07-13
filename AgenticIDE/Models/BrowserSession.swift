@@ -1,3 +1,4 @@
+import AppKit
 import Foundation
 import Observation
 import WebKit
@@ -168,6 +169,9 @@ final class BrowserSession: NSObject, Identifiable, WKNavigationDelegate, WKScri
         controller.addUserScript(WKUserScript(source: Self.pickerJS,
                                               injectionTime: .atDocumentEnd,
                                               forMainFrameOnly: true))
+        controller.addUserScript(WKUserScript(source: Self.consoleCaptureJS,
+                                              injectionTime: .atDocumentStart,
+                                              forMainFrameOnly: true))
         config.userContentController = controller
         let webView = WKWebView(frame: .zero, configuration: config)
         webView.allowsBackForwardNavigationGestures = true
@@ -229,6 +233,43 @@ final class BrowserSession: NSObject, Identifiable, WKNavigationDelegate, WKScri
     /// interactive elements with CSS selectors, then visible text.
     func snapshot(completion: @escaping (String) -> Void) {
         eval(Self.snapshotJS, completion: completion)
+    }
+
+    /// Console errors/warnings + uncaught exceptions collected by the
+    /// injected capture script. Resets on every navigation (fresh page
+    /// context), which is the correct scope for "did THIS page load clean".
+    func consoleErrors(completion: @escaping (String) -> Void) {
+        eval("(window.__agentideLogs || []).join('\\n') "
+             + "|| '(no console errors or warnings since page load)'",
+             completion: completion)
+    }
+
+    /// PNG of the current page state, written to a temp file the calling
+    /// agent can read. Only works while the pane is on screen — a detached
+    /// WKWebView has zero bounds and snapshots blank.
+    func screenshot(completion: @escaping (String) -> Void) {
+        guard webView.window != nil, !webView.bounds.isEmpty else {
+            completion("error: the browser pane is not on screen — "
+                       + "ask the user to expand browser mode (⌘B), then retry")
+            return
+        }
+        webView.takeSnapshot(with: nil) { image, error in
+            guard let image,
+                  let tiff = image.tiffRepresentation,
+                  let rep = NSBitmapImageRep(data: tiff),
+                  let png = rep.representation(using: .png, properties: [:]) else {
+                completion("error: \(error?.localizedDescription ?? "could not encode snapshot")")
+                return
+            }
+            let name = "agentide-browser-\(Int(Date().timeIntervalSince1970)).png"
+            let url = FileManager.default.temporaryDirectory.appendingPathComponent(name)
+            do {
+                try png.write(to: url)
+                completion("ok: screenshot saved — read this image file to view it: \(url.path)")
+            } catch {
+                completion("error: \(error.localizedDescription)")
+            }
+        }
     }
 
     // MARK: - WKNavigationDelegate
@@ -355,6 +396,41 @@ final class BrowserSession: NSObject, Identifiable, WKNavigationDelegate, WKScri
 
     /// Page snapshot: title/url, up to 80 visible interactive elements with
     /// short CSS selectors + labels, then trimmed body text.
+    /// Ring buffer of console errors/warnings + uncaught exceptions +
+    /// unhandled promise rejections. Injected at document start so early
+    /// boot errors (e.g. a crashing framework bundle) are caught too.
+    private static let consoleCaptureJS = #"""
+    (function () {
+      if (window.__agentideLogs) { return; }
+      var logs = [];
+      window.__agentideLogs = logs;
+      function push(kind, msg) {
+        if (logs.length >= 200) { logs.shift(); }
+        logs.push(kind + ': ' + msg);
+      }
+      ['error', 'warn'].forEach(function (kind) {
+        var orig = console[kind];
+        console[kind] = function () {
+          try {
+            push(kind, Array.prototype.map.call(arguments, function (a) {
+              if (typeof a === 'string') { return a; }
+              try { return JSON.stringify(a); } catch (e) { return String(a); }
+            }).join(' '));
+          } catch (e) {}
+          return orig.apply(console, arguments);
+        };
+      });
+      window.addEventListener('error', function (e) {
+        push('uncaught', (e.message || 'error') + ' @ ' +
+             (e.filename || '?') + ':' + (e.lineno || 0));
+      });
+      window.addEventListener('unhandledrejection', function (e) {
+        var r = e.reason;
+        push('unhandledrejection', (r && (r.stack || r.message)) || String(r));
+      });
+    })();
+    """#
+
     private static let snapshotJS = #"""
     (function () {
       var out = ['title: ' + document.title, 'url: ' + location.href, ''];

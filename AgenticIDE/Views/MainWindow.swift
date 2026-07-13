@@ -46,8 +46,11 @@ struct MainWindow: View {
     var body: some View {
         ZStack {
             if browsers.isModeActive {
+                // Slides in over a stationary grid and off again to reveal it
+                // (the grid branch below uses .identity so it never travels).
                 BrowserModeView(manager: browsers)
-                    .transition(.move(edge: .trailing).combined(with: .opacity))
+                    .transition(.move(edge: .trailing))
+                    .zIndex(5)
             } else {
                 HStack(spacing: 0) {
                     mainContent
@@ -58,7 +61,7 @@ struct MainWindow: View {
                         .transition(.move(edge: .trailing).combined(with: .opacity))
                     }
                 }
-                .transition(.move(edge: .leading).combined(with: .opacity))
+                .transition(.identity)
                 // Edge bar sliding in/out compacts the workspace card smoothly.
                 .animation(.easeInOut(duration: 0.25), value: browsers.sessions.isEmpty)
             }

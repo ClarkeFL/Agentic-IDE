@@ -102,6 +102,8 @@ final class AgentBridge {
           agentide browser open <url> Open (or navigate) your browser pane.
           agentide browser read       Snapshot the page: title, interactive elements + selectors, text.
           agentide browser eval <js>  Run JavaScript in the page and print the result.
+          agentide browser errors     Print console errors/warnings + uncaught exceptions since page load.
+          agentide browser screenshot Save a PNG of the page; prints the file path to read.
           agentide browser viewport <p> Emulate a screen: fit|desktop|laptop|tablet|mobile.
           agentide browser close      Close your browser pane.
         USAGE
@@ -127,7 +129,7 @@ final class AgentBridge {
               open)     req "browser $sid open $1" ;;
               eval)     req "browser $sid eval" "$*" ;;
               viewport) req "browser $sid viewport $1" ;;
-              read|close) req "browser $sid $sub" ;;
+              read|close|errors|screenshot) req "browser $sid $sub" ;;
               *) usage; exit 1 ;;
             esac ;;
           wait)
