@@ -36,9 +36,11 @@ struct PersistentSplitView<P1: View, P2: View, P3: View, P4: View, P5: View>: Vi
     /// auto-hide the editor pane when no files are open.
     let pane3Collapsed: Bool
 
-    /// Fixed width of the thin rail shown in place of a collapsed pane 2.
+    /// Fixed width of the thin rail region shown in place of a collapsed
+    /// pane 2: a 26pt card + 8pt trailing gap (stands in for the divider
+    /// gap before the workspace card).
     /// Computed (not stored) — generic types can't have stored statics.
-    static var railWidth: CGFloat { 18 }
+    static var railWidth: CGFloat { 34 }
 
     let pane4Min: CGFloat
     let pane4Initial: CGFloat
@@ -388,29 +390,29 @@ private struct Pane2ReopenRail: View {
 
     var body: some View {
         VStack(spacing: 0) {
-            // Just the toggle, sitting in the header band at the top. No
-            // trailing border and no material — the rail blends into the
-            // surrounding panes so the collapsed file tree is unobtrusive.
-            Button(action: onExpand) {
-                Image(systemName: "sidebar.left")
-                    .font(.system(size: DS.Icon.small, weight: .semibold))
-                    .foregroundStyle(isHovered ? .primary : .secondary)
-                    .frame(width: width, height: DS.Control.header)
-                    .background(Color.primary.opacity(isHovered ? 0.08 : 0.0))
-                    .contentShape(Rectangle())
-            }
-            .buttonStyle(.plain)
-            .onHover { isHovered = $0 }
-            .help("Show panel (⌘⌥B)")
+            // Just the toggle, sitting in the header band at the top.
+            Image(systemName: "sidebar.left")
+                .font(.system(size: DS.Icon.small, weight: .semibold))
+                .foregroundStyle(isHovered ? .primary : .secondary)
+                .frame(maxWidth: .infinity)
+                .frame(height: DS.Control.header)
 
             Spacer(minLength: 0)
         }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .background(isHovered ? Color.primary.opacity(0.04) : Color.clear)
+        // Same card chrome as the Explorer pane this rail stands in for, so
+        // the collapsed state reads as a thin floating card, not a flat
+        // strip. Trailing margin stands in for the divider gap that a
+        // visible pane 2 would have before the workspace card.
+        .paneCard(fill: Color(nsColor: .textBackgroundColor),
+                  insets: EdgeInsets(top: DS.Space.xs, leading: 0,
+                                     bottom: DS.Space.md, trailing: DS.Space.md))
+        .contentShape(Rectangle())
+        .onTapGesture(perform: onExpand)
+        .onHover { isHovered = $0 }
+        .help("Show panel (⌘⌥B)")
         .frame(width: width)
-        .frame(maxHeight: .infinity)
-        // Match the surrounding control-surface panes (and avoid the
-        // wallpaper-tinted windowBackgroundColor) so the collapsed rail blends
-        // in regardless of window-active state.
-        .background(Color(nsColor: .controlBackgroundColor))
     }
 }
 

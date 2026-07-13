@@ -254,6 +254,7 @@ struct GitFooterBar: View {
             .fixedSize()
             .popover(isPresented: $showBranchMenu, arrowEdge: .top) {
                 branchMenuContent
+                    .presentationCornerRadius(DS.Radius.popover)
             }
             if let pullRequest = gitWatcher.pullRequest {
                 pullRequestBadge(pullRequest)

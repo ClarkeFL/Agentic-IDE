@@ -574,6 +574,7 @@ private struct SidebarHeaderAddButton: View {
             .buttonStyle(.plain)
             .padding(DS.Space.md)
             .frame(width: 180, alignment: .leading)
+            .presentationCornerRadius(DS.Radius.popover)
         }
         .help("New or existing project")
     }

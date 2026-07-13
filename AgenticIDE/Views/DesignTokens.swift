@@ -65,8 +65,11 @@ enum DS {
         static let sm: CGFloat = 4
         /// 5pt — list-row hover/selected pills.
         static let md: CGFloat = 5
-        /// 6pt — cards, panels, popovers, project icon tiles.
+        /// 6pt — cards, panels, project icon tiles.
         static let lg: CGFloat = 6
+        /// 10pt — popover presentations, hover cards. Overrides the huge
+        /// system default popover radius on macOS 26.
+        static let popover: CGFloat = 10
     }
 
     // MARK: - Icon glyph sizes
