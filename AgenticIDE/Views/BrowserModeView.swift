@@ -116,24 +116,25 @@ private struct BrowserColumn: View {
     /// Fit fills the card; a device preset renders the page at its logical
     /// resolution and aspect-fits it (WKWebView magnification, capped at 1:1
     /// so devices smaller than the card show at real size, centered).
-    @ViewBuilder
+    /// One subtree for both cases — a branch here would re-parent the
+    /// WKWebView on every viewport switch, and a magnification set mid-
+    /// reparent gets silently dropped (stale zoom + phantom white space).
     private var viewportBody: some View {
-        if let size = session.viewport.size {
-            GeometryReader { geo in
-                let scale = min(geo.size.width / size.width,
-                                geo.size.height / size.height, 1)
-                WebView(webView: session.webView, magnification: scale)
-                    .frame(width: size.width * scale, height: size.height * scale)
-                    .overlay(
-                        Rectangle()
-                            .strokeBorder(Color(nsColor: .separatorColor), lineWidth: 1)
-                    )
-                    .frame(maxWidth: .infinity, maxHeight: .infinity)
-            }
-            .background(Color(nsColor: .windowBackgroundColor))
-        } else {
-            WebView(webView: session.webView, magnification: 1)
+        GeometryReader { geo in
+            let size = session.viewport.size
+            let scale = size.map { min(geo.size.width / $0.width,
+                                       geo.size.height / $0.height, 1) } ?? 1
+            WebView(webView: session.webView, magnification: scale)
+                .frame(width: size.map { $0.width * scale } ?? geo.size.width,
+                       height: size.map { $0.height * scale } ?? geo.size.height)
+                .overlay(
+                    Rectangle()
+                        .strokeBorder(Color(nsColor: .separatorColor),
+                                      lineWidth: size == nil ? 0 : 1)
+                )
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
         }
+        .background(Color(nsColor: .windowBackgroundColor))
     }
 
     private var toolbar: some View {
