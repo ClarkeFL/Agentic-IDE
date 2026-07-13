@@ -48,10 +48,9 @@ struct MainWindow: View {
             if browsers.isModeActive {
                 BrowserModeView(manager: browsers)
             } else {
-                mainContent
-                if !browsers.sessions.isEmpty {
-                    HStack {
-                        Spacer()
+                HStack(spacing: 0) {
+                    mainContent
+                    if !browsers.sessions.isEmpty {
                         BrowserEdgeBar(count: browsers.sessions.count) {
                             browsers.isModeActive = true
                         }

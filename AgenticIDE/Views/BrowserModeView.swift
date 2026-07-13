@@ -9,16 +9,27 @@ struct BrowserModeView: View {
     @Bindable var manager: BrowserManager
 
     var body: some View {
-        HStack(spacing: 0) {
+        HStack(spacing: DS.Space.md) {
             agentColumn
                 .frame(width: 380)
-            Divider()
+                .frame(maxHeight: .infinity)
+                .paneCard(fill: Color(nsColor: .textBackgroundColor), insets: cardInsets)
             if let session = manager.focused {
                 BrowserColumn(manager: manager, session: session)
                     .id(session.id)
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    .paneCard(fill: Color(nsColor: .controlBackgroundColor), insets: cardInsets)
             }
         }
-        .background(Color(nsColor: .controlBackgroundColor))
+        .padding(EdgeInsets(top: DS.Space.xs, leading: DS.Space.md,
+                            bottom: DS.Space.md, trailing: DS.Space.md))
+        .background(Color(nsColor: .windowBackgroundColor))
+    }
+
+    /// The outer HStack padding supplies the window margins and the spacing
+    /// supplies the seam, so the cards themselves carry none.
+    private var cardInsets: EdgeInsets {
+        EdgeInsets(top: 0, leading: 0, bottom: 0, trailing: 0)
     }
 
     // MARK: - Left: the agent driving the browser
@@ -192,8 +203,9 @@ private struct WebView: NSViewRepresentable {
     func updateNSView(_ nsView: WKWebView, context: Context) {}
 }
 
-/// Thin edge tab on the trailing window edge while browsers are open but
-/// browser mode is collapsed. Click to expand.
+/// Full-height slim panel docked to the trailing window edge while browsers
+/// are open but browser mode is collapsed — matches the other pane cards.
+/// Click anywhere on it to expand browser mode.
 struct BrowserEdgeBar: View {
     let count: Int
     let action: () -> Void
@@ -202,7 +214,8 @@ struct BrowserEdgeBar: View {
 
     var body: some View {
         Button(action: action) {
-            VStack(spacing: DS.Space.sm) {
+            VStack(spacing: DS.Space.md) {
+                Spacer()
                 Image(systemName: "chevron.left")
                     .font(.system(size: DS.Icon.small, weight: .semibold))
                 Image(systemName: "globe")
@@ -211,19 +224,17 @@ struct BrowserEdgeBar: View {
                     Text("\(count)")
                         .font(DS.Font.badge)
                 }
+                Spacer()
             }
             .foregroundStyle(hovering ? Color.accentColor : Color.secondary)
-            .padding(.vertical, DS.Space.lg)
-            .padding(.horizontal, DS.Space.xs)
-            .background(
-                UnevenRoundedRectangle(topLeadingRadius: DS.Radius.lg,
-                                       bottomLeadingRadius: DS.Radius.lg)
-                    .fill(Color(nsColor: .windowBackgroundColor))
-                    .shadow(color: .black.opacity(0.2), radius: 3, x: -1, y: 1)
-            )
+            .frame(width: 28)
+            .frame(maxHeight: .infinity)
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
+        .paneCard(fill: Color(nsColor: .controlBackgroundColor),
+                  insets: EdgeInsets(top: DS.Space.xs, leading: 0,
+                                     bottom: DS.Space.md, trailing: DS.Space.md))
         .onHover { hovering = $0 }
         .help("Show agent browser")
     }
