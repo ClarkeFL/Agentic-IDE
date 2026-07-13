@@ -85,7 +85,8 @@ final class CellBus {
             return
         }
         let manager = BrowserManager.shared
-        let usage = "error: usage: browser open <url> | browser read | browser eval <js> | browser close"
+        let usage = "error: usage: browser open <url> | browser read | browser eval <js> | "
+            + "browser viewport <fit|desktop|laptop|tablet|mobile> | browser close"
 
         switch args.first ?? "" {
         case "open":
@@ -116,6 +117,23 @@ final class CellBus {
                 return
             }
             session.eval(js) { completion(String($0.prefix(8000))) }
+
+        case "viewport":
+            guard let session = manager.session(ownerId: ownerTab.id) else {
+                completion("error: no browser open — use `agentide browser open <url>` first")
+                return
+            }
+            let name = args.dropFirst().first ?? ""
+            guard let viewport = BrowserViewport(rawValue: name) else {
+                completion("error: usage: browser viewport <fit|desktop|laptop|tablet|mobile>")
+                return
+            }
+            session.viewport = viewport
+            if let size = viewport.size {
+                completion("ok: viewport \(name) — page now lays out at \(Int(size.width))×\(Int(size.height))")
+            } else {
+                completion("ok: viewport fit — page fills the pane")
+            }
 
         case "close":
             guard manager.session(ownerId: ownerTab.id) != nil else {

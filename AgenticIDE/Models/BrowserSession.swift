@@ -71,6 +71,47 @@ final class BrowserManager {
     }
 }
 
+/// Device viewport presets for the browser pane. `fit` fills the card 1:1;
+/// the rest lay the page out at the device's logical resolution and
+/// aspect-fit it into the card via WKWebView magnification, so JS viewport
+/// queries, hit-testing, and the element picker all stay accurate.
+enum BrowserViewport: String, CaseIterable, Identifiable {
+    case fit, desktop, laptop, tablet, mobile
+
+    var id: String { rawValue }
+
+    /// Logical CSS-pixel size; nil = fluid (fill the card).
+    var size: CGSize? {
+        switch self {
+        case .fit:     return nil
+        case .desktop: return CGSize(width: 1920, height: 1080)
+        case .laptop:  return CGSize(width: 1440, height: 900)
+        case .tablet:  return CGSize(width: 820, height: 1180)
+        case .mobile:  return CGSize(width: 390, height: 844)
+        }
+    }
+
+    var title: String {
+        switch self {
+        case .fit:     return "Fit"
+        case .desktop: return "Desktop (1920×1080)"
+        case .laptop:  return "Laptop (1440×900)"
+        case .tablet:  return "Tablet (820×1180)"
+        case .mobile:  return "Mobile (390×844)"
+        }
+    }
+
+    var symbol: String {
+        switch self {
+        case .fit:     return "rectangle.dashed"
+        case .desktop: return "desktopcomputer"
+        case .laptop:  return "laptopcomputer"
+        case .tablet:  return "ipad"
+        case .mobile:  return "iphone"
+        }
+    }
+}
+
 /// One agent-owned browser pane: the WKWebView, the element picker, and the
 /// JS-eval plumbing the `agentide browser` verbs use. Owned by BrowserManager;
 /// tied to the terminal that opened it (picker selections are typed into that
@@ -86,6 +127,11 @@ final class BrowserSession: NSObject, Identifiable, WKNavigationDelegate, WKScri
     var urlString: String = ""
     var pageTitle: String = ""
     var isLoading = false
+    /// Emulated device screen size (toolbar menu or `agentide browser
+    /// viewport`). ponytail: layout size + magnification only — no mobile
+    /// user-agent or touch-event emulation; add a UA switch if a site
+    /// serves a genuinely different mobile experience.
+    var viewport: BrowserViewport = .fit
     /// Element picker: while on, hovering highlights elements and clicking
     /// types the selection into the owning agent's input.
     var pickerActive = false {

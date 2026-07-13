@@ -109,7 +109,30 @@ private struct BrowserColumn: View {
         VStack(spacing: 0) {
             toolbar
             Divider()
-            WebView(webView: session.webView)
+            viewportBody
+        }
+    }
+
+    /// Fit fills the card; a device preset renders the page at its logical
+    /// resolution and aspect-fits it (WKWebView magnification, capped at 1:1
+    /// so devices smaller than the card show at real size, centered).
+    @ViewBuilder
+    private var viewportBody: some View {
+        if let size = session.viewport.size {
+            GeometryReader { geo in
+                let scale = min(geo.size.width / size.width,
+                                geo.size.height / size.height, 1)
+                WebView(webView: session.webView, magnification: scale)
+                    .frame(width: size.width * scale, height: size.height * scale)
+                    .overlay(
+                        Rectangle()
+                            .strokeBorder(Color(nsColor: .separatorColor), lineWidth: 1)
+                    )
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+            }
+            .background(Color(nsColor: .windowBackgroundColor))
+        } else {
+            WebView(webView: session.webView, magnification: 1)
         }
     }
 
@@ -144,6 +167,23 @@ private struct BrowserColumn: View {
                 ProgressView()
                     .controlSize(.small)
             }
+
+            Menu {
+                Picker("Viewport", selection: $session.viewport) {
+                    ForEach(BrowserViewport.allCases) { viewport in
+                        Label(viewport.title, systemImage: viewport.symbol)
+                            .tag(viewport)
+                    }
+                }
+                .pickerStyle(.inline)
+            } label: {
+                Image(systemName: session.viewport.symbol)
+                    .font(.system(size: DS.Icon.small, weight: .semibold))
+            }
+            .menuStyle(.borderlessButton)
+            .menuIndicator(.hidden)
+            .frame(width: DS.Control.large)
+            .help("Emulate a device screen size")
 
             BrowserToolbarButton(systemName: "arrow.clockwise", help: "Reload") {
                 session.webView.reload()
@@ -199,8 +239,18 @@ private struct BrowserToolbarButton: View {
 
 private struct WebView: NSViewRepresentable {
     let webView: WKWebView
-    func makeNSView(context: Context) -> WKWebView { webView }
-    func updateNSView(_ nsView: WKWebView, context: Context) {}
+    var magnification: CGFloat = 1
+
+    func makeNSView(context: Context) -> WKWebView {
+        webView.allowsMagnification = true
+        return webView
+    }
+
+    func updateNSView(_ nsView: WKWebView, context: Context) {
+        if abs(nsView.magnification - magnification) > 0.001 {
+            nsView.setMagnification(magnification, centeredAt: .zero)
+        }
+    }
 }
 
 /// Full-height slim panel docked to the trailing window edge while browsers

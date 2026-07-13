@@ -79,6 +79,7 @@ struct CellLauncher {
         "`agentide browser open <url>` (open or navigate it); " +
         "`agentide browser read` (snapshot the page: title, interactive elements with CSS selectors, visible text); " +
         "`agentide browser eval \"<js>\"` (run JavaScript in the page and print the result — use it to click, fill, scroll, and assert); " +
+        "`agentide browser viewport <fit|desktop|laptop|tablet|mobile>` (emulate a device screen size, e.g. to test responsive layouts); " +
         "`agentide browser close` (close it when done). " +
         "The user can also point at elements in your browser pane with the picker — selections arrive in your input as [browser pick] lines with a CSS selector and HTML snippet."
 
