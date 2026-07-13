@@ -28,6 +28,13 @@ struct BrowserModeView: View {
         .padding(EdgeInsets(top: DS.Space.xs, leading: DS.Space.md,
                             bottom: DS.Space.md, trailing: DS.Space.md))
         .background(Color(nsColor: .windowBackgroundColor))
+        // ⌘←/⌘→ page through open browsers here. These post .moveWorkspace,
+        // whose normal observer (ProjectWorkspaceView) is unmounted while
+        // browser mode is up, so repurposing them is conflict-free.
+        .onReceive(NotificationCenter.default.publisher(for: .moveWorkspace)) { note in
+            guard let direction = note.object as? Int else { return }
+            manager.focusNext(direction)
+        }
     }
 
     /// The outer HStack padding supplies the window margins and the spacing
@@ -186,15 +193,78 @@ struct BrowserModeView: View {
 
 /// Right side: toolbar (back to grid, URL, reload, picker, close) + web view.
 private struct BrowserColumn: View {
+    @Environment(SessionManager.self) private var sessions
+
     @Bindable var manager: BrowserManager
     @Bindable var session: BrowserSession
+
+    /// Local-server URLs scraped from the workspace's terminal screens,
+    /// offered on the blank start page. Computed on appear, not per-render.
+    @State private var detectedURLs: [String] = []
 
     var body: some View {
         VStack(spacing: 0) {
             toolbar
             Divider()
-            viewportBody
+            if session.urlString.isEmpty {
+                startPage
+            } else {
+                viewportBody
+            }
         }
+    }
+
+    /// Blank browser: type a URL, or one click on a server the workspace is
+    /// already running (scraped from each cell's visible screen text).
+    private var startPage: some View {
+        VStack(spacing: DS.Space.lg) {
+            Image(systemName: "globe")
+                .font(.system(size: DS.Icon.display, weight: .light))
+                .foregroundStyle(.tertiary)
+            Text("Enter a URL above" + (detectedURLs.isEmpty ? "" : ", or open a running server:"))
+                .font(.callout)
+                .foregroundStyle(.secondary)
+            ForEach(detectedURLs, id: \.self) { url in
+                Button {
+                    if let parsed = BrowserManager.normalizeURL(url) {
+                        session.load(parsed)
+                    }
+                } label: {
+                    Text(url)
+                        .font(DS.Font.codeBody)
+                        .padding(.horizontal, DS.Space.md)
+                        .frame(height: DS.Control.large)
+                        .background(
+                            RoundedRectangle(cornerRadius: DS.Radius.md, style: .continuous)
+                                .fill(Color.accentColor.opacity(0.12))
+                        )
+                        .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+            }
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .background(Color(nsColor: .windowBackgroundColor))
+        .onAppear { detectedURLs = detectServerURLs() }
+    }
+
+    /// localhost/loopback URLs visible on any terminal screen in the
+    /// browser's workspace (dev servers print them at boot, e.g. vite's
+    /// "Local: http://localhost:5174/").
+    private func detectServerURLs() -> [String] {
+        let workspace = session.sourceWorkspace
+            ?? session.ownerCell.flatMap { sessions.locate(cellId: $0.id)?.workspace }
+        guard let workspace else { return [] }
+        var seen = Set<String>()
+        var urls: [String] = []
+        for cell in workspace.cells {
+            guard let text = cell.terminal?.view.readScreenText() else { continue }
+            for match in text.matches(of: /https?:\/\/(?:localhost|127\.0\.0\.1|0\.0\.0\.0):\d+[^\s"'<>]*/) {
+                let url = String(match.output)
+                if seen.insert(url).inserted { urls.append(url) }
+            }
+        }
+        return Array(urls.prefix(5))
     }
 
     /// Fit fills the card; a device preset renders the page at its logical

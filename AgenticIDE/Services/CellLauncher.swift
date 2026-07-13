@@ -40,9 +40,42 @@ struct CellLauncher {
             let command = commandWithBridgeHint(tool, cell: cell)
             let ql = QuickLaunch(label: tool.name, command: command, icon: tool.icon)
             let cfg = PtyService.quickLaunchConfig(ql, cwd: project.path)
-            place(TerminalTab(title: tool.name, config: cfg), tool: tool, in: cell, command: tool.command)
+            let tab = TerminalTab(title: tool.name, config: cfg)
+            place(tab, tool: tool, in: cell, command: tool.command)
+            // CLIs with no system-prompt flag (Codex, Gemini, opencode, …)
+            // would otherwise never learn the agentide bridge exists — brief
+            // them as their first input instead.
+            if tool.effectivePromptFlag == nil {
+                scheduleBriefing(for: tab, cell: cell)
+            }
             return nil
         }
+    }
+
+    /// Type the bridge briefing into a freshly-launched CLI as its first
+    /// message. ponytail: fixed boot delay — no "CLI is ready" signal exists;
+    /// a CLI slower than this misses the briefing (it can still discover the
+    /// bridge by running `agentide` itself).
+    private func scheduleBriefing(for tab: TerminalTab, cell: WorkspaceCell) {
+        let n = (workspace.cells.firstIndex(where: { $0.id == cell.id }) ?? 0) + 1
+        let text = cell.isOrchestrator
+            ? Self.orchestratorBriefing(cellNumber: n)
+            : Self.bootstrapBriefing(cellNumber: n)
+        DispatchQueue.main.asyncAfter(deadline: .now() + 6) { [weak tab, weak cell] in
+            // Only if this tab is still what's running in the cell.
+            guard let tab, cell?.terminal === tab else { return }
+            tab.view.sendInput(text, submit: true)
+        }
+    }
+
+    /// One-line launch briefing for CLIs briefed via first input (no inline
+    /// system-prompt flag). Short on purpose: `agentide` usage() is the full
+    /// reference. MUST stay newline-free or the CLI submits it early.
+    static func bootstrapBriefing(cellNumber n: Int) -> String {
+        "[AgenticIDE] You are running inside AgenticIDE (a macOS terminal IDE) as cell #\(n) of a workspace grid. "
+        + "The `agentide` CLI on your PATH controls the workspace: list/launch/drive sibling agent cells, and open your OWN visible browser pane to load and test web UI "
+        + "(`agentide browser open <url>`, then read/eval/errors/screenshot/viewport). "
+        + "Run `agentide` with no arguments for the full verb reference. Acknowledge in one short line, then wait for instructions."
     }
 
     private func place(_ tab: TerminalTab, tool: LaunchTool, in cell: WorkspaceCell, command: String) {
