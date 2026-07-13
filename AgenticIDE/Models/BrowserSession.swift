@@ -265,10 +265,33 @@ final class BrowserSession: NSObject, Identifiable, WKNavigationDelegate, WKScri
             let url = FileManager.default.temporaryDirectory.appendingPathComponent(name)
             do {
                 try png.write(to: url)
+                Self.pruneScreenshots(keeping: 20)
                 completion("ok: screenshot saved — read this image file to view it: \(url.path)")
             } catch {
                 completion("error: \(error.localizedDescription)")
             }
+        }
+    }
+
+    /// Bounded storage for screenshots: on every capture, delete all but the
+    /// newest `keeping` agentide-browser-*.png in the temp dir. An agent can
+    /// take 1000 screenshots and disk usage stays ~20 files; macOS's own
+    /// temp cleanup remains the backstop for the survivors.
+    private static func pruneScreenshots(keeping: Int) {
+        let fm = FileManager.default
+        let dir = fm.temporaryDirectory
+        guard let files = try? fm.contentsOfDirectory(at: dir,
+                                                      includingPropertiesForKeys: [.contentModificationDateKey],
+                                                      options: .skipsHiddenFiles) else { return }
+        let shots = files
+            .filter { $0.lastPathComponent.hasPrefix("agentide-browser-") && $0.pathExtension == "png" }
+            .sorted { a, b in
+                let da = (try? a.resourceValues(forKeys: [.contentModificationDateKey]).contentModificationDate) ?? .distantPast
+                let db = (try? b.resourceValues(forKeys: [.contentModificationDateKey]).contentModificationDate) ?? .distantPast
+                return da > db
+            }
+        for stale in shots.dropFirst(keeping) {
+            try? fm.removeItem(at: stale)
         }
     }
 
