@@ -119,48 +119,68 @@ struct BrowserModeView: View {
         _ = launcher.launch(tool, into: cell)
     }
 
-    /// User-opened browser with no agent yet: offer the source workspace's
-    /// running cells; picking one wires the browser to that agent (its
-    /// `agentide browser` verbs and the element picker target this pane).
+    /// User-opened browser with no agent yet. Two ways in: attach one of the
+    /// workspace's running cells, or launch a fresh agent into an empty cell
+    /// — either way the browser binds to that cell and its agent drives this
+    /// pane.
     private func agentPicker(_ session: BrowserSession) -> some View {
         VStack(alignment: .leading, spacing: DS.Space.md) {
-            Text("Choose an agent to drive this browser")
-                .font(DS.Font.bodySemibold)
-            let candidates = (session.sourceWorkspace?.cells ?? [])
+            let workspace = session.sourceWorkspace
+            let running = (workspace?.cells ?? [])
                 .filter { $0.terminal != nil && manager.session(for: $0) == nil }
-            if candidates.isEmpty {
-                Text("No free cells are running. Go back to the grid and launch an agent (e.g. Claude) first.")
+            let emptyCell = workspace?.cells.first(where: \.isEmpty)
+
+            if !running.isEmpty {
+                Text("Attach a running agent")
+                    .font(DS.Font.bodySemibold)
+                ForEach(running, id: \.id) { cell in
+                    pickerRow(icon: cell.icon, title: cell.terminal?.title ?? "Terminal") {
+                        session.attach(to: cell)
+                    }
+                }
+            }
+
+            Text("Launch a new agent")
+                .font(DS.Font.bodySemibold)
+                .padding(.top, running.isEmpty ? 0 : DS.Space.md)
+            if emptyCell != nil {
+                ForEach(launchTools.enabledTools.filter { $0.role == .command }) { tool in
+                    pickerRow(icon: tool.icon, title: tool.name) {
+                        guard let cell = workspace?.cells.first(where: \.isEmpty) else { return }
+                        session.attach(to: cell)
+                        launch(tool, into: cell)
+                    }
+                }
+            } else {
+                Text("The grid is full — close a cell (or enlarge the grid) to launch a new agent.")
                     .font(.callout)
                     .foregroundStyle(.secondary)
-            } else {
-                ForEach(candidates, id: \.id) { cell in
-                    Button {
-                        session.attach(to: cell)
-                    } label: {
-                        HStack(spacing: DS.Space.sm) {
-                            Image(systemName: "terminal")
-                                .font(.system(size: DS.Icon.small, weight: .semibold))
-                                .foregroundStyle(.secondary)
-                            Text(cell.terminal?.title ?? "Terminal")
-                                .font(DS.Font.body)
-                                .lineLimit(1)
-                            Spacer()
-                        }
-                        .padding(.horizontal, DS.Space.sm)
-                        .frame(height: DS.Control.large)
-                        .background(
-                            RoundedRectangle(cornerRadius: DS.Radius.md, style: .continuous)
-                                .fill(Color.primary.opacity(0.06))
-                        )
-                        .contentShape(Rectangle())
-                    }
-                    .buttonStyle(.plain)
-                }
             }
             Spacer()
         }
         .padding(DS.Space.lg)
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+    }
+
+    private func pickerRow(icon: String?, title: String,
+                           action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            HStack(spacing: DS.Space.sm) {
+                quickLaunchIcon(name: icon, size: DS.FontSize.footnote)
+                Text(title)
+                    .font(DS.Font.body)
+                    .lineLimit(1)
+                Spacer()
+            }
+            .padding(.horizontal, DS.Space.sm)
+            .frame(height: DS.Control.large)
+            .background(
+                RoundedRectangle(cornerRadius: DS.Radius.md, style: .continuous)
+                    .fill(Color.primary.opacity(0.06))
+            )
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
     }
 
     private var pager: some View {
