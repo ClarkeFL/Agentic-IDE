@@ -22,6 +22,10 @@ struct WorkspaceHeaderView: View {
 
                 Spacer(minLength: DS.Space.sm)
 
+                HeaderButton(systemName: "globe",
+                             help: "Open a browser — pick an agent to drive it",
+                             action: { BrowserManager.shared.openManual(from: workspace) })
+
                 HeaderButton(systemName: "note.text",
                              help: "Notes (⇧⌘N)",
                              action: { NotificationCenter.default.post(name: .toggleNotes, object: nil) })
@@ -85,6 +89,7 @@ struct WorkspaceHeaderView: View {
                 session.resizeWorkspace(workspace, layout: layout)
                 showGridPicker = false
             }
+            .presentationCornerRadius(DS.Radius.popover)
         }
     }
 

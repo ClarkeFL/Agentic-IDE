@@ -43,12 +43,27 @@ final class BrowserManager {
         return session
     }
 
-    func close(ownerId: UUID) {
-        guard let idx = sessions.firstIndex(where: { $0.ownerId == ownerId }) else { return }
-        let session = sessions.remove(at: idx)
+    /// User-opened browser (workspace-header globe button): no owning agent
+    /// yet — browser mode expands immediately and the left column offers the
+    /// workspace's cells to attach one.
+    func openManual(from workspace: Workspace) {
+        let session = BrowserSession(owner: nil, workspace: workspace)
+        sessions.append(session)
+        focusedId = session.id
+        isModeActive = true
+    }
+
+    func close(_ session: BrowserSession) {
+        guard let idx = sessions.firstIndex(where: { $0.id == session.id }) else { return }
+        sessions.remove(at: idx)
         session.tearDown()
         if focusedId == session.id { focusedId = sessions.first?.id }
         if sessions.isEmpty { isModeActive = false }
+    }
+
+    func close(ownerId: UUID) {
+        guard let session = session(ownerId: ownerId) else { return }
+        close(session)
     }
 
     /// Cycle the focused pane (bottom pager arrows).
@@ -119,9 +134,14 @@ enum BrowserViewport: String, CaseIterable, Identifiable {
 @Observable
 final class BrowserSession: NSObject, Identifiable, WKNavigationDelegate, WKScriptMessageHandler {
     let id = UUID()
-    /// The owning terminal's surface id (`TerminalTab.id`).
-    let ownerId: UUID
+    /// The owning terminal's surface id (`TerminalTab.id`). nil for a
+    /// user-opened browser until an agent is attached.
+    private(set) var ownerId: UUID?
     private(set) weak var ownerTab: TerminalTab?
+    /// The workspace a user-opened browser came from — source of the cells
+    /// offered by the attach picker. nil for agent-opened browsers (they
+    /// already have an owner).
+    private(set) weak var sourceWorkspace: Workspace?
     let webView: WKWebView
 
     var urlString: String = ""
@@ -138,9 +158,10 @@ final class BrowserSession: NSObject, Identifiable, WKNavigationDelegate, WKScri
         didSet { applyPicker() }
     }
 
-    init(owner: TerminalTab) {
-        self.ownerId = owner.id
+    init(owner: TerminalTab?, workspace: Workspace? = nil) {
+        self.ownerId = owner?.id
         self.ownerTab = owner
+        self.sourceWorkspace = workspace
 
         let config = WKWebViewConfiguration()
         let controller = WKUserContentController()
@@ -157,6 +178,14 @@ final class BrowserSession: NSObject, Identifiable, WKNavigationDelegate, WKScri
         // self directly would create a retain cycle through our own webView.
         controller.add(WeakScriptMessageHandler(self), name: "agentidePicker")
         webView.navigationDelegate = self
+    }
+
+    /// Give a user-opened browser its driving agent. From here on that
+    /// agent's `agentide browser` verbs hit this pane and picker selections
+    /// land in its input.
+    func attach(to tab: TerminalTab) {
+        ownerId = tab.id
+        ownerTab = tab
     }
 
     func load(_ url: URL) {

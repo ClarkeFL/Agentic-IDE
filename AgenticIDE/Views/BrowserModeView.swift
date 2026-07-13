@@ -41,7 +41,7 @@ struct BrowserModeView: View {
                 Image(systemName: "terminal")
                     .font(.system(size: DS.Icon.small, weight: .semibold))
                     .foregroundStyle(.secondary)
-                Text(manager.focused?.ownerTab?.title ?? "Agent")
+                Text(manager.focused?.ownerTab?.title ?? "No agent attached")
                     .font(DS.Font.control)
                     .lineLimit(1)
                 Spacer()
@@ -53,6 +53,8 @@ struct BrowserModeView: View {
 
             if let tab = manager.focused?.ownerTab {
                 GhosttyTerminal(view: tab.view, isActive: true, autoFocus: false)
+            } else if let session = manager.focused, session.sourceWorkspace != nil {
+                agentPicker(session)
             } else {
                 VStack(spacing: DS.Space.md) {
                     Image(systemName: "terminal")
@@ -70,6 +72,51 @@ struct BrowserModeView: View {
                 pager
             }
         }
+    }
+
+    /// User-opened browser with no agent yet: offer the source workspace's
+    /// running cells; picking one wires the browser to that agent (its
+    /// `agentide browser` verbs and the element picker target this pane).
+    private func agentPicker(_ session: BrowserSession) -> some View {
+        VStack(alignment: .leading, spacing: DS.Space.md) {
+            Text("Choose an agent to drive this browser")
+                .font(DS.Font.bodySemibold)
+            let candidates = (session.sourceWorkspace?.cells ?? [])
+                .compactMap(\.terminal)
+                .filter { manager.session(ownerId: $0.id) == nil }
+            if candidates.isEmpty {
+                Text("No free cells are running. Go back to the grid and launch an agent (e.g. Claude) first.")
+                    .font(.callout)
+                    .foregroundStyle(.secondary)
+            } else {
+                ForEach(candidates, id: \.id) { tab in
+                    Button {
+                        session.attach(to: tab)
+                    } label: {
+                        HStack(spacing: DS.Space.sm) {
+                            Image(systemName: "terminal")
+                                .font(.system(size: DS.Icon.small, weight: .semibold))
+                                .foregroundStyle(.secondary)
+                            Text(tab.title)
+                                .font(DS.Font.body)
+                                .lineLimit(1)
+                            Spacer()
+                        }
+                        .padding(.horizontal, DS.Space.sm)
+                        .frame(height: DS.Control.large)
+                        .background(
+                            RoundedRectangle(cornerRadius: DS.Radius.md, style: .continuous)
+                                .fill(Color.primary.opacity(0.06))
+                        )
+                        .contentShape(Rectangle())
+                    }
+                    .buttonStyle(.plain)
+                }
+            }
+            Spacer()
+        }
+        .padding(DS.Space.lg)
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
     }
 
     private var pager: some View {
@@ -124,7 +171,7 @@ private struct BrowserColumn: View {
             let size = session.viewport.size
             let scale = size.map { min(geo.size.width / $0.width,
                                        geo.size.height / $0.height, 1) } ?? 1
-            WebView(webView: session.webView, magnification: scale)
+            WebView(webView: session.webView, zoom: scale)
                 .frame(width: size.map { $0.width * scale } ?? geo.size.width,
                        height: size.map { $0.height * scale } ?? geo.size.height)
                 .overlay(
@@ -197,7 +244,7 @@ private struct BrowserColumn: View {
                 session.pickerActive.toggle()
             }
             BrowserToolbarButton(systemName: "xmark", help: "Close this browser") {
-                manager.close(ownerId: session.ownerId)
+                manager.close(session)
             }
         }
         .padding(.horizontal, DS.Space.sm)
@@ -240,16 +287,17 @@ private struct BrowserToolbarButton: View {
 
 private struct WebView: NSViewRepresentable {
     let webView: WKWebView
-    var magnification: CGFloat = 1
+    /// pageZoom, not magnification: pageZoom scales in the web process (like
+    /// Safari ⌘+) so content always fills the view — magnification is a
+    /// scroll-view canvas transform that letterboxes the page against the
+    /// under-page background when a set gets dropped mid-layout.
+    var zoom: CGFloat = 1
 
-    func makeNSView(context: Context) -> WKWebView {
-        webView.allowsMagnification = true
-        return webView
-    }
+    func makeNSView(context: Context) -> WKWebView { webView }
 
     func updateNSView(_ nsView: WKWebView, context: Context) {
-        if abs(nsView.magnification - magnification) > 0.001 {
-            nsView.setMagnification(magnification, centeredAt: .zero)
+        if abs(nsView.pageZoom - zoom) > 0.001 {
+            nsView.pageZoom = zoom
         }
     }
 }
