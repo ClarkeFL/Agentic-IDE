@@ -37,10 +37,27 @@ struct MainWindow: View {
     /// lights get their own strip. Fullscreen: no title bar, so reclaim the top
     /// for the cards (`ignoresSafeArea(.top)`).
     @State private var isFullScreen = false
+    /// Agent browser panes + browser-mode state. While mode is active the
+    /// whole three-pane layout is swapped for `BrowserModeView` (terminals
+    /// survive the detach exactly like a project switch); while collapsed with
+    /// browsers open, the edge bar invites expanding it.
+    @State private var browsers = BrowserManager.shared
 
     var body: some View {
         ZStack {
-            mainContent
+            if browsers.isModeActive {
+                BrowserModeView(manager: browsers)
+            } else {
+                mainContent
+                if !browsers.sessions.isEmpty {
+                    HStack {
+                        Spacer()
+                        BrowserEdgeBar(count: browsers.sessions.count) {
+                            browsers.isModeActive = true
+                        }
+                    }
+                }
+            }
             if showAsk {
                 AskOverlay(isPresented: $showAsk)
                     .transition(.move(edge: .trailing).combined(with: .opacity))

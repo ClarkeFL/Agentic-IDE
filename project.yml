@@ -71,6 +71,12 @@ targets:
         # AppleScript / cross-app automation gets used when the terminal asks
         # macOS to open URLs, reveal files in Finder, etc.
         NSAppleEventsUsageDescription: AgenticIDE uses Apple Events to open URLs, files, and folders in other apps when you click on them.
+        # The agent browser pane is a general-purpose web view — it must be
+        # able to load plain-http pages (staging boxes, LAN devices) like any
+        # browser. Scoped to web content only; URLSession traffic keeps
+        # default ATS.
+        NSAppTransportSecurity:
+          NSAllowsArbitraryLoadsInWebContent: true
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.fabio.AgenticIDE

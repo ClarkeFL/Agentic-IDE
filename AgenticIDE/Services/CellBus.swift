@@ -72,6 +72,64 @@ final class CellBus {
         }
     }
 
+    /// `browser` verbs act on the CALLER's own browser pane (keyed by its
+    /// surface id), unlike the cell-number verbs above. Async because
+    /// WKWebView's DOM access is — `AgentBridge` parks the socket thread on a
+    /// semaphore until `completion` fires.
+    func handleBrowser(surfaceId: UUID, args: [String], body: String?,
+                       completion: @escaping (String) -> Void) {
+        guard let sessions, let located = sessions.locate(surfaceId: surfaceId),
+              let ownerTab = located.workspace.cells
+                  .compactMap(\.terminal).first(where: { $0.id == surfaceId }) else {
+            completion("error: this terminal isn't a known workspace cell")
+            return
+        }
+        let manager = BrowserManager.shared
+        let usage = "error: usage: browser open <url> | browser read | browser eval <js> | browser close"
+
+        switch args.first ?? "" {
+        case "open":
+            let raw = args.dropFirst().first ?? body?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+            guard let url = BrowserManager.normalizeURL(raw) else {
+                completion("error: usage: browser open <url>")
+                return
+            }
+            manager.open(url, owner: ownerTab)
+            completion("ok: opened \(url.absoluteString) — the user can see this browser; "
+                       + "use `agentide browser read` / `agentide browser eval` to drive it")
+
+        case "read":
+            guard let session = manager.session(ownerId: ownerTab.id) else {
+                completion("error: no browser open — use `agentide browser open <url>` first")
+                return
+            }
+            session.snapshot { completion(String($0.prefix(8000))) }
+
+        case "eval":
+            guard let session = manager.session(ownerId: ownerTab.id) else {
+                completion("error: no browser open — use `agentide browser open <url>` first")
+                return
+            }
+            let js = body?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+            guard !js.isEmpty else {
+                completion("error: usage: browser eval <javascript>")
+                return
+            }
+            session.eval(js) { completion(String($0.prefix(8000))) }
+
+        case "close":
+            guard manager.session(ownerId: ownerTab.id) != nil else {
+                completion("error: no browser open")
+                return
+            }
+            manager.close(ownerId: ownerTab.id)
+            completion("ok: browser closed")
+
+        default:
+            completion(usage)
+        }
+    }
+
     // MARK: - launch
 
     private func launch(toolName: String, into cell: WorkspaceCell,

@@ -98,6 +98,11 @@ final class AgentBridge {
           agentide read <n>           Print cell <n>'s screen, to review its progress.
           agentide status <n>         Print cell <n>'s status (idle/working/completed/failed).
           agentide wait <n> [secs]    Block until cell <n> finishes (default 600s).
+        Your own browser pane (visible to the user, great for testing UI):
+          agentide browser open <url> Open (or navigate) your browser pane.
+          agentide browser read       Snapshot the page: title, interactive elements + selectors, text.
+          agentide browser eval <js>  Run JavaScript in the page and print the result.
+          agentide browser close      Close your browser pane.
         USAGE
         }
 
@@ -115,6 +120,14 @@ final class AgentBridge {
           grid)   req "grid $sid $*" ;;
           send)   n="$1"; shift; req "send $sid $n" "$*" ;;
           launch) n="$1"; shift; req "launch $sid $n" "$*" ;;
+          browser)
+            sub="$1"; [ $# -gt 0 ] && shift
+            case "$sub" in
+              open)  req "browser $sid open $1" ;;
+              eval)  req "browser $sid eval" "$*" ;;
+              read|close) req "browser $sid $sub" ;;
+              *) usage; exit 1 ;;
+            esac ;;
           wait)
             n="$1"; secs="${2:-600}"; deadline=$(( $(date +%s) + secs ))
             while :; do
@@ -216,6 +229,25 @@ final class AgentBridge {
 
         var response = "error: app not ready"
         let bus = cellBus
+
+        // Browser verbs are async (WKWebView DOM access completes on a later
+        // main-runloop turn), so park this socket thread on a semaphore
+        // instead of main.sync-ing a value that doesn't exist yet.
+        if verb == "browser" {
+            let semaphore = DispatchSemaphore(value: 0)
+            DispatchQueue.main.async {
+                guard let bus else { semaphore.signal(); return }
+                bus.handleBrowser(surfaceId: surfaceId, args: args, body: text) { result in
+                    response = result
+                    semaphore.signal()
+                }
+            }
+            if semaphore.wait(timeout: .now() + 30) == .timedOut {
+                return "error: browser call timed out\n"
+            }
+            return response.hasSuffix("\n") ? response : response + "\n"
+        }
+
         DispatchQueue.main.sync {
             response = bus?.handle(verb: verb, surfaceId: surfaceId, args: args, body: text)
                 ?? "error: app not ready"

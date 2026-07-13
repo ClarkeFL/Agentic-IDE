@@ -74,7 +74,13 @@ struct CellLauncher {
         "`agentide send <n> \"<text>\"` (type text and press Enter in cell n, e.g. to give another agent a task); " +
         "`agentide read <n>` (view the screen of cell n to see its reply); " +
         "`agentide status <n>` (check whether cell n is idle, working, completed, or failed); " +
-        "`agentide wait <n>` (block until cell n finishes)."
+        "`agentide wait <n>` (block until cell n finishes). " +
+        "You also have your OWN browser pane, visible to the user — ideal for loading and testing web UI: " +
+        "`agentide browser open <url>` (open or navigate it); " +
+        "`agentide browser read` (snapshot the page: title, interactive elements with CSS selectors, visible text); " +
+        "`agentide browser eval \"<js>\"` (run JavaScript in the page and print the result — use it to click, fill, scroll, and assert); " +
+        "`agentide browser close` (close it when done). " +
+        "The user can also point at elements in your browser pane with the picker — selections arrive in your input as [browser pick] lines with a CSS selector and HTML snippet."
 
     /// The system-prompt note injected at launch. `orchestrator` selects the
     /// proactive coordination prompt; otherwise the lighter reactive hint.
