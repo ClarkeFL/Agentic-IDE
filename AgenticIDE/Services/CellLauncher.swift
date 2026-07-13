@@ -74,7 +74,7 @@ struct CellLauncher {
     static func bootstrapBriefing(cellNumber n: Int) -> String {
         "[AgenticIDE] You are running inside AgenticIDE (a macOS terminal IDE) as cell #\(n) of a workspace grid. "
         + "The `agentide` CLI on your PATH controls the workspace: list/launch/drive sibling agent cells, and open your OWN visible browser pane to load and test web UI "
-        + "(`agentide browser open <url>`, then read/eval/errors/screenshot/viewport). "
+        + "(`agentide browser open <url>`, then read/eval/html/wait/errors/logs/screenshot/viewport/reload/back/forward). "
         + "Run `agentide` with no arguments for the full verb reference. Acknowledge in one short line, then wait for instructions."
     }
 
@@ -112,8 +112,13 @@ struct CellLauncher {
         "`agentide browser open <url>` (open or navigate it); " +
         "`agentide browser read` (snapshot the page: title, interactive elements with CSS selectors, visible text); " +
         "`agentide browser eval \"<js>\"` (run JavaScript in the page and print the result — use it to click, fill, scroll, and assert); " +
-        "`agentide browser errors` (print console errors, warnings, and uncaught exceptions since page load — check this after loading or interacting); " +
-        "`agentide browser screenshot` (save a PNG of the page and print its path — read that image file to SEE the page; needs the browser pane visible); " +
+        "`agentide browser html \"<selector>\"` (print the raw HTML of the element matching a CSS selector, or the whole page with no selector); " +
+        "`agentide browser wait \"<js-expr>\"` (block until the JS expression is truthy, 10s cap — use it to wait for SPA content, e.g. a selector appearing, before reading); " +
+        "`agentide browser reload` (hard-reload the page, e.g. after rebuilding a dev server); " +
+        "`agentide browser back` / `agentide browser forward` (navigate history); " +
+        "`agentide browser errors` (print console errors, warnings, uncaught exceptions, and failed network requests since page load — check this after loading or interacting); " +
+        "`agentide browser logs` (print ALL console output including console.log — read your printf debugging here); " +
+        "`agentide browser screenshot \"[selector]\"` (save a PNG of the page — or just the element matching a CSS selector — and print its path; read that image file to SEE it; needs the browser pane visible); " +
         "`agentide browser viewport <fit|desktop|laptop|tablet|mobile>` (emulate a device screen size, e.g. to test responsive layouts); " +
         "`agentide browser close` (close it when done). " +
         "The user can also point at elements in your browser pane with the picker — selections arrive in your input as [browser pick] lines with a CSS selector and HTML snippet."

@@ -99,11 +99,20 @@ final class AgentBridge {
           agentide status <n>         Print cell <n>'s status (idle/working/completed/failed).
           agentide wait <n> [secs]    Block until cell <n> finishes (default 600s).
         Your own browser pane (visible to the user, great for testing UI):
-          agentide browser open <url> Open (or navigate) your browser pane.
+          agentide browser open [url] Open (or navigate) your browser pane; no url = blank start page.
           agentide browser read       Snapshot the page: title, interactive elements + selectors, text.
           agentide browser eval <js>  Run JavaScript in the page and print the result.
-          agentide browser errors     Print console errors/warnings + uncaught exceptions since page load.
-          agentide browser screenshot Save a PNG of the page; prints the file path to read.
+          agentide browser html [sel] Print page HTML, or just the element matching CSS selector <sel>.
+          agentide browser wait <js>  Block until a JS expression is truthy (10s cap),
+                                      e.g. wait "document.querySelector('.results')".
+          agentide browser reload     Hard-reload the page (e.g. after rebuilding a dev server).
+          agentide browser back       Go back to the previous page.
+          agentide browser forward    Go forward again.
+          agentide browser errors     Print console errors/warnings, uncaught exceptions, and failed
+                                      network requests (4xx/5xx or connection errors) since page load.
+          agentide browser logs       Print ALL console output since page load, console.log included.
+          agentide browser screenshot [sel] Save a PNG of the page (or just the element matching
+                                      CSS selector <sel>); prints the file path to read.
           agentide browser viewport <p> Emulate a screen: fit|desktop|laptop|tablet|mobile.
           agentide browser close      Close your browser pane.
         USAGE
@@ -126,10 +135,13 @@ final class AgentBridge {
           browser)
             sub="$1"; [ $# -gt 0 ] && shift
             case "$sub" in
-              open)     req "browser $sid open $1" ;;
-              eval)     req "browser $sid eval" "$*" ;;
-              viewport) req "browser $sid viewport $1" ;;
-              read|close|errors|screenshot) req "browser $sid $sub" ;;
+              open)       req "browser $sid open $1" ;;
+              eval)       req "browser $sid eval" "$*" ;;
+              html)       req "browser $sid html" "$*" ;;
+              wait)       req "browser $sid wait" "$*" ;;
+              screenshot) req "browser $sid screenshot" "$*" ;;
+              viewport)   req "browser $sid viewport $1" ;;
+              read|close|errors|logs|reload|back|forward) req "browser $sid $sub" ;;
               *) usage; exit 1 ;;
             esac ;;
           wait)
