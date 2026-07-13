@@ -48,7 +48,8 @@ struct MainWindow: View {
             if browsers.isModeActive {
                 // Slides in over a stationary grid and off again to reveal it
                 // (the grid branch below uses .identity so it never travels).
-                BrowserModeView(manager: browsers)
+                BrowserModeView(manager: browsers,
+                                reserveTrafficLights: !isFullScreen)
                     .transition(.move(edge: .trailing))
                     .zIndex(5)
             } else {
