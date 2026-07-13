@@ -85,27 +85,103 @@ final class CellBus {
             return
         }
         let manager = BrowserManager.shared
-        let usage = "error: usage: browser open <url> | browser read | browser eval <js> | "
-            + "browser errors | browser screenshot | "
+        let usage = "error: usage: browser open [url] | browser read | browser eval <js> | "
+            + "browser html [selector] | browser wait <js-expr> | "
+            + "browser reload | browser back | browser forward | "
+            + "browser errors | browser logs | browser screenshot [selector] | "
             + "browser viewport <fit|desktop|laptop|tablet|mobile> | browser close"
 
         switch args.first ?? "" {
         case "open":
             let raw = args.dropFirst().first ?? body?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-            guard let url = BrowserManager.normalizeURL(raw) else {
-                completion("error: usage: browser open <url>")
+            if raw.isEmpty || raw == "about:blank" {
+                manager.open(nil, cell: ownerCell)
+                completion("ok: opened blank start page — navigate with `agentide browser open <url>`")
                 return
             }
-            manager.open(url, cell: ownerCell)
-            completion("ok: opened \(url.absoluteString) — the user can see this browser; "
-                       + "use `agentide browser read` / `agentide browser eval` to drive it")
+            guard let url = BrowserManager.normalizeURL(raw) else {
+                completion("error: '\(raw)' is not a valid URL — usage: browser open <url>")
+                return
+            }
+            let session = manager.open(url, cell: ownerCell)
+            session.whenLoaded { loaded in
+                completion("ok: opened \(url.absoluteString)"
+                           + (loaded ? "" : " (page still loading after 10s)")
+                           + " — the user can see this browser; "
+                           + "use `agentide browser read` / `agentide browser eval` to drive it")
+            }
 
         case "read":
             guard let session = manager.session(for: ownerCell) else {
                 completion("error: no browser open — use `agentide browser open <url>` first")
                 return
             }
-            session.snapshot { completion(String($0.prefix(8000))) }
+            session.whenLoaded { _ in
+                session.snapshot { completion(String($0.prefix(8000))) }
+            }
+
+        case "reload":
+            guard let session = manager.session(for: ownerCell) else {
+                completion("error: no browser open — use `agentide browser open <url>` first")
+                return
+            }
+            guard !session.urlString.isEmpty else {
+                completion("error: nothing loaded — use `agentide browser open <url>` first")
+                return
+            }
+            session.webView.reloadFromOrigin()
+            session.whenLoaded { loaded in
+                completion(loaded ? "ok: reloaded \(session.urlString)"
+                                  : "ok: reload issued — page still loading after 10s")
+            }
+
+        case "back":
+            guard let session = manager.session(for: ownerCell) else {
+                completion("error: no browser open — use `agentide browser open <url>` first")
+                return
+            }
+            guard session.webView.canGoBack else {
+                completion("error: no page to go back to")
+                return
+            }
+            session.webView.goBack()
+            session.whenLoaded { _ in
+                completion("ok: went back to \(session.webView.url?.absoluteString ?? "previous page")")
+            }
+
+        case "forward":
+            guard let session = manager.session(for: ownerCell) else {
+                completion("error: no browser open — use `agentide browser open <url>` first")
+                return
+            }
+            guard session.webView.canGoForward else {
+                completion("error: no page to go forward to")
+                return
+            }
+            session.webView.goForward()
+            session.whenLoaded { _ in
+                completion("ok: went forward to \(session.webView.url?.absoluteString ?? "next page")")
+            }
+
+        case "wait":
+            guard let session = manager.session(for: ownerCell) else {
+                completion("error: no browser open — use `agentide browser open <url>` first")
+                return
+            }
+            let expr = body?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+            guard !expr.isEmpty else {
+                completion("error: usage: browser wait <js-expression>")
+                return
+            }
+            session.waitFor(expr, completion: completion)
+
+        case "html":
+            guard let session = manager.session(for: ownerCell) else {
+                completion("error: no browser open — use `agentide browser open <url>` first")
+                return
+            }
+            let selector = body?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+            session.html(selector: selector) { completion(String($0.prefix(8000))) }
 
         case "eval":
             guard let session = manager.session(for: ownerCell) else {
@@ -126,12 +202,20 @@ final class CellBus {
             }
             session.consoleErrors { completion(String($0.prefix(8000))) }
 
+        case "logs":
+            guard let session = manager.session(for: ownerCell) else {
+                completion("error: no browser open — use `agentide browser open <url>` first")
+                return
+            }
+            session.consoleLogs { completion(String($0.prefix(8000))) }
+
         case "screenshot":
             guard let session = manager.session(for: ownerCell) else {
                 completion("error: no browser open — use `agentide browser open <url>` first")
                 return
             }
-            session.screenshot(completion: completion)
+            let target = body?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+            session.screenshot(selector: target, completion: completion)
 
         case "viewport":
             guard let session = manager.session(for: ownerCell) else {

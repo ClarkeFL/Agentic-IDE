@@ -7,6 +7,10 @@ struct ProjectSidebarView: View {
     @Environment(SessionManager.self) private var sessions
     @EnvironmentObject private var updater: UpdaterManager
     @Binding var selectedProjectId: UUID?
+    /// True while the window is NOT fullscreen: the panes now run to the very
+    /// top of the window, so the sidebar header must start after the floating
+    /// traffic lights. Fullscreen hides them, so the inset drops away.
+    var reserveTrafficLights: Bool = true
 
     @State private var newGroupAlertShown = false
     @State private var newGroupName: String = ""
@@ -29,26 +33,17 @@ struct ProjectSidebarView: View {
         let visibleCount = store.projects.filter { !$0.archived }.count
 
         return VStack(spacing: 0) {
-            // Top strip — locked to the same height as the tab bar and the
-            // inspector header so the three columns share one baseline.
-            // Align the title to the sidebar content gutter; the title sits
-            // below the traffic-light row, so reserving that inset made the
-            // header read as centered instead of left-aligned.
-            PaneHeader(leadingPadding: DS.Gutter.sidebar + DS.Space.sm,
-                       trailingPadding: DS.Space.sm) {
-                HStack(spacing: DS.Space.xxs) {
-                    PaneTitle("Projects", count: visibleCount)
-                    SidebarHeaderAddButton(createProject: createProject,
-                                           addProject: addProject)
-                    SidebarHeaderButton(systemName: "folder.badge.plus",
-                                        help: "New Group",
-                                        action: startNewGroup)
-                    SidebarHeaderButton(systemName: "arrow.triangle.2.circlepath",
-                                        help: "Check for Updates",
-                                        action: { updater.checkForUpdates() })
-                        .disabled(!updater.canCheckForUpdates)
-                }
+            // The panes run to the window top, so windowed the floating
+            // traffic lights get an empty strip to themselves and the
+            // heading sits on its own row below (Codex-style). Fullscreen
+            // hides the lights, so the strip collapses.
+            if reserveTrafficLights {
+                Color.clear.frame(height: DS.Control.header)
             }
+            PaneTitle("Projects", count: visibleCount)
+                .padding(.leading, DS.Gutter.sidebar + DS.Space.sm)
+                .padding(.trailing, DS.Space.sm)
+                .frame(height: DS.Control.header)
 
             // `.scrollIndicators(.hidden)` alone doesn't reclaim the
             // trailing scroller gutter on macOS — the underlying NSScrollView
@@ -80,19 +75,33 @@ struct ProjectSidebarView: View {
             .animation(.easeOut(duration: 0.12), value: hoveredDropKey)
 
             Divider()
-            // Footer is just the CPU / MEM readout now — the add / new-group /
-            // update icons moved up next to the "Projects" header.
-            ResourceBar()
-                .padding(.horizontal, DS.Space.md)
-                .padding(.vertical, DS.Space.sm)
+            // Footer: CPU / MEM readout on the left, the add / new-group /
+            // update actions on the right (moved down from the old header).
+            HStack(spacing: DS.Space.xxs) {
+                ResourceBar()
+                Spacer(minLength: DS.Space.sm)
+                SidebarHeaderAddButton(createProject: createProject,
+                                       addProject: addProject)
+                SidebarHeaderButton(systemName: "folder.badge.plus",
+                                    help: "New Group",
+                                    action: startNewGroup)
+                SidebarHeaderButton(systemName: "arrow.triangle.2.circlepath",
+                                    help: "Check for Updates",
+                                    action: { updater.checkForUpdates() })
+                    .disabled(!updater.canCheckForUpdates)
+            }
+            .padding(.horizontal, DS.Space.md)
+            .padding(.vertical, DS.Space.sm)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
-        // Same floating-card chrome as the explorer + workspace panes. Leftmost
-        // pane, so it carries the window-edge margin on its leading side and
-        // sits flush (0) against the divider on its trailing side.
-        .paneCard(fill: Color(nsColor: .controlBackgroundColor),
-                  insets: EdgeInsets(top: DS.Space.xs, leading: DS.Space.md,
-                                     bottom: DS.Space.md, trailing: 0))
+        // Flat edge-to-edge pane, deliberately lighter than the content panes
+        // so the sidebar reads as chrome and the workspace as content. The
+        // white overlay lifts it above windowBackgroundColor in dark mode
+        // (where the two system colours are nearly identical); in light mode
+        // 5% white on light grey is invisible, and the grey-vs-white split
+        // already provides the contrast.
+        .background(Color.white.opacity(0.05))
+        .background(Color(nsColor: .windowBackgroundColor))
         // Menu-bar commands (File → New Project / Add Existing Project) post
         // these; the sidebar owns the panels + store so it observes here.
         .onReceive(NotificationCenter.default.publisher(for: .newProject)) { _ in

@@ -40,12 +40,7 @@ struct NotesPanel: View {
             content
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
-        // Same floating-card chrome as the explorer + workspace panes. Rightmost
-        // pane, so the window-edge margin is on the trailing side; flush (0)
-        // against the divider on the leading side.
-        .paneCard(fill: Color(nsColor: .textBackgroundColor),
-                  insets: EdgeInsets(top: DS.Space.xs, leading: 0,
-                                     bottom: DS.Space.md, trailing: DS.Space.md))
+        .background(Color(nsColor: .textBackgroundColor))
         .task(id: project.id) { load() }
         .onDisappear { flush() }
     }

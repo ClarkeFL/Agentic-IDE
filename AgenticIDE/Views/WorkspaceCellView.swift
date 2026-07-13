@@ -37,7 +37,10 @@ struct WorkspaceCellView: View {
             }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
-        .background(Color(nsColor: .textBackgroundColor))
+        // ignoresSafeAreaEdges: [] — the window's hidden-titlebar safe area
+        // cuts through the workspace pane's header strip; a default background
+        // would expand into it and paint over the WorkspaceHeaderView.
+        .background(Color(nsColor: .textBackgroundColor), ignoresSafeAreaEdges: [])
         // Seamless tile inside the workspace pane card — no rounded border of
         // its own. The inter-cell gap is the only rest-state separator; the
         // focused cell gets an accent edge so you can still see where keystrokes
@@ -102,7 +105,7 @@ struct WorkspaceCellView: View {
         }
         .padding(.horizontal, DS.Space.sm)
         .frame(height: DS.Control.standard)
-        .background(Color(nsColor: .windowBackgroundColor))
+        .background(Color(nsColor: .windowBackgroundColor), ignoresSafeAreaEdges: [])
         .contentShape(Rectangle())
         .onTapGesture {
             workspace.focusedCellId = cell.id

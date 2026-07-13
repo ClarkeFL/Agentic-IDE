@@ -29,9 +29,9 @@ final class BrowserManager {
 
     /// Open (or navigate) the browser pane bound to this grid cell. Creating
     /// a pane makes the edge bar appear; it never auto-expands browser mode —
-    /// the user chooses when to look.
+    /// the user chooses when to look. A nil url opens the blank start page.
     @discardableResult
-    func open(_ url: URL, cell: WorkspaceCell) -> BrowserSession {
+    func open(_ url: URL?, cell: WorkspaceCell) -> BrowserSession {
         let session: BrowserSession
         if let existing = self.session(for: cell) {
             session = existing
@@ -40,7 +40,7 @@ final class BrowserManager {
             sessions.append(session)
             if focusedId == nil { focusedId = session.id }
         }
-        session.load(url)
+        if let url { session.load(url) }
         return session
     }
 
@@ -213,6 +213,43 @@ final class BrowserSession: NSObject, Identifiable, WKNavigationDelegate, WKScri
 
     // MARK: - Agent verbs
 
+    /// Call back once the page finishes loading, or after `timeout` seconds
+    /// (passes false). The initial grace tick lets a just-issued `load()`
+    /// flip `webView.isLoading` before the first check — otherwise `open`
+    /// followed by `read` races the navigation and snapshots a blank page.
+    func whenLoaded(timeout: TimeInterval = 10, completion: @escaping (Bool) -> Void) {
+        let deadline = Date().addingTimeInterval(timeout)
+        func poll() {
+            if !webView.isLoading { completion(true) }
+            else if Date() >= deadline { completion(false) }
+            else { DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) { poll() } }
+        }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.15) { poll() }
+    }
+
+    /// Poll a JS expression until it is truthy, for `agentide browser wait`.
+    /// The SPA counterpart of `whenLoaded` — load finished ≠ content
+    /// rendered (data fetches, spinners, route transitions).
+    func waitFor(_ expr: String, timeout: TimeInterval = 10, completion: @escaping (String) -> Void) {
+        let deadline = Date().addingTimeInterval(timeout)
+        let js = "!!(\(expr))"
+        func poll() {
+            webView.evaluateJavaScript(js) { result, error in
+                if let error {
+                    let detail = (error as NSError).userInfo["WKJavaScriptExceptionMessage"] as? String
+                    completion("error: \(detail ?? error.localizedDescription)")
+                } else if (result as? Bool) == true {
+                    completion("ok: condition is truthy")
+                } else if Date() >= deadline {
+                    completion("error: condition still falsy after \(Int(timeout))s")
+                } else {
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.25) { poll() }
+                }
+            }
+        }
+        poll()
+    }
+
     /// Run JS in the page and hand back a printable result string.
     func eval(_ js: String, completion: @escaping (String) -> Void) {
         webView.evaluateJavaScript(js) { result, error in
@@ -242,25 +279,93 @@ final class BrowserSession: NSObject, Identifiable, WKNavigationDelegate, WKScri
         eval(Self.snapshotJS, completion: completion)
     }
 
-    /// Console errors/warnings + uncaught exceptions collected by the
-    /// injected capture script. Resets on every navigation (fresh page
-    /// context), which is the correct scope for "did THIS page load clean".
+    /// Console errors/warnings, uncaught exceptions, and failed network
+    /// requests collected by the injected capture script. Resets on every
+    /// navigation (fresh page context), which is the correct scope for
+    /// "did THIS page load clean".
     func consoleErrors(completion: @escaping (String) -> Void) {
-        eval("(window.__agentideLogs || []).join('\\n') "
-             + "|| '(no console errors or warnings since page load)'",
+        eval("(window.__agentideLogs || []).filter(function (l) { return !/^(log|info):/.test(l); })"
+             + ".join('\\n') "
+             + "|| '(no console errors, warnings, or failed requests since page load)'",
              completion: completion)
     }
 
-    /// PNG of the current page state, written to a temp file the calling
-    /// agent can read. Only works while the pane is on screen — a detached
-    /// WKWebView has zero bounds and snapshots blank.
-    func screenshot(completion: @escaping (String) -> Void) {
+    /// Everything the capture script collected — console.log/info included —
+    /// for `agentide browser logs`. The agent's printf-debugging channel.
+    func consoleLogs(completion: @escaping (String) -> Void) {
+        eval("(window.__agentideLogs || []).join('\\n') || '(no console output since page load)'",
+             completion: completion)
+    }
+
+    /// JSON-escape a string for splicing into injected JS.
+    private static func jsQuoted(_ s: String) -> String {
+        let data = (try? JSONSerialization.data(withJSONObject: [s])) ?? Data()
+        let array = String(data: data, encoding: .utf8) ?? "[\"\"]"
+        return String(array.dropFirst().dropLast())
+    }
+
+    /// Outer HTML of the first element matching `selector` (whole document
+    /// if empty) for `agentide browser html` — the raw markup `snapshot`'s
+    /// lossy summary can't show.
+    func html(selector: String, completion: @escaping (String) -> Void) {
+        let quoted = selector.isEmpty ? "null" : Self.jsQuoted(selector)
+        eval("""
+            (function () {
+              var sel = \(quoted);
+              var el = sel ? document.querySelector(sel) : document.documentElement;
+              if (!el) { return 'error: no element matches ' + sel; }
+              return el.outerHTML.slice(0, 8000);
+            })();
+            """, completion: completion)
+    }
+
+    /// PNG of the current page (or just the element matching `selector`),
+    /// written to a temp file the calling agent can read. Only works while
+    /// the pane is on screen — a detached WKWebView has zero bounds and
+    /// snapshots blank.
+    func screenshot(selector: String = "", completion: @escaping (String) -> Void) {
         guard webView.window != nil, !webView.bounds.isEmpty else {
             completion("error: the browser pane is not on screen — "
                        + "ask the user to expand browser mode (⌘B), then retry")
             return
         }
-        webView.takeSnapshot(with: nil) { image, error in
+        guard !selector.isEmpty else {
+            capture(rect: nil, completion: completion)
+            return
+        }
+        eval("""
+            (function () {
+              var el = document.querySelector(\(Self.jsQuoted(selector)));
+              if (!el) { return 'none'; }
+              el.scrollIntoView({ block: 'center', behavior: 'instant' });
+              var r = el.getBoundingClientRect();
+              return [r.x, r.y, r.width, r.height].join(',');
+            })();
+            """) { [weak self] result in
+            guard let self else { return }
+            let parts = result.split(separator: ",").compactMap { Double($0) }
+            guard parts.count == 4, parts[2] > 0, parts[3] > 0 else {
+                completion(result == "none"
+                           ? "error: no element matches \(selector)"
+                           : "error: element has no visible bounds")
+                return
+            }
+            // CSS px → view coords: viewport presets scale content via
+            // webView.magnification, and the snapshot rect is in view space.
+            let m = webView.magnification
+            capture(rect: CGRect(x: parts[0] * m, y: parts[1] * m,
+                                 width: parts[2] * m, height: parts[3] * m),
+                    completion: completion)
+        }
+    }
+
+    private func capture(rect: CGRect?, completion: @escaping (String) -> Void) {
+        let config = rect.map { r in
+            let c = WKSnapshotConfiguration()
+            c.rect = r
+            return c
+        }
+        webView.takeSnapshot(with: config) { image, error in
             guard let image,
                   let tiff = image.tiffRepresentation,
                   let rep = NSBitmapImageRep(data: tiff),
@@ -426,19 +531,22 @@ final class BrowserSession: NSObject, Identifiable, WKNavigationDelegate, WKScri
 
     /// Page snapshot: title/url, up to 80 visible interactive elements with
     /// short CSS selectors + labels, then trimmed body text.
-    /// Ring buffer of console errors/warnings + uncaught exceptions +
-    /// unhandled promise rejections. Injected at document start so early
-    /// boot errors (e.g. a crashing framework bundle) are caught too.
+    /// Ring buffer of console output (error/warn/log/info) + uncaught
+    /// exceptions + unhandled promise rejections + failed fetch/XHR requests
+    /// (network failure or 4xx/5xx status). Injected at document start so
+    /// early boot errors (e.g. a crashing framework bundle) are caught too.
     private static let consoleCaptureJS = #"""
     (function () {
       if (window.__agentideLogs) { return; }
       var logs = [];
       window.__agentideLogs = logs;
+      // ponytail: one ring buffer for everything; split error/log buffers
+      // if a log-spammy app ever evicts the errors an agent is hunting.
       function push(kind, msg) {
-        if (logs.length >= 200) { logs.shift(); }
+        if (logs.length >= 500) { logs.shift(); }
         logs.push(kind + ': ' + msg);
       }
-      ['error', 'warn'].forEach(function (kind) {
+      ['error', 'warn', 'log', 'info'].forEach(function (kind) {
         var orig = console[kind];
         console[kind] = function () {
           try {
@@ -458,6 +566,33 @@ final class BrowserSession: NSObject, Identifiable, WKNavigationDelegate, WKScri
         var r = e.reason;
         push('unhandledrejection', (r && (r.stack || r.message)) || String(r));
       });
+      var origFetch = window.fetch;
+      if (origFetch) {
+        window.fetch = function () {
+          var url = arguments[0] && (arguments[0].url || String(arguments[0]));
+          return origFetch.apply(this, arguments).then(function (res) {
+            if (!res.ok) { push('http', res.status + ' ' + (res.url || url)); }
+            return res;
+          }, function (err) {
+            push('network', ((err && err.message) || String(err)) + ' — ' + url);
+            throw err;
+          });
+        };
+      }
+      var origXHROpen = XMLHttpRequest.prototype.open;
+      XMLHttpRequest.prototype.open = function (method, url) {
+        this.__agentideURL = url;
+        return origXHROpen.apply(this, arguments);
+      };
+      var origXHRSend = XMLHttpRequest.prototype.send;
+      XMLHttpRequest.prototype.send = function () {
+        var xhr = this;
+        xhr.addEventListener('loadend', function () {
+          if (xhr.status === 0) { push('network', 'failed — ' + xhr.__agentideURL); }
+          else if (xhr.status >= 400) { push('http', xhr.status + ' ' + xhr.__agentideURL); }
+        });
+        return origXHRSend.apply(this, arguments);
+      };
     })();
     """#
 

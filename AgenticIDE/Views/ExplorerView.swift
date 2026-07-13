@@ -50,10 +50,7 @@ struct ExplorerView: View {
             }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
-        // Shared pane-card chrome. Flush (0) on both divider-facing sides — the
-        // (now line-less) divider zone supplies the gap, so the cards sit tight
-        // against it.
-        .paneCard(fill: Color(nsColor: .textBackgroundColor))
+        .background(Color(nsColor: .textBackgroundColor))
     }
 
     private func clampedTreeWidth(total: CGFloat) -> CGFloat {

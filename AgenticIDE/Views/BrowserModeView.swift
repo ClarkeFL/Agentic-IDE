@@ -11,23 +11,29 @@ struct BrowserModeView: View {
     @Environment(LaunchToolStore.self) private var launchTools
 
     @Bindable var manager: BrowserManager
+    /// True while the window is NOT fullscreen: the columns run to the very
+    /// top of the window, so the agent column's header starts after the
+    /// floating traffic lights. Mirrors the sidebar's behaviour.
+    var reserveTrafficLights: Bool = true
 
     var body: some View {
-        HStack(spacing: DS.Space.md) {
+        HStack(spacing: 0) {
             agentColumn
                 .frame(width: 380)
                 .frame(maxHeight: .infinity)
-                .paneCard(fill: Color(nsColor: .textBackgroundColor), insets: cardInsets)
+                .background(Color(nsColor: .textBackgroundColor), ignoresSafeAreaEdges: [])
             if let session = manager.focused {
+                Divider()
                 BrowserColumn(manager: manager, session: session)
                     .id(session.id)
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
-                    .paneCard(fill: Color(nsColor: .controlBackgroundColor), insets: cardInsets)
+                    .background(Color(nsColor: .controlBackgroundColor), ignoresSafeAreaEdges: [])
             }
         }
-        .padding(EdgeInsets(top: DS.Space.xs, leading: DS.Space.md,
-                            bottom: DS.Space.md, trailing: DS.Space.md))
         .background(Color(nsColor: .windowBackgroundColor))
+        // Same top-strip reclaim as the main layout: the headers own the
+        // hidden-titlebar strip instead of leaving an empty band above them.
+        .ignoresSafeArea(.container, edges: .top)
         // ⌘←/⌘→ page through open browsers here. These post .moveWorkspace,
         // whose normal observer (ProjectWorkspaceView) is unmounted while
         // browser mode is up, so repurposing them is conflict-free.
@@ -35,12 +41,6 @@ struct BrowserModeView: View {
             guard let direction = note.object as? Int else { return }
             manager.focusNext(direction)
         }
-    }
-
-    /// The outer HStack padding supplies the window margins and the spacing
-    /// supplies the seam, so the cards themselves carry none.
-    private var cardInsets: EdgeInsets {
-        EdgeInsets(top: 0, leading: 0, bottom: 0, trailing: 0)
     }
 
     // MARK: - Left: the agent driving the browser
@@ -63,9 +63,10 @@ struct BrowserModeView: View {
                     }
                 }
             }
+            .padding(.leading, reserveTrafficLights ? DS.Layout.trafficLightInset : 0)
             .padding(.horizontal, DS.Space.sm)
             .frame(height: DS.Control.header)
-            .background(Color(nsColor: .windowBackgroundColor))
+            .background(Color(nsColor: .windowBackgroundColor), ignoresSafeAreaEdges: [])
             Divider()
 
             if let tab = manager.focused?.ownerTab {
@@ -264,7 +265,9 @@ private struct BrowserColumn: View {
             }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
-        .background(Color(nsColor: .windowBackgroundColor))
+        // ignoresSafeAreaEdges: [] — don't expand up into the titlebar
+        // safe-area strip over the toolbar (see WorkspaceCellView).
+        .background(Color(nsColor: .windowBackgroundColor), ignoresSafeAreaEdges: [])
         .onAppear { detectedURLs = detectServerURLs() }
     }
 
@@ -308,7 +311,7 @@ private struct BrowserColumn: View {
                 )
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
         }
-        .background(Color(nsColor: .windowBackgroundColor))
+        .background(Color(nsColor: .windowBackgroundColor), ignoresSafeAreaEdges: [])
     }
 
     private var toolbar: some View {
@@ -458,9 +461,12 @@ struct BrowserEdgeBar: View {
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
-        .paneCard(fill: Color(nsColor: .controlBackgroundColor),
-                  insets: EdgeInsets(top: DS.Space.xs, leading: 0,
-                                     bottom: DS.Space.md, trailing: DS.Space.md))
+        .background(Color(nsColor: .controlBackgroundColor))
+        .overlay(alignment: .leading) {
+            Rectangle()
+                .fill(Color(nsColor: .separatorColor))
+                .frame(width: 1)
+        }
         .onHover { hovering = $0 }
         .help("Show agent browser")
     }

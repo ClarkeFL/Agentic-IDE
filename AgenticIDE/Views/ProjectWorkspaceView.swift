@@ -8,10 +8,6 @@ struct ProjectWorkspaceView: View {
     @Environment(SessionManager.self) private var sessions
 
     let project: Project
-    /// Trailing margin of the pane card. `DS.Space.md` when this is the
-    /// rightmost pane (window edge); `0` when the Notes pane sits to its right,
-    /// so the divider zone alone supplies the gap (matching the other seams).
-    var trailingInset: CGFloat = DS.Space.md
 
     /// Set when the user asks for a new workspace (sidebar +, ⌘T) so the
     /// chooser shows even if there's already an active workspace.
@@ -50,17 +46,24 @@ struct ProjectWorkspaceView: View {
             ServerBar(project: project, session: session)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
+        // The window's hidden-titlebar safe area still propagates into the
+        // panes even though MainWindow ignores it; safe-area-aware descendants
+        // (the cells' LazyVGrid launchers) then shrink away from the pane top
+        // and paint over the header. Zero it out for the whole subtree here.
+        .ignoresSafeArea(.container, edges: .top)
         .background {
             WorkspaceSwipeMonitor { direction in
                 slide(direction, in: session)
             }
         }
-        // Same floating-card chrome as the explorer + sidebar panes. Flush (0)
-        // against the divider on its leading side; the trailing margin is the
-        // window edge (or 0 when the Notes pane is open to its right).
-        .paneCard(fill: Color(nsColor: .controlBackgroundColor),
-                  insets: EdgeInsets(top: DS.Space.xs, leading: 0,
-                                     bottom: DS.Space.md, trailing: trailingInset))
+        .background(Color(nsColor: .controlBackgroundColor))
+        // Explicit hairline on the leading edge so the workspace always has a
+        // visible left border, whatever pane (explorer, rail) sits beside it.
+        .overlay(alignment: .leading) {
+            Rectangle()
+                .fill(Color(nsColor: .separatorColor))
+                .frame(width: 1)
+        }
         .onReceive(NotificationCenter.default.publisher(for: .toggleCellZoom)) { _ in
             toggleZoomFocused(in: session)
         }
