@@ -109,6 +109,25 @@ enum GitService {
         return nil
     }
 
+    /// The `origin` remote as a browsable https URL (ssh forms rewritten).
+    /// Powers the footer's "Open Remote" button.
+    static func remoteWebURL(at root: URL) async -> URL? {
+        guard var raw = await run(args: ["-C", root.path, "remote", "get-url", "origin"],
+                                  in: root,
+                                  allowNonZeroExit: true)?
+            .trimmingCharacters(in: .whitespacesAndNewlines),
+            !raw.isEmpty else { return nil }
+        if raw.hasSuffix(".git") { raw = String(raw.dropLast(4)) }
+        if raw.hasPrefix("git@"), let colon = raw.firstIndex(of: ":") {
+            // git@host:user/repo → https://host/user/repo
+            let host = raw[raw.index(raw.startIndex, offsetBy: 4)..<colon]
+            raw = "https://\(host)/\(raw[raw.index(after: colon)...])"
+        } else if raw.hasPrefix("ssh://git@") {
+            raw = "https://" + raw.dropFirst("ssh://git@".count)
+        }
+        return URL(string: raw)
+    }
+
     /// Local branch names, most-recently-committed first. Empty if not a
     /// repo. Powers the branch-switch menu in the footer.
     static func localBranches(at root: URL) async -> [String] {

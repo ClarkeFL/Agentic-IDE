@@ -106,6 +106,10 @@ struct AgenticIDEApp: App {
                     NotificationCenter.default.post(name: .toggleNotes, object: nil)
                 }
                 .keyboardShortcut(keybindings.shortcut(for: .toggleNotes))
+                Button("Toggle Agent Browser") {
+                    NotificationCenter.default.post(name: .toggleBrowser, object: nil)
+                }
+                .keyboardShortcut(keybindings.shortcut(for: .toggleBrowser))
                 Divider()
                 Button("Zoom Cell") {
                     NotificationCenter.default.post(name: .toggleCellZoom, object: nil)
@@ -169,6 +173,10 @@ extension Notification.Name {
     /// and the Notes pane's close button. Observed by `MainWindow`, which
     /// shows/hides the per-project Notes pane (⑤).
     static let toggleNotes = Notification.Name("AgenticIDE.toggleNotes")
+    /// Posted by View → Toggle Agent Browser (⌘B). Observed by `MainWindow`,
+    /// which expands/collapses browser mode (no-op while no agent browsers
+    /// are open).
+    static let toggleBrowser = Notification.Name("AgenticIDE.toggleBrowser")
 }
 
 /// Lives only to make termination unrefusable. macOS sends a quit AppleEvent

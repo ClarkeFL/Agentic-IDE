@@ -643,7 +643,15 @@ final class GhosttyTerminalView: NSView, NSTextInputClient {
 
     // MARK: - Mouse
 
-    override func mouseDown(with event: NSEvent) { forwardMouseButton(GHOSTTY_MOUSE_PRESS, GHOSTTY_MOUSE_LEFT, event) }
+    override func mouseDown(with event: NSEvent) {
+        // AppKit doesn't move first responder to a custom view on click, so
+        // without this a click into a non-focused grid cell forwarded the
+        // press to ghostty but keystrokes kept landing in the old cell.
+        if window?.firstResponder !== self {
+            window?.makeFirstResponder(self)
+        }
+        forwardMouseButton(GHOSTTY_MOUSE_PRESS, GHOSTTY_MOUSE_LEFT, event)
+    }
     override func mouseUp(with event: NSEvent) { forwardMouseButton(GHOSTTY_MOUSE_RELEASE, GHOSTTY_MOUSE_LEFT, event) }
     override func rightMouseDown(with event: NSEvent) { forwardMouseButton(GHOSTTY_MOUSE_PRESS, GHOSTTY_MOUSE_RIGHT, event) }
     override func rightMouseUp(with event: NSEvent) { forwardMouseButton(GHOSTTY_MOUSE_RELEASE, GHOSTTY_MOUSE_RIGHT, event) }

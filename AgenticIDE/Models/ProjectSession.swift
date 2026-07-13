@@ -68,7 +68,10 @@ final class ProjectSession: Identifiable {
     func removeWorkspace(id: UUID) {
         guard let idx = workspaces.firstIndex(where: { $0.id == id }) else { return }
         let removed = workspaces.remove(at: idx)
-        for cell in removed.cells { cell.terminal?.view.tearDown() }
+        for cell in removed.cells {
+            BrowserManager.shared.close(boundTo: cell)
+            cell.terminal?.view.tearDown()
+        }
 
         if activeWorkspaceId == id {
             let newIdx = idx > 0 ? idx - 1 : 0
@@ -95,7 +98,10 @@ final class ProjectSession: Identifiable {
 
     func resizeWorkspace(_ ws: Workspace, layout: GridLayout) {
         let dropped = ws.apply(layout)
-        for cell in dropped { cell.terminal?.view.tearDown() }
+        for cell in dropped {
+            BrowserManager.shared.close(boundTo: cell)
+            cell.terminal?.view.tearDown()
+        }
         saveHook?()
     }
 
@@ -111,6 +117,9 @@ final class ProjectSession: Identifiable {
     /// `PtyService` since that needs the project + store; the session wires the
     /// smart-rename hook and persists.
     func place(_ terminal: TerminalTab, icon: String?, in cell: WorkspaceCell) {
+        // The cell's browser (if any) deliberately survives — the incoming
+        // agent inherits it, so "close agent, launch a different one" keeps
+        // the page.
         cell.terminal?.view.tearDown()
         wireSmartRename(terminal)
         cell.icon = icon
@@ -121,6 +130,7 @@ final class ProjectSession: Identifiable {
     /// Close a cell's program, returning it to the launcher.
     func closeCell(_ cell: WorkspaceCell) {
         guard let tab = cell.terminal else { return }
+        // The cell's browser survives a program close (see `place`).
         cell.terminal = nil
         cell.icon = nil
         // If this cell was zoomed, the empty launcher has no restore button —

@@ -151,7 +151,7 @@ struct GitFooterBar: View {
     /// bottom-pinned footer. SwiftUI `Menu` offers no direction control.
     @State private var showBranchMenu = false
 
-    private enum Action: Equatable { case fetch, pull, push, commit }
+    private enum Action: Equatable { case fetch, pull, push, commit, branch, remote }
 
     var body: some View {
         if gitWatcher.isGitRepo {
@@ -216,6 +216,18 @@ struct GitFooterBar: View {
                          : "Stage all and commit (\(gitWatcher.changes.count) file\(gitWatcher.changes.count == 1 ? "" : "s")).",
                      enabled: !gitWatcher.changes.isEmpty,
                      badge: gitWatcher.changes.isEmpty ? nil : gitWatcher.changes.count)
+        actionButton(.branch,
+                     systemName: "plus",
+                     title: "New Branch",
+                     subtitle: "Create a branch from the current HEAD and switch to it.",
+                     enabled: true,
+                     badge: nil)
+        actionButton(.remote,
+                     systemName: "arrow.up.right.square",
+                     title: "Open Remote",
+                     subtitle: "Open the repository page on the origin remote in your browser.",
+                     enabled: true,
+                     badge: nil)
     }
 
     private var branchLabel: some View {
@@ -242,6 +254,7 @@ struct GitFooterBar: View {
             .fixedSize()
             .popover(isPresented: $showBranchMenu, arrowEdge: .top) {
                 branchMenuContent
+                    .presentationCornerRadius(DS.Radius.popover)
             }
             if let pullRequest = gitWatcher.pullRequest {
                 pullRequestBadge(pullRequest)
@@ -384,6 +397,8 @@ struct GitFooterBar: View {
             case .pull: Task { await runAction(action) }
             case .push: Task { await runAction(action) }
             case .commit: promptCommit()
+            case .branch: promptNewBranch()
+            case .remote: openRemote()
             }
         }
     }
@@ -405,6 +420,8 @@ struct GitFooterBar: View {
         case .commit:
             guard let msg = message else { return }
             result = await GitService.commitAll(at: project.path, message: msg)
+        case .branch, .remote:
+            return // routed directly from actionButton, never through here
         }
         if !result.ok {
             showAlert(title: "git \(actionVerb(action)) failed",
@@ -418,6 +435,8 @@ struct GitFooterBar: View {
         case .pull:   return "pull"
         case .push:   return "push"
         case .commit: return "commit"
+        case .branch: return "branch"
+        case .remote: return "remote"
         }
     }
 
@@ -448,6 +467,18 @@ struct GitFooterBar: View {
                       detail: result.output.isEmpty ? "git exited non-zero." : result.output)
         }
         await gitWatcher.refresh()
+    }
+
+    /// Opens the origin remote's web page in the default browser.
+    private func openRemote() {
+        Task {
+            if let url = await GitService.remoteWebURL(at: project.path) {
+                NSWorkspace.shared.open(url)
+            } else {
+                showAlert(title: "No remote configured",
+                          detail: "This repository has no `origin` remote to open.")
+            }
+        }
     }
 
     /// NSAlert with a name field. Creates a branch off HEAD and switches to it.
@@ -534,11 +565,11 @@ private struct FooterActionButton: View {
 
     @State private var isHovered = false
 
-    // Outer frame is the tap/hover target; the inner 18-pt box normalises every
-    // glyph to the same optical width so the four icons keep an even rhythm
+    // Outer frame is the tap/hover target; the inner 16-pt box normalises every
+    // glyph to the same optical width so the icons keep an even rhythm
     // regardless of each SF Symbol's intrinsic width.
-    private let buttonWidth: CGFloat = DS.Control.header
-    private let buttonHeight: CGFloat = DS.Control.header
+    private let buttonWidth: CGFloat = DS.Control.large
+    private let buttonHeight: CGFloat = DS.Control.large
 
     var body: some View {
         Button(action: action) {
@@ -550,10 +581,10 @@ private struct FooterActionButton: View {
                             .scaleEffect(0.6)
                     } else {
                         Image(systemName: systemName)
-                            .font(.system(size: 15, weight: .semibold))
+                            .font(.system(size: 13, weight: .semibold))
                     }
                 }
-                .frame(width: 18, height: 18)
+                .frame(width: 16, height: 16)
                 .frame(width: buttonWidth, height: buttonHeight)
                 .foregroundStyle(enabled ? AnyShapeStyle(.primary) : AnyShapeStyle(.tertiary))
                 .background(

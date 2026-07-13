@@ -60,6 +60,7 @@ struct WorkspaceCellView: View {
                     }
                 },
                 onCancel: { showServerPopover = false })
+                .presentationCornerRadius(DS.Radius.popover)
         }
     }
 
@@ -103,7 +104,10 @@ struct WorkspaceCellView: View {
         .frame(height: DS.Control.standard)
         .background(Color(nsColor: .windowBackgroundColor))
         .contentShape(Rectangle())
-        .onTapGesture { workspace.focusedCellId = cell.id }
+        .onTapGesture {
+            workspace.focusedCellId = cell.id
+            _ = tab.view.window?.makeFirstResponder(tab.view)
+        }
     }
 
     /// Only one cell should grab first responder on appear. Prefer the focused

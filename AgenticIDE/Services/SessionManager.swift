@@ -140,6 +140,19 @@ final class SessionManager {
         return nil
     }
 
+    /// The session + workspace containing this cell. Browser mode uses it to
+    /// close/relaunch the bound cell's program with the same code paths the
+    /// grid uses.
+    func locate(cellId: UUID) -> (session: ProjectSession, workspace: Workspace)? {
+        for (_, session) in sessions {
+            for ws in session.workspaces
+            where ws.cells.contains(where: { $0.id == cellId }) {
+                return (session, ws)
+            }
+        }
+        return nil
+    }
+
     /// Cheap persisted workspace count for projects that haven't been activated
     /// in this run yet. Does not restore or spawn any terminal surfaces.
     func savedWorkspaceCount(for projectId: UUID) -> Int {

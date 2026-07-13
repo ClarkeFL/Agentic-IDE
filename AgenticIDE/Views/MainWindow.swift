@@ -37,10 +37,34 @@ struct MainWindow: View {
     /// lights get their own strip. Fullscreen: no title bar, so reclaim the top
     /// for the cards (`ignoresSafeArea(.top)`).
     @State private var isFullScreen = false
+    /// Agent browser panes + browser-mode state. While mode is active the
+    /// whole three-pane layout is swapped for `BrowserModeView` (terminals
+    /// survive the detach exactly like a project switch); while collapsed with
+    /// browsers open, the edge bar invites expanding it.
+    @State private var browsers = BrowserManager.shared
 
     var body: some View {
         ZStack {
-            mainContent
+            if browsers.isModeActive {
+                // Slides in over a stationary grid and off again to reveal it
+                // (the grid branch below uses .identity so it never travels).
+                BrowserModeView(manager: browsers)
+                    .transition(.move(edge: .trailing))
+                    .zIndex(5)
+            } else {
+                HStack(spacing: 0) {
+                    mainContent
+                    if !browsers.sessions.isEmpty {
+                        BrowserEdgeBar(count: browsers.sessions.count) {
+                            browsers.isModeActive = true
+                        }
+                        .transition(.move(edge: .trailing).combined(with: .opacity))
+                    }
+                }
+                .transition(.identity)
+                // Edge bar sliding in/out compacts the workspace card smoothly.
+                .animation(.easeInOut(duration: 0.25), value: browsers.sessions.isEmpty)
+            }
             if showAsk {
                 AskOverlay(isPresented: $showAsk)
                     .transition(.move(edge: .trailing).combined(with: .opacity))
@@ -62,6 +86,14 @@ struct MainWindow: View {
                 notesPaneOpen.toggle()
             }
         }
+        .onReceive(NotificationCenter.default.publisher(for: .toggleBrowser)) { _ in
+            guard !browsers.sessions.isEmpty else { return }
+            browsers.isModeActive.toggle()
+        }
+        // Expand/collapse of browser mode. Value-scoped on the ZStack so it
+        // also animates when the mode auto-exits (last browser closed by the
+        // agent), where no withAnimation wraps the mutation.
+        .animation(.spring(response: 0.35, dampingFraction: 0.85), value: browsers.isModeActive)
     }
 
     /// Split view + every long-lived modifier. Extracted so the body's

@@ -40,9 +40,42 @@ struct CellLauncher {
             let command = commandWithBridgeHint(tool, cell: cell)
             let ql = QuickLaunch(label: tool.name, command: command, icon: tool.icon)
             let cfg = PtyService.quickLaunchConfig(ql, cwd: project.path)
-            place(TerminalTab(title: tool.name, config: cfg), tool: tool, in: cell, command: tool.command)
+            let tab = TerminalTab(title: tool.name, config: cfg)
+            place(tab, tool: tool, in: cell, command: tool.command)
+            // CLIs with no system-prompt flag (Codex, Gemini, opencode, …)
+            // would otherwise never learn the agentide bridge exists — brief
+            // them as their first input instead.
+            if tool.effectivePromptFlag == nil {
+                scheduleBriefing(for: tab, cell: cell)
+            }
             return nil
         }
+    }
+
+    /// Type the bridge briefing into a freshly-launched CLI as its first
+    /// message. ponytail: fixed boot delay — no "CLI is ready" signal exists;
+    /// a CLI slower than this misses the briefing (it can still discover the
+    /// bridge by running `agentide` itself).
+    private func scheduleBriefing(for tab: TerminalTab, cell: WorkspaceCell) {
+        let n = (workspace.cells.firstIndex(where: { $0.id == cell.id }) ?? 0) + 1
+        let text = cell.isOrchestrator
+            ? Self.orchestratorBriefing(cellNumber: n)
+            : Self.bootstrapBriefing(cellNumber: n)
+        DispatchQueue.main.asyncAfter(deadline: .now() + 6) { [weak tab, weak cell] in
+            // Only if this tab is still what's running in the cell.
+            guard let tab, cell?.terminal === tab else { return }
+            tab.view.sendInput(text, submit: true)
+        }
+    }
+
+    /// One-line launch briefing for CLIs briefed via first input (no inline
+    /// system-prompt flag). Short on purpose: `agentide` usage() is the full
+    /// reference. MUST stay newline-free or the CLI submits it early.
+    static func bootstrapBriefing(cellNumber n: Int) -> String {
+        "[AgenticIDE] You are running inside AgenticIDE (a macOS terminal IDE) as cell #\(n) of a workspace grid. "
+        + "The `agentide` CLI on your PATH controls the workspace: list/launch/drive sibling agent cells, and open your OWN visible browser pane to load and test web UI "
+        + "(`agentide browser open <url>`, then read/eval/errors/screenshot/viewport). "
+        + "Run `agentide` with no arguments for the full verb reference. Acknowledge in one short line, then wait for instructions."
     }
 
     private func place(_ tab: TerminalTab, tool: LaunchTool, in cell: WorkspaceCell, command: String) {
@@ -74,7 +107,16 @@ struct CellLauncher {
         "`agentide send <n> \"<text>\"` (type text and press Enter in cell n, e.g. to give another agent a task); " +
         "`agentide read <n>` (view the screen of cell n to see its reply); " +
         "`agentide status <n>` (check whether cell n is idle, working, completed, or failed); " +
-        "`agentide wait <n>` (block until cell n finishes)."
+        "`agentide wait <n>` (block until cell n finishes). " +
+        "You also have your OWN browser pane, visible to the user — ideal for loading and testing web UI: " +
+        "`agentide browser open <url>` (open or navigate it); " +
+        "`agentide browser read` (snapshot the page: title, interactive elements with CSS selectors, visible text); " +
+        "`agentide browser eval \"<js>\"` (run JavaScript in the page and print the result — use it to click, fill, scroll, and assert); " +
+        "`agentide browser errors` (print console errors, warnings, and uncaught exceptions since page load — check this after loading or interacting); " +
+        "`agentide browser screenshot` (save a PNG of the page and print its path — read that image file to SEE the page; needs the browser pane visible); " +
+        "`agentide browser viewport <fit|desktop|laptop|tablet|mobile>` (emulate a device screen size, e.g. to test responsive layouts); " +
+        "`agentide browser close` (close it when done). " +
+        "The user can also point at elements in your browser pane with the picker — selections arrive in your input as [browser pick] lines with a CSS selector and HTML snippet."
 
     /// The system-prompt note injected at launch. `orchestrator` selects the
     /// proactive coordination prompt; otherwise the lighter reactive hint.
