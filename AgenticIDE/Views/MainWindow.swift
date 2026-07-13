@@ -47,6 +47,7 @@ struct MainWindow: View {
         ZStack {
             if browsers.isModeActive {
                 BrowserModeView(manager: browsers)
+                    .transition(.move(edge: .trailing).combined(with: .opacity))
             } else {
                 HStack(spacing: 0) {
                     mainContent
@@ -54,8 +55,12 @@ struct MainWindow: View {
                         BrowserEdgeBar(count: browsers.sessions.count) {
                             browsers.isModeActive = true
                         }
+                        .transition(.move(edge: .trailing).combined(with: .opacity))
                     }
                 }
+                .transition(.move(edge: .leading).combined(with: .opacity))
+                // Edge bar sliding in/out compacts the workspace card smoothly.
+                .animation(.easeInOut(duration: 0.25), value: browsers.sessions.isEmpty)
             }
             if showAsk {
                 AskOverlay(isPresented: $showAsk)
@@ -78,6 +83,14 @@ struct MainWindow: View {
                 notesPaneOpen.toggle()
             }
         }
+        .onReceive(NotificationCenter.default.publisher(for: .toggleBrowser)) { _ in
+            guard !browsers.sessions.isEmpty else { return }
+            browsers.isModeActive.toggle()
+        }
+        // Expand/collapse of browser mode. Value-scoped on the ZStack so it
+        // also animates when the mode auto-exits (last browser closed by the
+        // agent), where no withAnimation wraps the mutation.
+        .animation(.spring(response: 0.35, dampingFraction: 0.85), value: browsers.isModeActive)
     }
 
     /// Split view + every long-lived modifier. Extracted so the body's
