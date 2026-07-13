@@ -79,8 +79,8 @@ final class CellBus {
     func handleBrowser(surfaceId: UUID, args: [String], body: String?,
                        completion: @escaping (String) -> Void) {
         guard let sessions, let located = sessions.locate(surfaceId: surfaceId),
-              let ownerTab = located.workspace.cells
-                  .compactMap(\.terminal).first(where: { $0.id == surfaceId }) else {
+              let ownerCell = located.workspace.cells
+                  .first(where: { $0.terminal?.id == surfaceId }) else {
             completion("error: this terminal isn't a known workspace cell")
             return
         }
@@ -96,19 +96,19 @@ final class CellBus {
                 completion("error: usage: browser open <url>")
                 return
             }
-            manager.open(url, owner: ownerTab)
+            manager.open(url, cell: ownerCell)
             completion("ok: opened \(url.absoluteString) — the user can see this browser; "
                        + "use `agentide browser read` / `agentide browser eval` to drive it")
 
         case "read":
-            guard let session = manager.session(ownerId: ownerTab.id) else {
+            guard let session = manager.session(for: ownerCell) else {
                 completion("error: no browser open — use `agentide browser open <url>` first")
                 return
             }
             session.snapshot { completion(String($0.prefix(8000))) }
 
         case "eval":
-            guard let session = manager.session(ownerId: ownerTab.id) else {
+            guard let session = manager.session(for: ownerCell) else {
                 completion("error: no browser open — use `agentide browser open <url>` first")
                 return
             }
@@ -120,21 +120,21 @@ final class CellBus {
             session.eval(js) { completion(String($0.prefix(8000))) }
 
         case "errors":
-            guard let session = manager.session(ownerId: ownerTab.id) else {
+            guard let session = manager.session(for: ownerCell) else {
                 completion("error: no browser open — use `agentide browser open <url>` first")
                 return
             }
             session.consoleErrors { completion(String($0.prefix(8000))) }
 
         case "screenshot":
-            guard let session = manager.session(ownerId: ownerTab.id) else {
+            guard let session = manager.session(for: ownerCell) else {
                 completion("error: no browser open — use `agentide browser open <url>` first")
                 return
             }
             session.screenshot(completion: completion)
 
         case "viewport":
-            guard let session = manager.session(ownerId: ownerTab.id) else {
+            guard let session = manager.session(for: ownerCell) else {
                 completion("error: no browser open — use `agentide browser open <url>` first")
                 return
             }
@@ -151,11 +151,11 @@ final class CellBus {
             }
 
         case "close":
-            guard manager.session(ownerId: ownerTab.id) != nil else {
+            guard let session = manager.session(for: ownerCell) else {
                 completion("error: no browser open")
                 return
             }
-            manager.close(ownerId: ownerTab.id)
+            manager.close(session)
             completion("ok: browser closed")
 
         default:

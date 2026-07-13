@@ -6,6 +6,10 @@ import WebKit
 /// active (`BrowserManager.isModeActive`); the bottom pager switches between
 /// cells that have browsers open.
 struct BrowserModeView: View {
+    @Environment(SessionManager.self) private var sessions
+    @Environment(ProjectStore.self) private var store
+    @Environment(LaunchToolStore.self) private var launchTools
+
     @Bindable var manager: BrowserManager
 
     var body: some View {
@@ -45,6 +49,12 @@ struct BrowserModeView: View {
                     .font(DS.Font.control)
                     .lineLimit(1)
                 Spacer()
+                if let session = manager.focused, let tab = session.ownerTab {
+                    BrowserToolbarButton(systemName: "xmark",
+                                         help: "Close this agent (the browser stays; launch another)") {
+                        closeAgent(session, tab: tab)
+                    }
+                }
             }
             .padding(.horizontal, DS.Space.sm)
             .frame(height: DS.Control.header)
@@ -53,6 +63,13 @@ struct BrowserModeView: View {
 
             if let tab = manager.focused?.ownerTab {
                 GhosttyTerminal(view: tab.view, isActive: true, autoFocus: false)
+            } else if let session = manager.focused, let cell = session.ownerCell {
+                // Bound cell with no program — the same launcher a grid cell
+                // shows, launching straight into the bound cell so the new
+                // agent inherits this browser.
+                CellLauncherView(tools: launchTools.enabledTools) { tool in
+                    launch(tool, into: cell)
+                }
             } else if let session = manager.focused, session.sourceWorkspace != nil {
                 agentPicker(session)
             } else {
@@ -60,7 +77,7 @@ struct BrowserModeView: View {
                     Image(systemName: "terminal")
                         .font(.system(size: DS.Icon.large, weight: .light))
                         .foregroundStyle(.tertiary)
-                    Text("The agent that owned this browser has closed.")
+                    Text("The cell that owned this browser is gone.")
                         .font(.callout)
                         .foregroundStyle(.secondary)
                 }
@@ -74,6 +91,27 @@ struct BrowserModeView: View {
         }
     }
 
+    /// Close the bound cell's program with the same code path as the grid's
+    /// ✕ button. The browser stays bound to the (now empty) cell and the
+    /// launcher takes the left column.
+    private func closeAgent(_ session: BrowserSession, tab: TerminalTab) {
+        guard let cell = session.ownerCell,
+              let located = sessions.locate(cellId: cell.id) else { return }
+        located.session.closeCell(cell)
+    }
+
+    /// Launch a tool into the browser's bound cell — identical to launching
+    /// from the grid, so hints/persistence stay consistent.
+    private func launch(_ tool: LaunchTool, into cell: WorkspaceCell) {
+        guard let located = sessions.locate(cellId: cell.id),
+              let project = store.projects.first(where: { $0.id == located.session.projectId })
+        else { return }
+        located.workspace.focusedCellId = cell.id
+        let launcher = CellLauncher(project: project, session: located.session,
+                                    workspace: located.workspace, store: store)
+        _ = launcher.launch(tool, into: cell)
+    }
+
     /// User-opened browser with no agent yet: offer the source workspace's
     /// running cells; picking one wires the browser to that agent (its
     /// `agentide browser` verbs and the element picker target this pane).
@@ -82,22 +120,21 @@ struct BrowserModeView: View {
             Text("Choose an agent to drive this browser")
                 .font(DS.Font.bodySemibold)
             let candidates = (session.sourceWorkspace?.cells ?? [])
-                .compactMap(\.terminal)
-                .filter { manager.session(ownerId: $0.id) == nil }
+                .filter { $0.terminal != nil && manager.session(for: $0) == nil }
             if candidates.isEmpty {
                 Text("No free cells are running. Go back to the grid and launch an agent (e.g. Claude) first.")
                     .font(.callout)
                     .foregroundStyle(.secondary)
             } else {
-                ForEach(candidates, id: \.id) { tab in
+                ForEach(candidates, id: \.id) { cell in
                     Button {
-                        session.attach(to: tab)
+                        session.attach(to: cell)
                     } label: {
                         HStack(spacing: DS.Space.sm) {
                             Image(systemName: "terminal")
                                 .font(.system(size: DS.Icon.small, weight: .semibold))
                                 .foregroundStyle(.secondary)
-                            Text(tab.title)
+                            Text(cell.terminal?.title ?? "Terminal")
                                 .font(DS.Font.body)
                                 .lineLimit(1)
                             Spacer()

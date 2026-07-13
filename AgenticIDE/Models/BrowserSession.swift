@@ -23,20 +23,20 @@ final class BrowserManager {
         sessions.first(where: { $0.id == focusedId }) ?? sessions.first
     }
 
-    func session(ownerId: UUID) -> BrowserSession? {
-        sessions.first(where: { $0.ownerId == ownerId })
+    func session(for cell: WorkspaceCell) -> BrowserSession? {
+        sessions.first(where: { $0.ownerCell === cell })
     }
 
-    /// Open (or navigate) the browser pane owned by this terminal. Creating a
-    /// pane makes the edge bar appear; it never auto-expands browser mode —
+    /// Open (or navigate) the browser pane bound to this grid cell. Creating
+    /// a pane makes the edge bar appear; it never auto-expands browser mode —
     /// the user chooses when to look.
     @discardableResult
-    func open(_ url: URL, owner: TerminalTab) -> BrowserSession {
+    func open(_ url: URL, cell: WorkspaceCell) -> BrowserSession {
         let session: BrowserSession
-        if let existing = self.session(ownerId: owner.id) {
+        if let existing = self.session(for: cell) {
             session = existing
         } else {
-            session = BrowserSession(owner: owner)
+            session = BrowserSession(cell: cell)
             sessions.append(session)
             if focusedId == nil { focusedId = session.id }
         }
@@ -44,11 +44,11 @@ final class BrowserManager {
         return session
     }
 
-    /// User-opened browser (workspace-header globe button): no owning agent
+    /// User-opened browser (workspace-header globe button): no owning cell
     /// yet — browser mode expands immediately and the left column offers the
     /// workspace's cells to attach one.
     func openManual(from workspace: Workspace) {
-        let session = BrowserSession(owner: nil, workspace: workspace)
+        let session = BrowserSession(cell: nil, workspace: workspace)
         sessions.append(session)
         focusedId = session.id
         isModeActive = true
@@ -62,8 +62,12 @@ final class BrowserManager {
         if sessions.isEmpty { isModeActive = false }
     }
 
-    func close(ownerId: UUID) {
-        guard let session = session(ownerId: ownerId) else { return }
+    /// A cell leaving the grid (workspace removed/resized) takes its browser
+    /// with it. Closing just the cell's PROGRAM does not — the browser stays
+    /// and the left column shows the launcher so a different agent can take
+    /// over.
+    func close(boundTo cell: WorkspaceCell) {
+        guard let session = session(for: cell) else { return }
         close(session)
     }
 
@@ -135,15 +139,20 @@ enum BrowserViewport: String, CaseIterable, Identifiable {
 @Observable
 final class BrowserSession: NSObject, Identifiable, WKNavigationDelegate, WKScriptMessageHandler {
     let id = UUID()
-    /// The owning terminal's surface id (`TerminalTab.id`). nil for a
-    /// user-opened browser until an agent is attached.
-    private(set) var ownerId: UUID?
-    private(set) weak var ownerTab: TerminalTab?
+    /// The grid cell this browser is bound to — the browser belongs to the
+    /// CELL, not to a specific program: close the cell's agent and launch a
+    /// different one, and the new agent inherits this pane. nil for a
+    /// user-opened browser until a cell is attached.
+    private(set) weak var ownerCell: WorkspaceCell?
     /// The workspace a user-opened browser came from — source of the cells
     /// offered by the attach picker. nil for agent-opened browsers (they
     /// already have an owner).
     private(set) weak var sourceWorkspace: Workspace?
     let webView: WKWebView
+
+    /// The agent currently driving this pane (the bound cell's live
+    /// terminal). Picker selections land here.
+    var ownerTab: TerminalTab? { ownerCell?.terminal }
 
     var urlString: String = ""
     var pageTitle: String = ""
@@ -159,9 +168,8 @@ final class BrowserSession: NSObject, Identifiable, WKNavigationDelegate, WKScri
         didSet { applyPicker() }
     }
 
-    init(owner: TerminalTab?, workspace: Workspace? = nil) {
-        self.ownerId = owner?.id
-        self.ownerTab = owner
+    init(cell: WorkspaceCell?, workspace: Workspace? = nil) {
+        self.ownerCell = cell
         self.sourceWorkspace = workspace
 
         let config = WKWebViewConfiguration()
@@ -184,12 +192,11 @@ final class BrowserSession: NSObject, Identifiable, WKNavigationDelegate, WKScri
         webView.navigationDelegate = self
     }
 
-    /// Give a user-opened browser its driving agent. From here on that
-    /// agent's `agentide browser` verbs hit this pane and picker selections
-    /// land in its input.
-    func attach(to tab: TerminalTab) {
-        ownerId = tab.id
-        ownerTab = tab
+    /// Give a user-opened browser its driving cell. From here on the cell's
+    /// agent (current and future) owns this pane: its `agentide browser`
+    /// verbs hit it and picker selections land in its input.
+    func attach(to cell: WorkspaceCell) {
+        ownerCell = cell
     }
 
     func load(_ url: URL) {

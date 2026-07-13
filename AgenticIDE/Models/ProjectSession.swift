@@ -69,10 +69,8 @@ final class ProjectSession: Identifiable {
         guard let idx = workspaces.firstIndex(where: { $0.id == id }) else { return }
         let removed = workspaces.remove(at: idx)
         for cell in removed.cells {
-            if let tab = cell.terminal {
-                BrowserManager.shared.close(ownerId: tab.id)
-                tab.view.tearDown()
-            }
+            BrowserManager.shared.close(boundTo: cell)
+            cell.terminal?.view.tearDown()
         }
 
         if activeWorkspaceId == id {
@@ -101,10 +99,8 @@ final class ProjectSession: Identifiable {
     func resizeWorkspace(_ ws: Workspace, layout: GridLayout) {
         let dropped = ws.apply(layout)
         for cell in dropped {
-            if let tab = cell.terminal {
-                BrowserManager.shared.close(ownerId: tab.id)
-                tab.view.tearDown()
-            }
+            BrowserManager.shared.close(boundTo: cell)
+            cell.terminal?.view.tearDown()
         }
         saveHook?()
     }
@@ -121,10 +117,10 @@ final class ProjectSession: Identifiable {
     /// `PtyService` since that needs the project + store; the session wires the
     /// smart-rename hook and persists.
     func place(_ terminal: TerminalTab, icon: String?, in cell: WorkspaceCell) {
-        if let old = cell.terminal {
-            BrowserManager.shared.close(ownerId: old.id)
-            old.view.tearDown()
-        }
+        // The cell's browser (if any) deliberately survives — the incoming
+        // agent inherits it, so "close agent, launch a different one" keeps
+        // the page.
+        cell.terminal?.view.tearDown()
         wireSmartRename(terminal)
         cell.icon = icon
         cell.terminal = terminal
@@ -134,7 +130,7 @@ final class ProjectSession: Identifiable {
     /// Close a cell's program, returning it to the launcher.
     func closeCell(_ cell: WorkspaceCell) {
         guard let tab = cell.terminal else { return }
-        BrowserManager.shared.close(ownerId: tab.id)
+        // The cell's browser survives a program close (see `place`).
         cell.terminal = nil
         cell.icon = nil
         // If this cell was zoomed, the empty launcher has no restore button —
