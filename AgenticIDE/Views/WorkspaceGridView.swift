@@ -45,7 +45,9 @@ struct WorkspaceGridView: View {
         // The 1px stack spacing reveals this colour as the inter-cell seam; a
         // dedicated separator colour stays visible in both light and dark (the
         // card fill behind is too close to the cell fill in dark mode).
-        .background(Color(nsColor: .separatorColor))
+        // ignoresSafeAreaEdges: [] — see WorkspaceCellView; don't paint into
+        // the titlebar safe-area strip over the workspace header.
+        .background(Color(nsColor: .separatorColor), ignoresSafeAreaEdges: [])
     }
 
     private func cellView(_ cell: WorkspaceCell, isZoomed: Bool) -> some View {

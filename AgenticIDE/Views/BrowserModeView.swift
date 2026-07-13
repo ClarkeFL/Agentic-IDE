@@ -13,20 +13,19 @@ struct BrowserModeView: View {
     @Bindable var manager: BrowserManager
 
     var body: some View {
-        HStack(spacing: DS.Space.md) {
+        HStack(spacing: 0) {
             agentColumn
                 .frame(width: 380)
                 .frame(maxHeight: .infinity)
-                .paneCard(fill: Color(nsColor: .textBackgroundColor), insets: cardInsets)
+                .background(Color(nsColor: .textBackgroundColor))
             if let session = manager.focused {
+                Divider()
                 BrowserColumn(manager: manager, session: session)
                     .id(session.id)
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
-                    .paneCard(fill: Color(nsColor: .controlBackgroundColor), insets: cardInsets)
+                    .background(Color(nsColor: .controlBackgroundColor))
             }
         }
-        .padding(EdgeInsets(top: DS.Space.xs, leading: DS.Space.md,
-                            bottom: DS.Space.md, trailing: DS.Space.md))
         .background(Color(nsColor: .windowBackgroundColor))
         // ⌘←/⌘→ page through open browsers here. These post .moveWorkspace,
         // whose normal observer (ProjectWorkspaceView) is unmounted while
@@ -35,12 +34,6 @@ struct BrowserModeView: View {
             guard let direction = note.object as? Int else { return }
             manager.focusNext(direction)
         }
-    }
-
-    /// The outer HStack padding supplies the window margins and the spacing
-    /// supplies the seam, so the cards themselves carry none.
-    private var cardInsets: EdgeInsets {
-        EdgeInsets(top: 0, leading: 0, bottom: 0, trailing: 0)
     }
 
     // MARK: - Left: the agent driving the browser
@@ -458,9 +451,12 @@ struct BrowserEdgeBar: View {
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
-        .paneCard(fill: Color(nsColor: .controlBackgroundColor),
-                  insets: EdgeInsets(top: DS.Space.xs, leading: 0,
-                                     bottom: DS.Space.md, trailing: DS.Space.md))
+        .background(Color(nsColor: .controlBackgroundColor))
+        .overlay(alignment: .leading) {
+            Rectangle()
+                .fill(Color(nsColor: .separatorColor))
+                .frame(width: 1)
+        }
         .onHover { hovering = $0 }
         .help("Show agent browser")
     }

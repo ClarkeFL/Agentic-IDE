@@ -32,10 +32,10 @@ struct MainWindow: View {
     /// the choice survives relaunch. Toggled by ⌘⇧N (`.toggleNotes`), the
     /// workspace header's note button, and the pane's own close button.
     @AppStorage("notesPaneOpen") private var notesPaneOpen = false
-    /// True while the window is in macOS fullscreen. Windowed: keep the top
-    /// safe area so the cards sit below the title bar and the floating traffic
-    /// lights get their own strip. Fullscreen: no title bar, so reclaim the top
-    /// for the cards (`ignoresSafeArea(.top)`).
+    /// True while the window is in macOS fullscreen. The panes always run to
+    /// the very top of the window now; this only controls whether the sidebar
+    /// header reserves a leading inset for the floating traffic lights
+    /// (windowed) or reclaims it (fullscreen hides them).
     @State private var isFullScreen = false
     /// Agent browser panes + browser-mode state. While mode is active the
     /// whole three-pane layout is swapped for `BrowserModeView` (terminals
@@ -102,10 +102,9 @@ struct MainWindow: View {
     /// reasonable time" budget once the AskOverlay branch was added.
     private var mainContent: some View {
         splitView
-            // Windowed → keep the top safe area so the cards sit below the
-            // title-bar strip (the traffic lights get their own room).
-            // Fullscreen → no title bar, so reclaim the top for the cards.
-            .ignoresSafeArea(.container, edges: isFullScreen ? .top : [])
+            // The title bar is hidden and the panes own the whole window
+            // height — the sidebar header hosts the traffic lights.
+            .ignoresSafeArea(.container, edges: .top)
             .frame(maxWidth: .infinity, maxHeight: .infinity)
             .navigationTitle(activeProject?.name ?? "Agentic IDE")
             .onAppear {
@@ -215,7 +214,8 @@ struct MainWindow: View {
 
     @ViewBuilder
     private var sidebarPane: some View {
-        ProjectSidebarView(selectedProjectId: $selectedProjectId)
+        ProjectSidebarView(selectedProjectId: $selectedProjectId,
+                           reserveTrafficLights: !isFullScreen)
             .environment(store)
             .environment(sessions)
     }
@@ -237,18 +237,10 @@ struct MainWindow: View {
 
     // MARK: - Pane 4: Terminals
 
-    /// True when the Notes pane (⑤) is actually on screen to the right of the
-    /// workspace. Mirrors the `pane5Collapsed` condition so the workspace card
-    /// can drop its trailing window-edge margin and let the divider be the seam.
-    private var notesPaneVisible: Bool {
-        notesPaneOpen && fileAccessProject != nil
-    }
-
     @ViewBuilder
     private var terminalsPane: some View {
         if let project = activeProject {
-            ProjectWorkspaceView(project: project,
-                                 trailingInset: notesPaneVisible ? 0 : DS.Space.md)
+            ProjectWorkspaceView(project: project)
                 .environment(store)
                 .environment(sessions)
         } else if store.projects.filter({ !$0.archived }).isEmpty {
@@ -262,6 +254,7 @@ struct MainWindow: View {
                     .font(.subheadline).foregroundStyle(.tertiary)
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
+            .background(Color(nsColor: .controlBackgroundColor))
         } else {
             paneEmptyState(systemImage: "terminal",
                            text: "Select a project to launch terminals.")

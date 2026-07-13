@@ -37,10 +37,9 @@ struct PersistentSplitView<P1: View, P2: View, P3: View, P4: View, P5: View>: Vi
     let pane3Collapsed: Bool
 
     /// Fixed width of the thin rail region shown in place of a collapsed
-    /// pane 2: a 26pt card + 8pt trailing gap (stands in for the divider
-    /// gap before the workspace card).
+    /// pane 2: 26pt of rail + 1pt trailing hairline seam.
     /// Computed (not stored) — generic types can't have stored statics.
-    static var railWidth: CGFloat { 34 }
+    static var railWidth: CGFloat { 27 }
 
     let pane4Min: CGFloat
     let pane4Initial: CGFloat
@@ -401,13 +400,15 @@ private struct Pane2ReopenRail: View {
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .background(isHovered ? Color.primary.opacity(0.04) : Color.clear)
-        // Same card chrome as the Explorer pane this rail stands in for, so
-        // the collapsed state reads as a thin floating card, not a flat
-        // strip. Trailing margin stands in for the divider gap that a
-        // visible pane 2 would have before the workspace card.
-        .paneCard(fill: Color(nsColor: .textBackgroundColor),
-                  insets: EdgeInsets(top: DS.Space.xs, leading: 0,
-                                     bottom: DS.Space.md, trailing: DS.Space.md))
+        // Same fill as the Explorer pane this rail stands in for; the
+        // trailing hairline is the seam against the workspace pane (a
+        // collapsed pane 2 has no DividerView of its own).
+        .background(Color(nsColor: .textBackgroundColor))
+        .overlay(alignment: .trailing) {
+            Rectangle()
+                .fill(Color(nsColor: .separatorColor))
+                .frame(width: 1)
+        }
         .contentShape(Rectangle())
         .onTapGesture(perform: onExpand)
         .onHover { isHovered = $0 }
@@ -422,16 +423,14 @@ private struct Pane2ReopenRail: View {
 private struct DividerView: View {
     /// Visible separator thickness — the 1pt grey line the user sees.
     static let thickness: CGFloat = 1
-    /// Layout-reserved width. Kept small (≈ the card padding) so the gap at a
-    /// divider matches the gap at the window edges. The actual grab target is
-    /// widened beyond this via `contentShape(...inset(-5))`, so the divider is
-    /// still easy to grab without reserving a big visible gap.
+    /// Width of the invisible grab/hover zone. Wider than the layout width —
+    /// it overflows over the neighbouring panes so the seam stays easy to
+    /// grab even though the panes' edges touch.
     static let hitArea: CGFloat = 8
-    /// Layout-reserved width. The body's ZStack sizes to its widest child,
-    /// so the divider takes `hitArea` worth of horizontal space in the
-    /// HStack regardless of the visible thickness. Parents that need to
-    /// budget total width must use THIS value, not `thickness`.
-    static let layoutWidth: CGFloat = hitArea
+    /// Layout-reserved width: just the hairline. The panes on either side sit
+    /// flush against it (edge-to-edge design, no card gaps). Parents budget
+    /// total width with THIS value.
+    static let layoutWidth: CGFloat = thickness
     let onDrag: (CGFloat) -> Void
     let onDragStart: () -> Void
     let onDragEnd: () -> Void
@@ -450,6 +449,9 @@ private struct DividerView: View {
             CursorTrackingView(isHovered: $isHovered)
                 .frame(width: Self.hitArea)
         }
+        // Only the hairline takes layout space; the wider hover/grab children
+        // overflow symmetrically onto the neighbouring panes.
+        .frame(width: Self.layoutWidth)
         .frame(maxHeight: .infinity)
         // Grab target extends well beyond the slim reserved width so the
         // divider stays easy to grab even though it only reserves 8pt.
