@@ -315,9 +315,10 @@ struct ProjectSidebarView: View {
             )
             .contentShape(Rectangle())
             .onTapGesture {
-                withAnimation(.spring(response: 0.5, dampingFraction: 0.82)) {
-                    selectedProjectId = project.id
-                }
+                // No withAnimation here: the transaction would propagate into
+                // pane ④'s workspace slide transition, making project swaps
+                // slide like a workspace swipe.
+                selectedProjectId = project.id
             }
             .draggable(project.id.uuidString) {
                 Label(project.name, systemImage: "folder.fill")
