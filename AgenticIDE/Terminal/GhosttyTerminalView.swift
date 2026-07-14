@@ -128,13 +128,15 @@ final class GhosttyTerminalView: NSView, NSTextInputClient {
     deinit {
         NotificationCenter.default.removeObserver(self)
         if let surface {
-            // ghostty_surface_free reaps the PTY child and tears down the
-            // renderer, which can take a few hundred ms. Hand the handle off
-            // to a background queue so the close click returns immediately
-            // and the SwiftUI re-render isn't blocked.
+            // ghostty_surface_free must run on the main thread: the renderer
+            // shares a lock with its CAMetalLayer, and freeing it off-main
+            // races the main thread's CA commit while the layer is still in
+            // the tree (os_unfair_lock corrupt crash on workspace close).
+            // Async keeps the close click responsive — the free lands after
+            // the current SwiftUI update has detached the layer.
             let handle = surface
             self.surface = nil
-            DispatchQueue.global(qos: .background).async {
+            DispatchQueue.main.async {
                 ghostty_surface_free(handle)
             }
         }
@@ -146,7 +148,8 @@ final class GhosttyTerminalView: NSView, NSTextInputClient {
     func tearDown() {
         guard let handle = surface else { return }
         surface = nil
-        DispatchQueue.global(qos: .background).async {
+        // Main thread only — see deinit for why (CA commit race).
+        DispatchQueue.main.async {
             ghostty_surface_free(handle)
         }
     }
