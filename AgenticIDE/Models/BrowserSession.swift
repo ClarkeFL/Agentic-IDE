@@ -164,8 +164,9 @@ final class BrowserSession: NSObject, Identifiable, WKNavigationDelegate, WKScri
     /// user-agent or touch-event emulation; add a UA switch if a site
     /// serves a genuinely different mobile experience.
     var viewport: BrowserViewport = .fit
-    /// Element picker: while on, hovering highlights elements and clicking
-    /// types the selection into the owning agent's input.
+    /// Annotation picker: while on, hover/drag highlights a component range
+    /// and a chip lets the user type a change note that submits into the
+    /// owning agent's input.
     var pickerActive = false {
         didSet { applyPicker() }
     }
@@ -520,27 +521,87 @@ final class BrowserSession: NSObject, Identifiable, WKNavigationDelegate, WKScri
               let selector = dict["selector"] as? String else { return }
         let text = (dict["text"] as? String) ?? ""
         let html = (dict["html"] as? String) ?? ""
-        var line = "[browser pick] \(selector)"
+        let note = ((dict["note"] as? String) ?? "")
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        let action = (dict["action"] as? String) ?? (note.isEmpty ? "pick" : "annotate")
+
+        var line = action == "annotate" ? "[browser annotate] \(selector)" : "[browser pick] \(selector)"
         if !text.isEmpty { line += " | text: \"\(text)\"" }
         if !html.isEmpty { line += " | html: \(html)" }
-        // ponytail: inserted WITHOUT submit so the user can append an
-        // instruction ("make this blue") before pressing Enter themselves.
-        // Must stay newline-free or the agent CLI submits early.
+        if !note.isEmpty { line += " | \(note)" }
+
+        // Must stay newline-free or the agent CLI submits early / splits the prompt.
         let flat = line.replacingOccurrences(of: "\n", with: " ")
-        ownerTab?.view.sendInput(flat + " ", submit: false)
+        // Annotate (chip + Enter) submits immediately. Bare pick (legacy) still
+        // inserts without submit so the user can append more context first.
+        let submit = action == "annotate" && !note.isEmpty
+        ownerTab?.view.sendInput(submit ? flat : flat + " ", submit: submit)
     }
 
     // MARK: - Injected JS
 
-    /// Hover-highlight + click-to-capture element picker. Injected on every
-    /// page, dormant until `setActive(true)`.
+    /// Element picker with marquee drag-select + floating annotation chip.
+    /// Injected on every page, dormant until `setActive(true)`. Click or drag
+    /// a range → chip appears under the highlight → type a change note →
+    /// Enter posts to native and submits into the owning agent.
     private static let pickerJS = #"""
     (function () {
       if (window.__agentidePicker) { return; }
-      var box = document.createElement('div');
-      box.style.cssText = 'position:fixed;z-index:2147483647;pointer-events:none;' +
+
+      var HIGHLIGHT =
+        'position:fixed;z-index:2147483646;pointer-events:none;' +
         'border:2px solid #007AFF;background:rgba(0,122,255,0.12);border-radius:3px;display:none;';
-      var state = { active: false, el: null };
+      var MARQUEE =
+        'position:fixed;z-index:2147483645;pointer-events:none;' +
+        'border:1px dashed #007AFF;background:rgba(0,122,255,0.08);display:none;';
+      var CHIP =
+        'position:fixed;z-index:2147483647;display:none;box-sizing:border-box;' +
+        'min-width:220px;max-width:360px;padding:6px 8px;border-radius:10px;' +
+        'background:rgba(28,28,30,0.96);border:1px solid rgba(255,255,255,0.12);' +
+        'box-shadow:0 8px 28px rgba(0,0,0,0.45);font:12px -apple-system,system-ui,sans-serif;' +
+        'color:#f5f5f7;';
+
+      var box = document.createElement('div');
+      box.setAttribute('data-agentide-ui', '1');
+      box.style.cssText = HIGHLIGHT;
+
+      var marquee = document.createElement('div');
+      marquee.setAttribute('data-agentide-ui', '1');
+      marquee.style.cssText = MARQUEE;
+
+      var chip = document.createElement('div');
+      chip.setAttribute('data-agentide-ui', '1');
+      chip.style.cssText = CHIP;
+      chip.innerHTML =
+        '<div style="font-size:10px;opacity:0.55;margin:0 0 4px 2px;letter-spacing:0.02em;">' +
+        'Annotate · Enter to send · Esc to cancel</div>' +
+        '<input type="text" data-agentide-ui="1" placeholder="What should change?" ' +
+        'style="width:100%;box-sizing:border-box;border:none;outline:none;' +
+        'background:rgba(255,255,255,0.08);color:#f5f5f7;border-radius:6px;' +
+        'padding:7px 9px;font:12px -apple-system,system-ui,sans-serif;" />';
+      var input = chip.querySelector('input');
+
+      var state = {
+        active: false,
+        el: null,
+        dragging: false,
+        dragMoved: false,
+        startX: 0,
+        startY: 0,
+        annotating: false
+      };
+
+      function isUI(el) {
+        return !!(el && el.closest && el.closest('[data-agentide-ui]'));
+      }
+
+      function ensureMounted() {
+        if (!document.body) { return; }
+        if (!box.isConnected) { document.body.appendChild(box); }
+        if (!marquee.isConnected) { document.body.appendChild(marquee); }
+        if (!chip.isConnected) { document.body.appendChild(chip); }
+      }
+
       function cssPath(el) {
         if (el.id) { return '#' + CSS.escape(el.id); }
         var parts = [];
@@ -563,40 +624,242 @@ final class BrowserSession: NSObject, Identifiable, WKNavigationDelegate, WKScri
         }
         return parts.join(' > ');
       }
-      function onMove(e) {
-        if (!state.active) { return; }
-        var el = e.target;
-        if (el === box || !(el instanceof Element)) { return; }
-        state.el = el;
-        if (!box.isConnected && document.body) { document.body.appendChild(box); }
+
+      function placeBoxOn(el) {
+        if (!el) { box.style.display = 'none'; return; }
+        ensureMounted();
         var r = el.getBoundingClientRect();
         box.style.display = 'block';
         box.style.left = r.left + 'px';
         box.style.top = r.top + 'px';
-        box.style.width = r.width + 'px';
-        box.style.height = r.height + 'px';
+        box.style.width = Math.max(0, r.width) + 'px';
+        box.style.height = Math.max(0, r.height) + 'px';
       }
-      function onClick(e) {
-        if (!state.active || !state.el) { return; }
-        e.preventDefault();
-        e.stopPropagation();
+
+      function hideMarquee() {
+        marquee.style.display = 'none';
+      }
+
+      function updateMarquee(x1, y1, x2, y2) {
+        ensureMounted();
+        var left = Math.min(x1, x2);
+        var top = Math.min(y1, y2);
+        var w = Math.abs(x2 - x1);
+        var h = Math.abs(y2 - y1);
+        marquee.style.display = 'block';
+        marquee.style.left = left + 'px';
+        marquee.style.top = top + 'px';
+        marquee.style.width = w + 'px';
+        marquee.style.height = h + 'px';
+        return { left: left, top: top, right: left + w, bottom: top + h, width: w, height: h };
+      }
+
+      function rectOverlap(a, b) {
+        var x = Math.max(0, Math.min(a.right, b.right) - Math.max(a.left, b.left));
+        var y = Math.max(0, Math.min(a.bottom, b.bottom) - Math.max(a.top, b.top));
+        return x * y;
+      }
+
+      /// Largest element mostly inside the marquee = the "component range".
+      /// Falls back to elementFromPoint at the marquee center.
+      function pickFromMarquee(m) {
+        var best = null;
+        var bestArea = 0;
+        var all = document.body ? document.body.querySelectorAll('*') : [];
+        for (var i = 0; i < all.length; i++) {
+          var el = all[i];
+          if (isUI(el)) { continue; }
+          if (el === document.documentElement || el === document.body) { continue; }
+          var r = el.getBoundingClientRect();
+          if (r.width < 2 || r.height < 2) { continue; }
+          var er = { left: r.left, top: r.top, right: r.right, bottom: r.bottom };
+          var overlap = rectOverlap(m, er);
+          if (overlap <= 0) { continue; }
+          var area = r.width * r.height;
+          if (area <= 0) { continue; }
+          // Require most of the element to sit inside the marquee so we don't
+          // latch onto the whole page when the user draws a small box.
+          if (overlap / area < 0.55) { continue; }
+          if (area > bestArea) {
+            bestArea = area;
+            best = el;
+          }
+        }
+        if (best) { return best; }
+        var cx = (m.left + m.right) / 2;
+        var cy = (m.top + m.bottom) / 2;
+        var hit = document.elementFromPoint(cx, cy);
+        if (hit && isUI(hit)) { hit = null; }
+        return hit instanceof Element ? hit : null;
+      }
+
+      function hideChip() {
+        chip.style.display = 'none';
+        input.value = '';
+        state.annotating = false;
+      }
+
+      function showChipFor(el) {
+        if (!el) { hideChip(); return; }
+        ensureMounted();
+        state.el = el;
+        state.annotating = true;
+        placeBoxOn(el);
+        var r = el.getBoundingClientRect();
+        var chipW = 280;
+        var left = Math.min(Math.max(8, r.left), window.innerWidth - chipW - 8);
+        var top = r.bottom + 8;
+        if (top + 64 > window.innerHeight) {
+          top = Math.max(8, r.top - 64);
+        }
+        chip.style.display = 'block';
+        chip.style.left = left + 'px';
+        chip.style.top = top + 'px';
+        chip.style.width = chipW + 'px';
+        // Defer focus so the mouseup that opened us doesn't steal it back.
+        setTimeout(function () { try { input.focus(); input.select(); } catch (e) {} }, 0);
+      }
+
+      function clearSelection() {
+        hideChip();
+        hideMarquee();
+        box.style.display = 'none';
+        state.el = null;
+        state.dragging = false;
+        state.dragMoved = false;
+      }
+
+      function submitAnnotation() {
+        if (!state.el) { return; }
+        var note = (input.value || '').trim();
+        if (!note) { return; }
         var el = state.el;
         var text = (el.innerText || el.value || '').trim().replace(/\s+/g, ' ').slice(0, 120);
         window.webkit.messageHandlers.agentidePicker.postMessage({
+          action: 'annotate',
           selector: cssPath(el),
           text: text,
-          html: el.outerHTML.replace(/\s+/g, ' ').slice(0, 400)
+          html: el.outerHTML.replace(/\s+/g, ' ').slice(0, 400),
+          note: note
         });
+        clearSelection();
       }
+
+      function onMove(e) {
+        if (!state.active) { return; }
+        if (state.dragging) {
+          var dx = e.clientX - state.startX;
+          var dy = e.clientY - state.startY;
+          if (Math.abs(dx) > 4 || Math.abs(dy) > 4) { state.dragMoved = true; }
+          if (state.dragMoved) {
+            updateMarquee(state.startX, state.startY, e.clientX, e.clientY);
+            var m = {
+              left: Math.min(state.startX, e.clientX),
+              top: Math.min(state.startY, e.clientY),
+              right: Math.max(state.startX, e.clientX),
+              bottom: Math.max(state.startY, e.clientY)
+            };
+            var preview = pickFromMarquee(m);
+            if (preview) { placeBoxOn(preview); state.el = preview; }
+          }
+          return;
+        }
+        if (state.annotating) { return; }
+        var el = e.target;
+        if (isUI(el) || !(el instanceof Element)) { return; }
+        state.el = el;
+        placeBoxOn(el);
+      }
+
+      function onDown(e) {
+        if (!state.active || e.button !== 0) { return; }
+        if (isUI(e.target)) { return; }
+        // Starting a new pick dismisses an open chip.
+        if (state.annotating) { hideChip(); }
+        state.dragging = true;
+        state.dragMoved = false;
+        state.startX = e.clientX;
+        state.startY = e.clientY;
+        e.preventDefault();
+        e.stopPropagation();
+      }
+
+      function onUp(e) {
+        if (!state.active || !state.dragging) { return; }
+        state.dragging = false;
+        e.preventDefault();
+        e.stopPropagation();
+
+        var el = null;
+        if (state.dragMoved) {
+          var m = {
+            left: Math.min(state.startX, e.clientX),
+            top: Math.min(state.startY, e.clientY),
+            right: Math.max(state.startX, e.clientX),
+            bottom: Math.max(state.startY, e.clientY)
+          };
+          el = pickFromMarquee(m);
+          hideMarquee();
+        } else {
+          hideMarquee();
+          var hit = document.elementFromPoint(e.clientX, e.clientY);
+          if (hit && !isUI(hit) && hit instanceof Element) { el = hit; }
+          else { el = state.el; }
+        }
+        if (el) { showChipFor(el); }
+      }
+
+      function onClick(e) {
+        if (!state.active) { return; }
+        // Capture-phase swallow so the page doesn't navigate / toggle while picking.
+        if (isUI(e.target)) { return; }
+        e.preventDefault();
+        e.stopPropagation();
+      }
+
+      function onKey(e) {
+        if (!state.active) { return; }
+        if (e.key === 'Escape') {
+          if (state.annotating || state.el) {
+            e.preventDefault();
+            e.stopPropagation();
+            clearSelection();
+          }
+          return;
+        }
+        if (e.key === 'Enter' && state.annotating && document.activeElement === input) {
+          e.preventDefault();
+          e.stopPropagation();
+          submitAnnotation();
+        }
+      }
+
+      input.addEventListener('keydown', function (e) {
+        if (e.key === 'Enter') {
+          e.preventDefault();
+          e.stopPropagation();
+          submitAnnotation();
+        } else if (e.key === 'Escape') {
+          e.preventDefault();
+          e.stopPropagation();
+          clearSelection();
+        }
+      });
+
       window.__agentidePicker = {
         setActive: function (on) {
-          state.active = on;
+          state.active = !!on;
           document.documentElement.style.cursor = on ? 'crosshair' : '';
-          if (!on) { box.style.display = 'none'; state.el = null; }
+          if (!on) { clearSelection(); }
+          else { ensureMounted(); }
         }
       };
+
       document.addEventListener('mousemove', onMove, true);
+      document.addEventListener('mousedown', onDown, true);
+      document.addEventListener('mouseup', onUp, true);
       document.addEventListener('click', onClick, true);
+      document.addEventListener('keydown', onKey, true);
     })();
     """#
 
