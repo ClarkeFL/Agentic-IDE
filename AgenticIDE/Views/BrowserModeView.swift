@@ -384,11 +384,12 @@ private struct BrowserColumn: View {
             }
             BrowserToolbarButton(systemName: "cursorarrow.rays",
                                  help: session.pickerActive
-                                     ? "Picker on — click an element to send it to the agent"
-                                     : "Pick an element to send to the agent",
+                                     ? "Annotate on — click or drag a component, type a note, Enter to send (Esc cancels, ⌘⇧E toggles)"
+                                     : "Annotate a component for the agent (click or drag · ⌘⇧E)",
                                  isActive: session.pickerActive) {
                 session.pickerActive.toggle()
             }
+            .keyboardShortcut("e", modifiers: [.command, .shift])
             BrowserToolbarButton(systemName: "xmark", help: "Close this browser") {
                 manager.close(session)
             }
