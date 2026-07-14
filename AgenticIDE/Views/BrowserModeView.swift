@@ -71,6 +71,11 @@ struct BrowserModeView: View {
 
             if let tab = manager.focused?.ownerTab {
                 GhosttyTerminal(view: tab.view, isActive: true, autoFocus: false)
+                    // Keyed like BrowserColumn's .id(session.id): makeNSView only
+                    // attaches the tab's NSView once, so paging to another
+                    // browser must rebuild the representable or the old agent's
+                    // terminal stays on screen.
+                    .id(tab.id)
             } else if let session = manager.focused, let cell = session.ownerCell {
                 // Bound cell with no program — the same launcher a grid cell
                 // shows, launching straight into the bound cell so the new
