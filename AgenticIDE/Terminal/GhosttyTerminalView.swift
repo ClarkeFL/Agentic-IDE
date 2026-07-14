@@ -843,16 +843,78 @@ final class GhosttyTerminalView: NSView, NSTextInputClient {
             return
         }
 
-        // 3) Plain text fallback (the original behavior).
+        // 3) Plain text: bracketed paste + chunking so multi-line code isn't
+        //    treated as line-by-line Enter presses (which cuts paste off in
+        //    agent TUIs) and large blobs don't overflow the PTY buffer.
         if let s = pb.string(forType: .string) {
-            sendText(s)
+            sendPastedText(s)
         }
     }
 
+    /// User paste path: sanitize, wrap multi-line in bracketed paste (DECSET
+    /// 2004), and write in chunks. Single-line path pastes stay unwrapped so
+    /// dumb prompts don't see CSI noise.
+    private func sendPastedText(_ s: String) {
+        guard surface != nil, !s.isEmpty else { return }
+        let sanitized = Self.sanitizePaste(s)
+        guard !sanitized.isEmpty else { return }
+        let hasNewline = sanitized.contains(where: { $0 == "\n" || $0 == "\r" })
+        if hasNewline {
+            // Terminals expect CR; bracket so apps (Claude Code, readline, …)
+            // treat the blob as one paste instead of submitting on each line.
+            let body = sanitized
+                .replacingOccurrences(of: "\r\n", with: "\n")
+                .replacingOccurrences(of: "\r", with: "\n")
+                .replacingOccurrences(of: "\n", with: "\r")
+            sendText("\u{001B}[200~" + body + "\u{001B}[201~")
+        } else {
+            sendText(sanitized)
+        }
+    }
+
+    /// Strip control bytes that can hijack the shell (NUL, ESC, etc.), keep
+    /// tab/LF/CR. Mirrors Ghostty's paste encode rules for unsafe C0 bytes.
+    private static func sanitizePaste(_ s: String) -> String {
+        var out = String()
+        out.reserveCapacity(s.count)
+        for scalar in s.unicodeScalars {
+            let v = scalar.value
+            switch v {
+            case 0x09, 0x0A, 0x0D: // tab, LF, CR
+                out.unicodeScalars.append(scalar)
+            case 0x00...0x1F, 0x7F:
+                out.append(" ")
+            default:
+                out.unicodeScalars.append(scalar)
+            }
+        }
+        return out
+    }
+
+    /// Write text to the surface in PTY-friendly chunks so large pastes aren't
+    /// truncated by the kernel buffer.
     private func sendText(_ s: String) {
         guard let surface, !s.isEmpty else { return }
-        s.withCString { ptr in
-            ghostty_surface_text(surface, ptr, UInt(strlen(ptr)))
+        let bytes = Array(s.utf8)
+        let chunkSize = 4096
+        var offset = 0
+        while offset < bytes.count {
+            var end = min(offset + chunkSize, bytes.count)
+            // Don't split a multi-byte UTF-8 sequence across chunks.
+            if end < bytes.count {
+                while end > offset && (bytes[end] & 0xC0) == 0x80 {
+                    end -= 1
+                }
+                if end == offset { end = min(offset + chunkSize, bytes.count) }
+            }
+            let slice = Array(bytes[offset..<end]) + [0]
+            slice.withUnsafeBufferPointer { buf in
+                guard let base = buf.baseAddress else { return }
+                base.withMemoryRebound(to: CChar.self, capacity: slice.count) { ptr in
+                    ghostty_surface_text(surface, ptr, UInt(end - offset))
+                }
+            }
+            offset = end
         }
     }
 

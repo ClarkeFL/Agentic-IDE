@@ -157,6 +157,8 @@ final class BrowserSession: NSObject, Identifiable, WKNavigationDelegate, WKScri
     var urlString: String = ""
     var pageTitle: String = ""
     var isLoading = false
+    var canGoBack = false
+    var canGoForward = false
     /// Emulated device screen size (toolbar menu or `agentide browser
     /// viewport`). ponytail: layout size + magnification only — no mobile
     /// user-agent or touch-event emulation; add a UA switch if a site
@@ -167,6 +169,10 @@ final class BrowserSession: NSObject, Identifiable, WKNavigationDelegate, WKScri
     var pickerActive = false {
         didSet { applyPicker() }
     }
+
+    /// KVO on WKWebView.url / title / history — catches SPA pushState and
+    /// in-page navigations that never fire WKNavigationDelegate.
+    private var webViewObservations: [NSKeyValueObservation] = []
 
     init(cell: WorkspaceCell?, workspace: Workspace? = nil) {
         self.ownerCell = cell
@@ -190,6 +196,61 @@ final class BrowserSession: NSObject, Identifiable, WKNavigationDelegate, WKScri
         // self directly would create a retain cycle through our own webView.
         controller.add(WeakScriptMessageHandler(self), name: "agentidePicker")
         webView.navigationDelegate = self
+        startObservingWebView()
+    }
+
+    private func startObservingWebView() {
+        // url KVO is what keeps the address bar honest on client-side routing.
+        // WKWebView KVO can fire off the main thread — hop back before mutating
+        // @Observable state so SwiftUI updates stay coherent.
+        func onMain(_ body: @escaping () -> Void) {
+            if Thread.isMainThread { body() }
+            else { DispatchQueue.main.async(execute: body) }
+        }
+        webViewObservations = [
+            webView.observe(\.url, options: [.new]) { [weak self] wv, _ in
+                let url = wv.url
+                onMain {
+                    guard let self else { return }
+                    if let url { self.urlString = url.absoluteString }
+                    self.syncNavigationState()
+                }
+            },
+            webView.observe(\.title, options: [.new]) { [weak self] wv, _ in
+                let title = wv.title ?? ""
+                onMain { self?.pageTitle = title }
+            },
+            webView.observe(\.isLoading, options: [.new]) { [weak self] wv, _ in
+                let loading = wv.isLoading
+                onMain { self?.isLoading = loading }
+            },
+            webView.observe(\.canGoBack, options: [.new]) { [weak self] wv, _ in
+                let v = wv.canGoBack
+                onMain { self?.canGoBack = v }
+            },
+            webView.observe(\.canGoForward, options: [.new]) { [weak self] wv, _ in
+                let v = wv.canGoForward
+                onMain { self?.canGoForward = v }
+            },
+        ]
+        syncNavigationState()
+    }
+
+    private func syncNavigationState() {
+        canGoBack = webView.canGoBack
+        canGoForward = webView.canGoForward
+        isLoading = webView.isLoading
+        if let title = webView.title { pageTitle = title }
+    }
+
+    func goBack() {
+        guard webView.canGoBack else { return }
+        webView.goBack()
+    }
+
+    func goForward() {
+        guard webView.canGoForward else { return }
+        webView.goForward()
     }
 
     /// Give a user-opened browser its driving cell. From here on the cell's
@@ -206,6 +267,7 @@ final class BrowserSession: NSObject, Identifiable, WKNavigationDelegate, WKScri
 
     func tearDown() {
         pickerActive = false
+        webViewObservations.removeAll()
         webView.stopLoading()
         webView.configuration.userContentController.removeAllScriptMessageHandlers()
         webView.navigationDelegate = nil
@@ -411,27 +473,36 @@ final class BrowserSession: NSObject, Identifiable, WKNavigationDelegate, WKScri
 
     func webView(_ webView: WKWebView, didStartProvisionalNavigation navigation: WKNavigation!) {
         isLoading = true
+        // Provisional URL updates earlier than didCommit for typed navigations.
+        if let url = webView.url {
+            urlString = url.absoluteString
+        }
+        syncNavigationState()
     }
 
     func webView(_ webView: WKWebView, didCommit navigation: WKNavigation!) {
         urlString = webView.url?.absoluteString ?? urlString
+        syncNavigationState()
     }
 
     func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
         isLoading = false
         urlString = webView.url?.absoluteString ?? urlString
         pageTitle = webView.title ?? ""
+        syncNavigationState()
         // The picker script re-injects on navigation but wakes up dormant.
         if pickerActive { applyPicker() }
     }
 
     func webView(_ webView: WKWebView, didFail navigation: WKNavigation!, withError error: Error) {
         isLoading = false
+        syncNavigationState()
     }
 
     func webView(_ webView: WKWebView, didFailProvisionalNavigation navigation: WKNavigation!,
                  withError error: Error) {
         isLoading = false
+        syncNavigationState()
     }
 
     // MARK: - Picker

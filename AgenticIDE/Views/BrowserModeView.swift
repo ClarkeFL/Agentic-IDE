@@ -337,6 +337,17 @@ private struct BrowserColumn: View {
 
             Divider().frame(height: 14)
 
+            BrowserToolbarButton(systemName: "chevron.left",
+                                 help: "Back",
+                                 isEnabled: session.canGoBack) {
+                session.goBack()
+            }
+            BrowserToolbarButton(systemName: "chevron.right",
+                                 help: "Forward",
+                                 isEnabled: session.canGoForward) {
+                session.goForward()
+            }
+
             TextField("URL", text: $session.urlString)
                 .textFieldStyle(.roundedBorder)
                 .font(DS.Font.footnote)
@@ -394,6 +405,7 @@ private struct BrowserToolbarButton: View {
     let systemName: String
     let help: String
     var isActive: Bool = false
+    var isEnabled: Bool = true
     let action: () -> Void
 
     @State private var isHovered = false
@@ -402,7 +414,8 @@ private struct BrowserToolbarButton: View {
         Button(action: action) {
             Image(systemName: systemName)
                 .font(.system(size: DS.Icon.small, weight: .semibold))
-                .foregroundStyle(isActive ? Color.accentColor : Color.primary)
+                .foregroundStyle(isActive ? Color.accentColor
+                                 : (isEnabled ? Color.primary : Color.secondary.opacity(0.35)))
                 .frame(width: DS.Control.compact, height: DS.Control.compact)
                 .background(
                     RoundedRectangle(cornerRadius: DS.Radius.sm, style: .continuous)
@@ -410,11 +423,12 @@ private struct BrowserToolbarButton: View {
                 )
                 .background(
                     RoundedRectangle(cornerRadius: DS.Radius.sm, style: .continuous)
-                        .fill(Color.primary.opacity(isHovered && !isActive ? 0.12 : 0.0))
+                        .fill(Color.primary.opacity(isHovered && isEnabled && !isActive ? 0.12 : 0.0))
                 )
                 .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
+        .disabled(!isEnabled)
         .onHover { isHovered = $0 }
         .help(help)
     }
