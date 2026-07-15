@@ -149,8 +149,9 @@ private struct ServerChip: View {
 }
 
 /// Add/edit/remove rows for the project's servers. Reuses `QuickLaunch`
-/// (label = name, command = shell command).
-private struct ServersEditor: View {
+/// (label = name, command = shell command). Shared by the server bar and the
+/// workspace-browser start page.
+struct ServersEditor: View {
     @State private var rows: [QuickLaunch]
     let onSave: ([QuickLaunch]) -> Void
     let onCancel: () -> Void

@@ -37,19 +37,21 @@ struct MainWindow: View {
     /// header reserves a leading inset for the floating traffic lights
     /// (windowed) or reclaims it (fullscreen hides them).
     @State private var isFullScreen = false
-    /// Agent browser panes + browser-mode state. While mode is active the
-    /// whole three-pane layout is swapped for `BrowserModeView` (terminals
-    /// survive the detach exactly like a project switch); while collapsed with
-    /// browsers open, the edge bar invites expanding it.
-    @State private var browsers = BrowserManager.shared
+    /// Agent browser panes. Mode visibility is mirrored into
+    /// `browserModeActive` so SwiftUI always re-renders on exit (relying only
+    /// on `@State` + `@Observable` singleton was missing updates and leaving
+    /// people stuck in browser view).
+    private var browsers: BrowserManager { BrowserManager.shared }
+    @State private var browserModeActive = false
 
     var body: some View {
         ZStack {
-            if browsers.isModeActive {
+            if browserModeActive {
                 // Slides in over a stationary grid and off again to reveal it
                 // (the grid branch below uses .identity so it never travels).
                 BrowserModeView(manager: browsers,
-                                reserveTrafficLights: !isFullScreen)
+                                reserveTrafficLights: !isFullScreen,
+                                onRequestExit: { exitBrowserMode() })
                     .transition(.move(edge: .trailing))
                     .zIndex(5)
             } else {
@@ -57,7 +59,7 @@ struct MainWindow: View {
                     mainContent
                     if !browsers.sessions.isEmpty {
                         BrowserEdgeBar(count: browsers.sessions.count) {
-                            browsers.isModeActive = true
+                            enterBrowserMode()
                         }
                         .transition(.move(edge: .trailing).combined(with: .opacity))
                     }
@@ -71,6 +73,14 @@ struct MainWindow: View {
                     .transition(.move(edge: .trailing).combined(with: .opacity))
                     .zIndex(10)
             }
+        }
+        // Always install on the root — not only mainContent.onAppear.
+        // When a browser workspace is restored first, mainContent never
+        // mounts and background-drag stayed ON, so the top bar only dragged.
+        .background(WindowChromeFixer())
+        .onAppear { disableWindowBackgroundDrag() }
+        .onChange(of: browserModeActive) { _, _ in
+            disableWindowBackgroundDrag()
         }
         .onReceive(NotificationCenter.default.publisher(for: .toggleAskOverlay)) { _ in
             withAnimation(.spring(response: 0.35, dampingFraction: 0.85)) {
@@ -88,13 +98,35 @@ struct MainWindow: View {
             }
         }
         .onReceive(NotificationCenter.default.publisher(for: .toggleBrowser)) { _ in
-            guard !browsers.sessions.isEmpty else { return }
-            browsers.isModeActive.toggle()
+            // ⌘B flips browser ↔ grid.
+            if browserModeActive {
+                exitBrowserMode()
+            } else {
+                let projectSession = selectedProjectId.flatMap { sessions.liveSession(for: $0) }
+                    ?? selectedProjectId.flatMap { sessions.session(for: $0) }
+                browsers.expandMode(projectSession: projectSession)
+                // expandMode/openManual post browserModeDidChange → enter via below
+                if browsers.isModeActive { browserModeActive = true }
+            }
         }
-        // Expand/collapse of browser mode. Value-scoped on the ZStack so it
-        // also animates when the mode auto-exits (last browser closed by the
-        // agent), where no withAnimation wraps the mutation.
-        .animation(.spring(response: 0.35, dampingFraction: 0.85), value: browsers.isModeActive)
+        .onReceive(NotificationCenter.default.publisher(for: .browserModeDidChange)) { note in
+            let active = (note.object as? Bool) ?? browsers.isModeActive
+            browserModeActive = active
+            disableWindowBackgroundDrag()
+        }
+        // Expand/collapse of browser mode.
+        .animation(.spring(response: 0.35, dampingFraction: 0.85), value: browserModeActive)
+    }
+
+    private func enterBrowserMode() {
+        browsers.setModeActive(true)
+        browserModeActive = true
+        disableWindowBackgroundDrag()
+    }
+
+    private func exitBrowserMode() {
+        browsers.collapseMode()
+        browserModeActive = false
     }
 
     /// Split view + every long-lived modifier. Extracted so the body's
@@ -142,6 +174,15 @@ struct MainWindow: View {
     private func syncFullScreenState() {
         if let window = NSApp.windows.first(where: { $0.isVisible }) {
             isFullScreen = window.styleMask.contains(.fullScreen)
+        }
+    }
+
+    /// `.hiddenTitleBar` turns the content view into a window-drag surface
+    /// (`isMovableByWindowBackground` defaults to true). That steals mouseDown
+    /// from every toolbar control. Always force it off.
+    private func disableWindowBackgroundDrag() {
+        for window in NSApp.windows {
+            window.isMovableByWindowBackground = false
         }
     }
 
@@ -363,4 +404,37 @@ struct MainWindow: View {
         }
         return handled
     }
+}
+
+// MARK: - Window chrome
+
+/// Attaches to the SwiftUI hierarchy so we can reach the real `NSWindow` and
+/// keep `isMovableByWindowBackground` off even when browser mode is restored
+/// before `mainContent` mounts.
+private struct WindowChromeFixer: NSViewRepresentable {
+    func makeNSView(context: Context) -> NSView {
+        let view = WindowChromeFixerView()
+        view.disableBackgroundDrag()
+        return view
+    }
+
+    func updateNSView(_ nsView: NSView, context: Context) {
+        (nsView as? WindowChromeFixerView)?.disableBackgroundDrag()
+    }
+}
+
+private final class WindowChromeFixerView: NSView {
+    override func viewDidMoveToWindow() {
+        super.viewDidMoveToWindow()
+        disableBackgroundDrag()
+    }
+
+    func disableBackgroundDrag() {
+        window?.isMovableByWindowBackground = false
+        for w in NSApp.windows {
+            w.isMovableByWindowBackground = false
+        }
+    }
+
+    override var mouseDownCanMoveWindow: Bool { false }
 }

@@ -68,8 +68,8 @@ final class ProjectSession: Identifiable {
     func removeWorkspace(id: UUID) {
         guard let idx = workspaces.firstIndex(where: { $0.id == id }) else { return }
         let removed = workspaces.remove(at: idx)
+        BrowserManager.shared.close(workspace: removed)
         for cell in removed.cells {
-            BrowserManager.shared.close(boundTo: cell)
             cell.terminal?.view.tearDown()
         }
 
@@ -124,6 +124,12 @@ final class ProjectSession: Identifiable {
         wireSmartRename(terminal)
         cell.icon = icon
         cell.terminal = terminal
+        // Spawn the PTY immediately. Without this, cells that aren't on
+        // screen (Servers workspace while you're on the grid, background
+        // grid cells, browser mode) wait for viewDidMoveToWindow and never
+        // start until you open them — so "Run server" from the browser
+        // looked like a no-op.
+        terminal.view.ensureSurfaceStarted()
         saveHook?()
     }
 

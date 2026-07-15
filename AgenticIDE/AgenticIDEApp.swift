@@ -177,6 +177,14 @@ extension Notification.Name {
     /// which expands/collapses browser mode (no-op while no agent browsers
     /// are open).
     static let toggleBrowser = Notification.Name("AgenticIDE.toggleBrowser")
+    /// Posted by `SessionManager` after a project's workspaces are restored
+    /// from disk. Object is the project id. Observed by
+    /// `ProjectWorkspaceView` to re-open browser mode when a workspace
+    /// preferred it last run.
+    static let workspaceSessionRestored = Notification.Name("AgenticIDE.workspaceSessionRestored")
+    /// Posted by `BrowserManager.setModeActive`. Object is a `Bool`.
+    /// Observed by `MainWindow` to keep the root layout in sync.
+    static let browserModeDidChange = Notification.Name("AgenticIDE.browserModeDidChange")
 }
 
 /// Lives only to make termination unrefusable. macOS sends a quit AppleEvent

@@ -111,12 +111,16 @@ final class SessionManager {
                 let ws = Workspace(id: wsSnap.id,
                                    name: wsSnap.name,
                                    layout: wsSnap.gridLayout,
-                                   cells: cells)
+                                   cells: cells,
+                                   prefersBrowserMode: wsSnap.prefersBrowserMode ?? false)
                 session.workspaces.append(ws)
             }
             session.activeWorkspaceId = snapshot.activeWorkspaceId ?? session.workspaces.first?.id
             self.pendingSnapshots.removeValue(forKey: projectId)
             self.restoringProjectIds.remove(projectId)
+            // Re-enter browser mode for workspaces that preferred it last run.
+            NotificationCenter.default.post(name: .workspaceSessionRestored,
+                                            object: projectId)
         }
     }
 
@@ -206,6 +210,7 @@ final class SessionManager {
                     name: ws.name,
                     axis: ws.axis.rawValue,
                     counts: ws.counts,
+                    prefersBrowserMode: ws.prefersBrowserMode,
                     cells: ws.cells.map { cell in
                         CellSnapshot(id: cell.id,
                                      icon: cell.icon,
@@ -275,6 +280,8 @@ struct WorkspaceSnapshot: Codable {
     var name: String
     var axis: String?
     var counts: [Int]?
+    /// Optional so older sessions.json files still decode.
+    var prefersBrowserMode: Bool?
     // Legacy (pre-uneven-layouts) fields, read-only.
     var rows: Int?
     var cols: Int?
@@ -320,6 +327,7 @@ extension Array where Element == SessionSnapshot {
                 hasher.combine(ws.name)
                 hasher.combine(ws.axis)
                 hasher.combine(ws.counts)
+                hasher.combine(ws.prefersBrowserMode)
                 for cell in ws.cells {
                     hasher.combine(cell.id)
                     hasher.combine(cell.icon)
