@@ -23,11 +23,10 @@ final class GhosttyApp {
     /// Must be called on the main thread, exactly once, at app startup.
     func bootstrap() {
         guard app == nil else { return }
-        // Agent runtimes (Codex / Grok / Claude) launch this app with a
-        // monochrome shell env (`NO_COLOR=1`, `TERM=dumb`, `CLICOLOR=0`, …).
-        // Ghostty's PTY inherits the process env, so every cell would paint
-        // grayscale until we scrub those flags here — before any surface is
-        // created. PtyService also re-asserts color for the login shell.
+        // Agent harnesses often start us with `NO_COLOR=1` / `TERM=dumb`.
+        // Drop those kill-switches before any PTY is born so chalk/Ink CLIs
+        // (Claude) aren't forced monochrome. Intentionally no FORCE_COLOR —
+        // leave each CLI's own theme alone (see PtyService).
         scrubInheritedMonochromeEnvironment()
         configureGhosttyResourcesEnvironment()
 
@@ -89,27 +88,11 @@ final class GhosttyApp {
         log.info("Ghostty app bootstrapped")
     }
 
-    /// Drop / override process-level flags that disable ANSI color. Safe to
-    /// call once at bootstrap — only touches color-related keys, leaves the
-    /// rest of the environment alone.
+    /// Drop process-level monochrome kill-switches only. Safe to call once at
+    /// bootstrap — does not force color on; CLIs keep their own themes.
     private func scrubInheritedMonochromeEnvironment() {
         // Presence of NO_COLOR (even empty) means "no color" for most tools.
-        let unsetKeys = [
-            "NO_COLOR",
-            "PIP_NO_COLOR",
-            "PYTHON_DISABLE_COLORS",
-            "PY_COLORS",
-        ]
-        for key in unsetKeys {
-            unsetenv(key)
-        }
-        // Force-on counterparts for tools that check these specifically.
-        setenv("CLICOLOR", "1", 1)
-        setenv("CLICOLOR_FORCE", "1", 1)
-        setenv("FORCE_COLOR", "1", 1)
-        setenv("COLORTERM", "truecolor", 1)
-        setenv("NPM_CONFIG_COLOR", "true", 1)
-        setenv("CARGO_TERM_COLOR", "always", 1)
+        unsetenv("NO_COLOR")
         // `TERM=dumb` is common when launched from an agent harness — it
         // kills color even when isatty is true. Ghostty sets a real TERM on
         // each surface; clear the host's dumb value so nothing inherits it.

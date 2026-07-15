@@ -11,16 +11,13 @@ enum PtyService {
     /// Environment hints that make this embedded Ghostty surface behave like
     /// a real color-capable terminal for CLI tools. Ghostty owns `TERM`; these
     /// are the extra markers common macOS/BSD tools and truecolor apps look at.
-    /// Explicitly overrides the monochrome flags agent runtimes inject when
-    /// they launch AgenticIDE (`NO_COLOR`, `CLICOLOR=0`, `FORCE_COLOR=0`, …).
+    /// Intentionally minimal — advertise truecolor, don't force color on every
+    /// CLI (`FORCE_COLOR` etc. over-steers tools like Grok that have their own
+    /// theme). Inherited `NO_COLOR` is stripped in the shell bootstrap instead.
     static func terminalEnvironment() -> [String: String] {
         var env: [String: String] = [
             "CLICOLOR": "1",
-            "CLICOLOR_FORCE": "1",
-            "FORCE_COLOR": "1",
             "COLORTERM": "truecolor",
-            "NPM_CONFIG_COLOR": "true",
-            "CARGO_TERM_COLOR": "always",
             "TERM_PROGRAM": "AgenticIDE",
             "TERM_PROGRAM_VERSION": appVersion(),
             // Socket the `agentide` helper talks to so a cell's agent can
@@ -64,22 +61,20 @@ enum PtyService {
         return SurfaceConfig(command: cmd, workingDirectory: cwd, env: terminalEnvironment())
     }
 
-    /// Remove inherited process flags that intentionally suppress color, and
-    /// re-assert color-on after the login profile (profiles sometimes re-export
-    /// `NO_COLOR`). Agent runtimes set a cluster of these when they launch us.
+    /// Strip inherited monochrome kill-switches (`NO_COLOR`) so chalk/Ink CLIs
+    /// (notably Claude) can use color when the host process was launched from
+    /// an agent harness. Keep this minimal — no `FORCE_COLOR` / force-on
+    /// exports that recolor tools with their own themes (Grok, etc.).
     private static func terminalBootstrapCommand() -> String {
         // Also prepend the bridge helper's bin dir to PATH (after the login
         // profile has run) so `agentide` is available in every cell.
         let bin = AgentBridge.binDirectoryURL.path
-        return "unset NO_COLOR PIP_NO_COLOR PYTHON_DISABLE_COLORS; "
-            + "export CLICOLOR=1 CLICOLOR_FORCE=1 FORCE_COLOR=1 COLORTERM=truecolor "
-            + "NPM_CONFIG_COLOR=true CARGO_TERM_COLOR=always; "
-            + "export PATH=\"\(bin):$PATH\""
+        return "unset NO_COLOR; export PATH=\"\(bin):$PATH\""
     }
 
     /// Existing saved sessions contain the full command line that was built
-    /// before color scrubbing. Patch those command strings on restore so
-    /// users don't have to close and recreate every tab after upgrading.
+    /// with an older bootstrap. Patch those on restore so users don't have to
+    /// close and recreate every tab after upgrading.
     static func commandEnsuringTerminalBootstrap(_ command: String?) -> String? {
         guard let command else { return nil }
         let bootstrap = terminalBootstrapCommand()
@@ -88,8 +83,14 @@ enum PtyService {
         // Strip any older bootstrap prefix we used to inject, then install
         // the current one. Avoids stacking `unset NO_COLOR; …; unset NO_COLOR; …`.
         var body = command
+        let bin = AgentBridge.binDirectoryURL.path
         let legacyPrefixes = [
-            "unset NO_COLOR; export PATH=\"\(AgentBridge.binDirectoryURL.path):$PATH\"; ",
+            // 2026-07 over-broad force-on export (FORCE_COLOR, CLICOLOR_FORCE, …)
+            "unset NO_COLOR PIP_NO_COLOR PYTHON_DISABLE_COLORS; "
+                + "export CLICOLOR=1 CLICOLOR_FORCE=1 FORCE_COLOR=1 COLORTERM=truecolor "
+                + "NPM_CONFIG_COLOR=true CARGO_TERM_COLOR=always; "
+                + "export PATH=\"\(bin):$PATH\"; ",
+            "unset NO_COLOR; export PATH=\"\(bin):$PATH\"; ",
             "unset NO_COLOR; ",
         ]
         for legacy in legacyPrefixes {
