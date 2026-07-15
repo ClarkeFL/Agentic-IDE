@@ -975,8 +975,8 @@ private struct BrowserColumn: View {
             }
             BrowserToolbarButton(systemName: "cursorarrow.rays",
                                  help: session.pickerActive
-                                     ? "Annotate on — drag to multi-select, ⇧/⌘-click to add, Enter sends & clears (Esc cancels, ⌘⇧E toggles)"
-                                     : "Annotate components for the agent (drag multi-select · ⇧/⌘-click · ⌘⇧E)",
+                                     ? "Annotate on — drag groups peers, ⇧/⌘-click or ⇧-drag adds, Enter sends & exits (Esc clears, ⌘⇧E toggles)"
+                                     : "Annotate components for the agent (drag to group · ⇧/⌘-click · ⌘⇧E)",
                                  isActive: session.pickerActive) {
                 session.pickerActive.toggle()
             }
