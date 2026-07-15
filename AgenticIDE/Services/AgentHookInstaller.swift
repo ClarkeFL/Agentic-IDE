@@ -225,7 +225,10 @@ enum AgentHookInstaller {
         let escapedDir = dir
             .replacingOccurrences(of: "\\", with: "\\\\")
             .replacingOccurrences(of: "\"", with: "\\\"")
-        return "[ -n \"$AGENTIDE_SURFACE_ID\" ] && mkdir -p \"\(escapedDir)\" && printf '%s' \(status) > \"\(escapedDir)/$AGENTIDE_SURFACE_ID\" || true \(agenticideMarker)"
+        // Use ${VAR:-} so Grok's hook expander (which rejects bare $VAR when
+        // unset) treats the guard as optional. Claude/Codex shell still short-
+        // circuit the same way when the var is empty.
+        return "[ -n \"${AGENTIDE_SURFACE_ID:-}\" ] && mkdir -p \"\(escapedDir)\" && printf '%s' \(status) > \"\(escapedDir)/${AGENTIDE_SURFACE_ID:-}\" || true \(agenticideMarker)"
     }
 
     private static func hasAgenticideEntry(under value: Any?) -> Bool {

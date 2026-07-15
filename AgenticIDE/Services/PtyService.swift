@@ -11,10 +11,16 @@ enum PtyService {
     /// Environment hints that make this embedded Ghostty surface behave like
     /// a real color-capable terminal for CLI tools. Ghostty owns `TERM`; these
     /// are the extra markers common macOS/BSD tools and truecolor apps look at.
+    /// Explicitly overrides the monochrome flags agent runtimes inject when
+    /// they launch AgenticIDE (`NO_COLOR`, `CLICOLOR=0`, `FORCE_COLOR=0`, …).
     static func terminalEnvironment() -> [String: String] {
         var env: [String: String] = [
             "CLICOLOR": "1",
+            "CLICOLOR_FORCE": "1",
+            "FORCE_COLOR": "1",
             "COLORTERM": "truecolor",
+            "NPM_CONFIG_COLOR": "true",
+            "CARGO_TERM_COLOR": "always",
             "TERM_PROGRAM": "AgenticIDE",
             "TERM_PROGRAM_VERSION": appVersion(),
             // Socket the `agentide` helper talks to so a cell's agent can
@@ -58,29 +64,43 @@ enum PtyService {
         return SurfaceConfig(command: cmd, workingDirectory: cwd, env: terminalEnvironment())
     }
 
-    /// Remove inherited process flags that intentionally suppress color.
-    /// The Codex runtime sets `NO_COLOR=1`; if AgenticIDE inherits that while
-    /// being launched from this development session, every child CLI inside
-    /// the embedded terminal is forced into monochrome mode.
+    /// Remove inherited process flags that intentionally suppress color, and
+    /// re-assert color-on after the login profile (profiles sometimes re-export
+    /// `NO_COLOR`). Agent runtimes set a cluster of these when they launch us.
     private static func terminalBootstrapCommand() -> String {
         // Also prepend the bridge helper's bin dir to PATH (after the login
         // profile has run) so `agentide` is available in every cell.
         let bin = AgentBridge.binDirectoryURL.path
-        return "unset NO_COLOR; export PATH=\"\(bin):$PATH\""
+        return "unset NO_COLOR PIP_NO_COLOR PYTHON_DISABLE_COLORS; "
+            + "export CLICOLOR=1 CLICOLOR_FORCE=1 FORCE_COLOR=1 COLORTERM=truecolor "
+            + "NPM_CONFIG_COLOR=true CARGO_TERM_COLOR=always; "
+            + "export PATH=\"\(bin):$PATH\""
     }
 
     /// Existing saved sessions contain the full command line that was built
-    /// before we stripped `NO_COLOR`. Patch those command strings on restore
-    /// so users don't have to close and recreate every tab after upgrading.
+    /// before color scrubbing. Patch those command strings on restore so
+    /// users don't have to close and recreate every tab after upgrading.
     static func commandEnsuringTerminalBootstrap(_ command: String?) -> String? {
-        guard let command, !command.contains(terminalBootstrapCommand()) else {
-            return command
+        guard let command else { return nil }
+        let bootstrap = terminalBootstrapCommand()
+        if command.contains(bootstrap) { return command }
+
+        // Strip any older bootstrap prefix we used to inject, then install
+        // the current one. Avoids stacking `unset NO_COLOR; …; unset NO_COLOR; …`.
+        var body = command
+        let legacyPrefixes = [
+            "unset NO_COLOR; export PATH=\"\(AgentBridge.binDirectoryURL.path):$PATH\"; ",
+            "unset NO_COLOR; ",
+        ]
+        for legacy in legacyPrefixes {
+            if let range = body.range(of: legacy) {
+                body.removeSubrange(range)
+                break
+            }
         }
-        guard let insertionPoint = command.firstIndex(of: "'") else {
-            return command
-        }
-        var migrated = command
-        migrated.insert(contentsOf: "\(terminalBootstrapCommand()); ", at: migrated.index(after: insertionPoint))
+        guard let insertionPoint = body.firstIndex(of: "'") else { return body }
+        var migrated = body
+        migrated.insert(contentsOf: "\(bootstrap); ", at: migrated.index(after: insertionPoint))
         return migrated
     }
 

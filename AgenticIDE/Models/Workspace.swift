@@ -101,6 +101,10 @@ final class Workspace: Identifiable {
     var zoomedCellId: UUID?
     /// The cell the user last focused — drives the keyboard zoom shortcut.
     var focusedCellId: UUID?
+    /// True when this workspace was created as (or last used as) a browser
+    /// workspace. Persisted so relaunch re-opens browser mode instead of
+    /// landing on the empty grid until the user hits the globe again.
+    var prefersBrowserMode: Bool
 
     var layout: GridLayout { GridLayout(axis: axis, counts: counts) }
     var cellCount: Int { cells.count }
@@ -115,9 +119,11 @@ final class Workspace: Identifiable {
     /// Full init used by restore. Pads/truncates `cells` to the layout's cell
     /// count so a malformed snapshot can never desync the grid from its cell
     /// array.
-    init(id: UUID, name: String, layout rawLayout: GridLayout, cells rawCells: [WorkspaceCell]) {
+    init(id: UUID, name: String, layout rawLayout: GridLayout, cells rawCells: [WorkspaceCell],
+         prefersBrowserMode: Bool = false) {
         self.id = id
         self.name = name
+        self.prefersBrowserMode = prefersBrowserMode
         let layout = rawLayout.clamped()
         self.axis = layout.axis
         self.counts = layout.counts

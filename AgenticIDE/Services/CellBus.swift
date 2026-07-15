@@ -67,6 +67,12 @@ final class CellBus {
             guard let cell = nthCell(workspace, intArg(args, 0)) else { return noCell(args, 0) }
             return launch(toolName: body ?? "", into: cell, session: session, workspace: workspace)
 
+        case "servers":
+            return serverListing(session: session)
+
+        case "server":
+            return handleServer(args: args, body: body, session: session)
+
         default:
             return "error: unknown verb '\(verb)'"
         }
@@ -91,11 +97,15 @@ final class CellBus {
             + "browser errors | browser logs | browser screenshot [selector] | "
             + "browser viewport <fit|desktop|laptop|tablet|mobile> | browser close"
 
+        let projectSession = located.session
+        let workspace = located.workspace
+
         switch args.first ?? "" {
         case "open":
             let raw = args.dropFirst().first ?? body?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
             if raw.isEmpty || raw == "about:blank" {
-                manager.open(nil, cell: ownerCell)
+                manager.open(nil, cell: ownerCell,
+                             workspace: workspace, projectSession: projectSession)
                 completion("ok: opened blank start page — navigate with `agentide browser open <url>`")
                 return
             }
@@ -103,7 +113,8 @@ final class CellBus {
                 completion("error: '\(raw)' is not a valid URL — usage: browser open <url>")
                 return
             }
-            let session = manager.open(url, cell: ownerCell)
+            let session = manager.open(url, cell: ownerCell,
+                                       workspace: workspace, projectSession: projectSession)
             session.whenLoaded { loaded in
                 completion("ok: opened \(url.absoluteString)"
                            + (loaded ? "" : " (page still loading after 10s)")
@@ -254,6 +265,13 @@ final class CellBus {
         guard let store, let launchTools else { return "error: app not ready" }
         let name = toolName.trimmingCharacters(in: .whitespaces)
         guard !name.isEmpty else { return "error: usage: launch <n> <tool>" }
+        // Dev servers belong in the dedicated Servers workspace, not a grid cell.
+        if name.caseInsensitiveCompare("server") == .orderedSame {
+            return "error: do not launch servers into grid cells — use "
+                + "`agentide servers` to list, `agentide server run [name|all]`, "
+                + "or `agentide server run <name> <command>` for an ad-hoc server. "
+                + "They run in the dedicated Servers workspace."
+        }
         guard let tool = launchTools.tools.first(where: { $0.name.caseInsensitiveCompare(name) == .orderedSame }) else {
             let available = launchTools.tools.map(\.name).joined(separator: ", ")
             return "error: no tool named '\(name)'. Available: \(available)"
@@ -265,6 +283,163 @@ final class CellBus {
         if let err = launcher.launch(tool, into: cell) { return "error: \(err)" }
         let n = (workspace.cells.firstIndex(where: { $0.id == cell.id }) ?? 0) + 1
         return "ok: launched \(tool.name) in cell \(n)"
+    }
+
+    // MARK: - Servers workspace
+
+    private func runner(for session: ProjectSession) -> ServerRunner? {
+        guard let store,
+              let project = store.projects.first(where: { $0.id == session.projectId }) else {
+            return nil
+        }
+        return ServerRunner(project: project, session: session, store: store)
+    }
+
+    private func serverListing(session: ProjectSession) -> String {
+        guard let store,
+              let project = store.projects.first(where: { $0.id == session.projectId }),
+              let runner = runner(for: session) else {
+            return "error: app not ready"
+        }
+        let live = runner.runningLabels()
+        var lines: [String] = [
+            "Servers workspace: dedicated place for long-running dev servers "
+                + "(not grid cells). Use `agentide server run [name|all]` / "
+                + "`agentide server stop [name|all]` / `agentide server read <name>`.",
+        ]
+        if project.servers.isEmpty && live.isEmpty {
+            lines.append("(no servers configured — run ad-hoc with "
+                + "`agentide server run <name> <command>`, e.g. "
+                + "`agentide server run web npm run dev`)")
+            return lines.joined(separator: "\n")
+        }
+        for s in project.servers {
+            let state = live.contains(s.label) ? "running" : "stopped"
+            lines.append("\(s.label): [\(state)]  \(s.command)")
+        }
+        // Ad-hoc / leftover cells not in the configured list.
+        for label in live.sorted() where !project.servers.contains(where: { $0.label == label }) {
+            lines.append("\(label): [running]  (ad-hoc)")
+        }
+        return lines.joined(separator: "\n")
+    }
+
+    private func handleServer(args: [String], body: String?,
+                              session: ProjectSession) -> String {
+        guard let store,
+              let project = store.projects.first(where: { $0.id == session.projectId }),
+              let runner = runner(for: session) else {
+            return "error: app not ready"
+        }
+        let usage = "error: usage: server run [name|all] | server run <name> <command> | "
+            + "server stop [name|all] | server read <name>"
+        guard let sub = args.first?.lowercased() else { return usage }
+        let rest = Array(args.dropFirst())
+        let name = rest.first ?? ""
+        let cmdFromArgs = rest.dropFirst().joined(separator: " ")
+            .trimmingCharacters(in: .whitespaces)
+        let cmdFromBody = (body ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+        let command = !cmdFromBody.isEmpty ? cmdFromBody : cmdFromArgs
+
+        switch sub {
+        case "run":
+            return serverRun(name: name, command: command, project: project, runner: runner)
+        case "stop":
+            return serverStop(name: name, runner: runner)
+        case "read":
+            return serverRead(name: name, runner: runner)
+        default:
+            return usage
+        }
+    }
+
+    private func serverRun(name: String, command: String,
+                           project: Project, runner: ServerRunner) -> String {
+        let live = runner.runningLabels()
+        // No name / "all" → run every configured server.
+        if name.isEmpty || name.caseInsensitiveCompare("all") == .orderedSame {
+            guard !project.servers.isEmpty else {
+                return "error: no servers configured for this project — "
+                    + "use `agentide server run <name> <command>` for an ad-hoc server "
+                    + "(e.g. `agentide server run web npm run dev`), or set servers up in the bar"
+            }
+            let already = project.servers.filter { live.contains($0.label) }.map(\.label)
+            runner.run(project.servers, activate: false)
+            let started = project.servers.map(\.label).filter { !already.contains($0) }
+            if started.isEmpty {
+                return "ok: all configured servers already running (\(already.joined(separator: ", ")))"
+            }
+            let note = already.isEmpty ? "" : "; already running: \(already.joined(separator: ", "))"
+            return "ok: started \(started.joined(separator: ", ")) in Servers workspace\(note)"
+        }
+
+        // Named configured server (optional command override ignored if empty).
+        if let configured = project.servers.first(where: {
+            $0.label.caseInsensitiveCompare(name) == .orderedSame
+        }) {
+            if live.contains(configured.label) {
+                return "ok: \(configured.label) already running in Servers workspace"
+            }
+            let ql = command.isEmpty
+                ? configured
+                : QuickLaunch(id: configured.id, label: configured.label, command: command)
+            runner.run([ql], activate: false)
+            return "ok: started \(configured.label) in Servers workspace"
+        }
+
+        // Ad-hoc: name + command → one-shot into Servers workspace.
+        if !command.isEmpty {
+            if live.contains(where: { $0.caseInsensitiveCompare(name) == .orderedSame }) {
+                return "ok: \(name) already running in Servers workspace"
+            }
+            let ql = QuickLaunch(label: name, command: command, icon: "play.circle")
+            runner.run([ql], activate: false)
+            return "ok: started ad-hoc server '\(name)' in Servers workspace (\(command))"
+        }
+
+        let available = project.servers.map(\.label)
+        let hint = available.isEmpty
+            ? "no configured servers — pass a command: `agentide server run \(name) <command>`"
+            : "unknown server '\(name)'. Configured: \(available.joined(separator: ", ")). "
+                + "Or run ad-hoc: `agentide server run \(name) <command>`"
+        return "error: \(hint)"
+    }
+
+    private func serverStop(name: String, runner: ServerRunner) -> String {
+        let live = runner.runningLabels()
+        if name.isEmpty || name.caseInsensitiveCompare("all") == .orderedSame {
+            guard !live.isEmpty else { return "ok: no servers running" }
+            runner.stopAll()
+            return "ok: stopped all servers (\(live.sorted().joined(separator: ", ")))"
+        }
+        guard let match = live.first(where: { $0.caseInsensitiveCompare(name) == .orderedSame }) else {
+            let hint = live.isEmpty
+                ? "none running"
+                : "running: \(live.sorted().joined(separator: ", "))"
+            return "error: '\(name)' is not running (\(hint))"
+        }
+        runner.stop(match)
+        return "ok: stopped \(match)"
+    }
+
+    private func serverRead(name: String, runner: ServerRunner) -> String {
+        guard !name.isEmpty else {
+            return "error: usage: server read <name>"
+        }
+        guard let cell = runner.cell(named: name)
+                ?? runner.runningLabels()
+                    .first(where: { $0.caseInsensitiveCompare(name) == .orderedSame })
+                    .flatMap({ runner.cell(named: $0) }) else {
+            let live = runner.runningLabels()
+            let hint = live.isEmpty
+                ? "none running"
+                : "running: \(live.sorted().joined(separator: ", "))"
+            return "error: no running server named '\(name)' (\(hint))"
+        }
+        guard let view = cell.terminal?.view else {
+            return "error: server '\(name)' has no terminal"
+        }
+        return String((view.readScreenText() ?? "").suffix(readTailLimit))
     }
 
     // MARK: - Listings
@@ -286,7 +461,7 @@ final class CellBus {
         let lines = launchTools.tools.map { tool -> String in
             let detail: String
             switch tool.role {
-            case .server:   detail = "per-project Run Server command"
+            case .server:   detail = "UI only — agents must use `agentide server run` (Servers workspace)"
             case .terminal: detail = "login shell"
             case .command:  detail = tool.command
             }

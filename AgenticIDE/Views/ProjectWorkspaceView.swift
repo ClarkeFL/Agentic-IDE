@@ -22,8 +22,20 @@ struct ProjectWorkspaceView: View {
                 if showLayoutChooser || session.activeWorkspace == nil {
                     LayoutChooserView(
                         canCancel: session.activeWorkspace != nil,
-                        onSelect: { layout in
-                            session.addWorkspace(layout: layout)
+                        onSelectGrid: {
+                            // Always start at 1×1 — resize from the header
+                            // grid picker once you're in the workspace.
+                            session.addWorkspace(
+                                layout: GridLayout(axis: .rows, counts: [1]))
+                            showLayoutChooser = false
+                        },
+                        onSelectBrowser: {
+                            // 1×1 grid underneath so the workspace exists in
+                            // the pager; browser mode opens immediately.
+                            let ws = session.addWorkspace(
+                                layout: GridLayout(axis: .rows, counts: [1]))
+                            BrowserManager.shared.openManual(from: ws,
+                                                             projectSession: session)
                             showLayoutChooser = false
                         },
                         onCancel: { showLayoutChooser = false })
@@ -72,20 +84,38 @@ struct ProjectWorkspaceView: View {
             slide(direction, in: session)
         }
         .onReceive(NotificationCenter.default.publisher(for: .newWorkspace)) { _ in
-            // Already have a workspace → create + switch immediately (1×1) so it
-            // shows in the sidebar right away; resize from the header grid
-            // picker. The chooser is only for the empty-project first workspace,
-            // where pane ④ has nothing else to show.
-            if session.activeWorkspace == nil {
-                showLayoutChooser = true
-            } else {
-                session.addWorkspace()
-            }
+            // Always offer grid vs browser (and layout size for grid) so a
+            // browser workspace is one click, not create-then-globe.
+            showLayoutChooser = true
+        }
+        .onReceive(NotificationCenter.default.publisher(for: .workspaceSessionRestored)) { note in
+            // Only place that auto-opens browser — app relaunch, not Grid exit.
+            guard (note.object as? UUID) == project.id else { return }
+            restoreBrowserIfPreferred(for: session)
         }
         .onChange(of: project.id) { _, _ in
             // Different project — drop any transient chooser state.
             showLayoutChooser = false
         }
+        .onChange(of: session.activeWorkspaceId) { _, _ in
+            // Swiping to another workspace: enter browser only if THAT
+            // workspace prefers it; leave browser when landing on a grid one.
+            // Never re-open just because the grid view appeared after Grid.
+            guard let ws = session.activeWorkspace else { return }
+            let browsers = BrowserManager.shared
+            if ws.prefersBrowserMode {
+                browsers.openManual(from: ws, projectSession: session)
+            } else if browsers.isModeActive {
+                browsers.collapseMode()
+            }
+        }
+    }
+
+    /// App launch only: re-open browser mode if the restored active workspace
+    /// was a browser workspace last time.
+    private func restoreBrowserIfPreferred(for session: ProjectSession) {
+        guard let ws = session.activeWorkspace, ws.prefersBrowserMode else { return }
+        BrowserManager.shared.openManual(from: ws, projectSession: session)
     }
 
     /// Zoom the focused cell (falling back to the already-zoomed cell, then the
@@ -172,33 +202,37 @@ private final class WorkspaceSwipeNSView: NSView {
     }
 }
 
-/// Centered layout chooser shown before a workspace exists (or when adding a
-/// new one). Picking a size is what actually creates the workspace.
+/// Centered chooser shown before a workspace exists (or when adding a new
+/// one). Two one-click paths — both start as a single cell:
+/// **Grid** (agent cell in the workspace) or **Browser** (same + browser mode
+/// for servers / agents / localhost). Grow the grid later from the header.
 private struct LayoutChooserView: View {
     let canCancel: Bool
-    let onSelect: (GridLayout) -> Void
+    let onSelectGrid: () -> Void
+    let onSelectBrowser: () -> Void
     let onCancel: () -> Void
 
     var body: some View {
         VStack(spacing: DS.Space.lg) {
             VStack(spacing: DS.Space.xs) {
-                Text("Choose a layout")
+                Text("New workspace")
                     .font(.title3.weight(.semibold))
-                Text("Pick how many cells this workspace has.")
+                Text("Starts as one cell — expand the grid anytime from the header.")
                     .font(.subheadline)
                     .foregroundStyle(.secondary)
+                    .multilineTextAlignment(.center)
             }
 
-            GridLayoutPicker(current: nil, onSelect: onSelect)
-                .padding(DS.Space.md)
-                .background(
-                    RoundedRectangle(cornerRadius: DS.Radius.lg, style: .continuous)
-                        .fill(Color.primary.opacity(0.04))
-                )
-                .overlay(
-                    RoundedRectangle(cornerRadius: DS.Radius.lg, style: .continuous)
-                        .strokeBorder(Color.primary.opacity(0.08), lineWidth: 1)
-                )
+            HStack(spacing: DS.Space.md) {
+                modeCard(title: "Grid",
+                         subtitle: "One agent cell",
+                         systemImage: "square.grid.2x2",
+                         action: onSelectGrid)
+                modeCard(title: "Browser",
+                         subtitle: "Servers + preview",
+                         systemImage: "globe",
+                         action: onSelectBrowser)
+            }
 
             if canCancel {
                 Button("Cancel", action: onCancel)
@@ -215,5 +249,34 @@ private struct LayoutChooserView: View {
         // only for the active app, which made this pane look lighter/"off" on
         // the inactive (e.g. release) window.
         .background(Color(nsColor: .controlBackgroundColor))
+    }
+
+    private func modeCard(title: String, subtitle: String,
+                          systemImage: String, action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            VStack(spacing: DS.Space.md) {
+                Image(systemName: systemImage)
+                    .font(.system(size: DS.Icon.display, weight: .light))
+                    .foregroundStyle(Color.accentColor)
+                VStack(spacing: DS.Space.xs) {
+                    Text(title)
+                        .font(DS.Font.bodySemibold)
+                    Text(subtitle)
+                        .font(DS.Font.footnote)
+                        .foregroundStyle(.secondary)
+                }
+            }
+            .frame(width: 160, height: 140)
+            .background(
+                RoundedRectangle(cornerRadius: DS.Radius.lg, style: .continuous)
+                    .fill(Color.primary.opacity(0.04))
+            )
+            .overlay(
+                RoundedRectangle(cornerRadius: DS.Radius.lg, style: .continuous)
+                    .strokeBorder(Color.primary.opacity(0.08), lineWidth: 1)
+            )
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
     }
 }

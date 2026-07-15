@@ -387,11 +387,27 @@ final class GhosttyTerminalView: NSView, NSTextInputClient {
         }
     }
 
+    /// Start the PTY even if this view is not yet in a window. Background
+    /// cells (Servers workspace, non-visible grid slots, browser mode) would
+    /// otherwise never spawn until the user switches to them — because
+    /// surface birth is deferred to `viewDidMoveToWindow` for a valid size.
+    /// Uses a default size that is corrected on first real attach.
+    func ensureSurfaceStarted() {
+        guard surface == nil else { return }
+        if bounds.width < 2 || bounds.height < 2 {
+            // ~100×30 cells at a typical font size — enough for a real PTY
+            // cols/rows. Real layout overwrites this on first window attach.
+            setFrameSize(NSSize(width: 800, height: 480))
+        }
+        attachSurfaceIfNeeded()
+        applySurfaceMetrics(scale: Self.effectiveScale(for: window))
+    }
+
     /// Creates the underlying ghostty_surface_t, binding it to this NSView.
-    /// Idempotent (guarded by `surface == nil`) and called from
-    /// `viewDidMoveToWindow`, so the surface is born once — when the view first
-    /// enters a window — and survives detach/re-attach across workspace switches.
-    /// The surface owns the spawned PTY process.
+    /// Idempotent (guarded by `surface == nil`). Called from
+    /// `viewDidMoveToWindow` and from `ensureSurfaceStarted` for off-screen
+    /// launches. The surface owns the spawned PTY process and survives
+    /// detach/re-attach across workspace switches.
     private func attachSurfaceIfNeeded() {
         guard surface == nil else { return }
         guard let app = GhosttyApp.shared.app else {
@@ -452,6 +468,22 @@ final class GhosttyTerminalView: NSView, NSTextInputClient {
             ghostty_surface_set_content_scale(s, cfg.scale_factor, cfg.scale_factor)
             applyCurrentColorScheme()
         }
+    }
+
+    /// Push size / scale / display into Ghostty. Safe for off-screen surfaces
+    /// (uses main-screen scale when no window yet).
+    private func applySurfaceMetrics(scale: CGFloat) {
+        guard let surface else { return }
+        layer?.contentsScale = scale
+        let pixelW = UInt32(max(1, (bounds.width * scale).rounded(.down)))
+        let pixelH = UInt32(max(1, (bounds.height * scale).rounded(.down)))
+        ghostty_surface_set_content_scale(surface, scale, scale)
+        ghostty_surface_set_size(surface, pixelW, pixelH)
+        if let displayID = currentDisplayID()
+            ?? (NSScreen.main?.deviceDescription[NSDeviceDescriptionKey("NSScreenNumber")] as? UInt32) {
+            ghostty_surface_set_display_id(surface, displayID)
+        }
+        ghostty_surface_refresh(surface)
     }
 
     // MARK: - Focus

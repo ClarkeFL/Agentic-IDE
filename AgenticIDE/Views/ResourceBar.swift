@@ -1,26 +1,41 @@
 import SwiftUI
 
-/// Compact two-section row showing system-wide CPU% and memory used.
-/// Lives in the sidebar footer just above the action buttons. Reads
-/// from the shared `ResourceMonitor` (sampled at 2 Hz). Hover shows
-/// the memory total for context.
+/// Compact CPU% + memory used, fed by the shared `ResourceMonitor` (2 Hz).
+/// `layout: .stacked` is the sidebar footer; `.inline` is a single horizontal
+/// strip (browser left panel).
 struct ResourceBar: View {
+    enum Layout {
+        /// Two lines (sidebar).
+        case stacked
+        /// One row: CPU · MEM (browser mode footer).
+        case inline
+    }
+
     @Environment(ResourceMonitor.self) private var monitor
+    var layout: Layout = .stacked
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 2) {
-            metric(systemImage: "cpu",
-                   label: "CPU",
-                   value: formattedCPU,
-                   tint: cpuColor)
-            metric(systemImage: "memorychip",
-                   label: "MEM",
-                   value: formattedMemoryUsed,
-                   tint: memoryColor)
+        Group {
+            switch layout {
+            case .stacked:
+                VStack(alignment: .leading, spacing: 2) {
+                    metric(systemImage: "cpu", label: "CPU", value: formattedCPU, tint: cpuColor)
+                    metric(systemImage: "memorychip", label: "MEM",
+                           value: formattedMemoryUsed, tint: memoryColor)
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
+            case .inline:
+                HStack(spacing: DS.Space.md) {
+                    metric(systemImage: "cpu", label: "CPU", value: formattedCPU, tint: cpuColor)
+                    metric(systemImage: "memorychip", label: "MEM",
+                           value: formattedMemoryUsed, tint: memoryColor)
+                    Spacer(minLength: 0)
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
+            }
         }
         .font(.system(size: 11, weight: .medium, design: .monospaced))
         .monospacedDigit()
-        .frame(maxWidth: .infinity, alignment: .leading)
         .help("System-wide CPU and memory. Memory total: \(formattedMemoryTotal). Updated 2×/sec.")
     }
 

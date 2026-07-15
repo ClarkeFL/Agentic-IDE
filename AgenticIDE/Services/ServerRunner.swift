@@ -27,9 +27,15 @@ struct ServerRunner {
         return Set(ws.cells.compactMap { $0.terminal?.title })
     }
 
+    /// The Servers-workspace cell running `label`, if any.
+    func cell(named label: String) -> WorkspaceCell? {
+        workspace?.cells.first { $0.terminal?.title == label }
+    }
+
     /// Launch each given server that isn't already running into the Servers
-    /// workspace (growing the grid to fit), then switch to it.
-    func run(_ servers: [QuickLaunch]) {
+    /// workspace (growing the grid to fit). Pass `activate: false` when an
+    /// agent starts a server so the user's view stays on their working grid.
+    func run(_ servers: [QuickLaunch], activate: Bool = true) {
         let toRun = servers.filter { !$0.command.isEmpty }
         guard !toRun.isEmpty else { return }
 
@@ -45,7 +51,9 @@ struct ServerRunner {
                           icon: "play.circle", in: cell)
             store.recordActivity(projectId: project.id, command: ql.command)
         }
-        session.activeWorkspaceId = ws.id
+        if activate {
+            session.activeWorkspaceId = ws.id
+        }
     }
 
     /// Switch to the Servers workspace and focus the cell running `label`.
@@ -55,6 +63,12 @@ struct ServerRunner {
         if let cell = ws.cells.first(where: { $0.terminal?.title == label }) {
             ws.focusedCellId = cell.id
         }
+    }
+
+    /// Close the cell running `label`. No-op if it isn't live.
+    func stop(_ label: String) {
+        guard let cell = cell(named: label) else { return }
+        session.closeCell(cell)
     }
 
     /// Close every running server cell (the empty workspace is left in place).

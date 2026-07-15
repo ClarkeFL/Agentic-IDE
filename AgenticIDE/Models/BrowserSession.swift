@@ -4,8 +4,9 @@ import Observation
 import WebKit
 
 /// All live agent browser panes, in creation order. One pane per owning
-/// terminal (the agent that opened it via `agentide browser open`). Also owns
-/// the browser-mode UI state: whether the full-window browser view is up and
+/// terminal (the agent that opened it via `agentide browser open`), plus
+/// workspace-scoped manual browsers from the header globe. Also owns the
+/// browser-mode UI state: whether the full-window browser view is up and
 /// which pane it shows. Ephemeral — nothing is persisted.
 @Observable
 final class BrowserManager {
@@ -14,10 +15,20 @@ final class BrowserManager {
     private(set) var sessions: [BrowserSession] = []
     var focusedId: UUID?
     /// True while the full-window browser mode (agent column + web view)
-    /// replaces the normal three-pane layout.
-    var isModeActive = false
+    /// replaces the normal three-pane layout. Always mutate via `setModeActive`
+    /// so MainWindow receives `.browserModeDidChange`.
+    private(set) var isModeActive = false
 
     private init() {}
+
+    /// Single writer for mode visibility. Posts `.browserModeDidChange` so
+    /// MainWindow's `@State` flag stays in sync (Observation through a shared
+    /// singleton was missing updates and trapped people in browser view).
+    func setModeActive(_ active: Bool) {
+        guard isModeActive != active else { return }
+        isModeActive = active
+        NotificationCenter.default.post(name: .browserModeDidChange, object: active)
+    }
 
     var focused: BrowserSession? {
         sessions.first(where: { $0.id == focusedId }) ?? sessions.first
@@ -31,12 +42,15 @@ final class BrowserManager {
     /// a pane makes the edge bar appear; it never auto-expands browser mode —
     /// the user chooses when to look. A nil url opens the blank start page.
     @discardableResult
-    func open(_ url: URL?, cell: WorkspaceCell) -> BrowserSession {
+    func open(_ url: URL?, cell: WorkspaceCell,
+              workspace: Workspace? = nil,
+              projectSession: ProjectSession? = nil) -> BrowserSession {
         let session: BrowserSession
         if let existing = self.session(for: cell) {
             session = existing
+            session.bindContext(workspace: workspace, projectSession: projectSession)
         } else {
-            session = BrowserSession(cell: cell)
+            session = BrowserSession(cell: cell, workspace: workspace, projectSession: projectSession)
             sessions.append(session)
             if focusedId == nil { focusedId = session.id }
         }
@@ -44,14 +58,56 @@ final class BrowserManager {
         return session
     }
 
-    /// User-opened browser (workspace-header globe button): no owning cell
-    /// yet — browser mode expands immediately and the left column offers the
-    /// workspace's cells to attach one.
-    func openManual(from workspace: Workspace) {
-        let session = BrowserSession(cell: nil, workspace: workspace)
+    /// User-opened browser (workspace-header globe / restore). One reusable
+    /// session per workspace: reopening focuses the existing pane instead of
+    /// stacking blanks. Expands browser mode immediately so the launch pad is
+    /// visible. Marks the workspace so relaunch re-opens browser mode.
+    func openManual(from workspace: Workspace, projectSession: ProjectSession) {
+        if !workspace.prefersBrowserMode {
+            workspace.prefersBrowserMode = true
+            projectSession.markDirty()
+        }
+        if let existing = sessions.first(where: {
+            $0.sourceWorkspace === workspace && ($0.ownerCell == nil || $0.wasOpenedManually)
+        }) {
+            existing.bindContext(workspace: workspace, projectSession: projectSession)
+            focusedId = existing.id
+            setModeActive(true)
+            return
+        }
+        let session = BrowserSession(cell: nil, workspace: workspace,
+                                     projectSession: projectSession, openedManually: true)
         sessions.append(session)
         focusedId = session.id
-        isModeActive = true
+        setModeActive(true)
+    }
+
+    /// Collapse browser mode to the grid (⌘B / Grid button). Keeps
+    /// `prefersBrowserMode` so the next app launch can restore browser mode;
+    /// does NOT auto-reopen on the same run.
+    func collapseMode() {
+        setModeActive(false)
+    }
+
+    /// Expand browser mode (⌘B when collapsed). Reuses an existing pane or
+    /// opens one for the active workspace when it prefers the browser.
+    func expandMode(projectSession: ProjectSession?) {
+        if !sessions.isEmpty {
+            setModeActive(true)
+            return
+        }
+        if let projectSession, let ws = projectSession.activeWorkspace {
+            openManual(from: ws, projectSession: projectSession)
+        }
+    }
+
+    /// ⌘B: open browser mode if collapsed, collapse to grid if open.
+    func toggleMode(projectSession: ProjectSession?) {
+        if isModeActive {
+            collapseMode()
+        } else {
+            expandMode(projectSession: projectSession)
+        }
     }
 
     func close(_ session: BrowserSession) {
@@ -59,7 +115,19 @@ final class BrowserManager {
         sessions.remove(at: idx)
         session.tearDown()
         if focusedId == session.id { focusedId = sessions.first?.id }
-        if sessions.isEmpty { isModeActive = false }
+        // Always leave browser mode when the focused pane is closed; if other
+        // panes remain, stay only if mode was already showing them.
+        if sessions.isEmpty || focusedId == nil {
+            setModeActive(false)
+        }
+    }
+
+    /// Force-exit browser mode and drop every pane (escape hatch).
+    func closeAll() {
+        for session in sessions { session.tearDown() }
+        sessions.removeAll()
+        focusedId = nil
+        setModeActive(false)
     }
 
     /// A cell leaving the grid (workspace removed/resized) takes its browser
@@ -69,6 +137,17 @@ final class BrowserManager {
     func close(boundTo cell: WorkspaceCell) {
         guard let session = session(for: cell) else { return }
         close(session)
+    }
+
+    /// Drop every browser that was opened from (or later bound to) this
+    /// workspace — used when the workspace itself is deleted.
+    func close(workspace: Workspace) {
+        let toClose = sessions.filter { session in
+            if session.sourceWorkspace === workspace { return true }
+            guard let cell = session.ownerCell else { return false }
+            return workspace.cells.contains(where: { $0 === cell })
+        }
+        for session in toClose { close(session) }
     }
 
     /// Cycle the focused pane (bottom pager arrows).
@@ -88,6 +167,89 @@ final class BrowserManager {
             s = (insecure ? "http://" : "https://") + s
         }
         return URL(string: s)
+    }
+}
+
+/// Scrapes localhost / loopback URLs from terminal screens across a project
+/// session — the working grid plus the dedicated Servers workspace. Dev
+/// servers print these at boot (vite, next, rails, Go `listening on :8080`, …).
+enum LocalServerURLDetector {
+    /// Full http(s) URLs on loopback (port optional — some tools omit it for 80).
+    private static let fullURL =
+        /https?:\/\/(?:localhost|127\.0\.0\.1|0\.0\.0\.0|\[::1\])(?::\d+)?(?:\/[^\s"'<>]*)?/
+    /// Bare `host:port` that vite/webpack-style log lines sometimes print
+    /// without a scheme (e.g. after "Local:" with ANSI codes stripped poorly).
+    private static let bareHostPort =
+        /(?:localhost|127\.0\.0\.1|0\.0\.0\.0):\d{2,5}\b/
+    /// Private LAN URLs (vite "Network:") — useful when localhost is busy.
+    private static let privateLAN =
+        /https?:\/\/(?:192\.168\.\d{1,3}\.\d{1,3}|10\.\d{1,3}\.\d{1,3}\.\d{1,3}|172\.(?:1[6-9]|2\d|3[0-1])\.\d{1,3}\.\d{1,3}):\d+[^\s"'<>]*/
+    /// Go / node / rust style: `listening on :8080`, `Listening on 0.0.0.0:3000`,
+    /// `serving on [::]:5173`, `bound to :4000`. Capture group = port.
+    private static let listenOnPort =
+        /(?i)(?:listen(?:ing)?|bound|serv(?:ing|ed)|ready|started|available|running)\s+(?:on|at|to)\s+(?:https?:\/\/)?(?:\*|0\.0\.0\.0|127\.0\.0\.1|localhost|\[::\]|\[::1\])?:(\d{2,5})\b/
+    /// `port 8080` / `port: 8080` near a listen/server keyword on the same line.
+    private static let portKeyword =
+        /(?i)(?:listen(?:ing)?|server|http|ready|started|bound).{0,40}?\bport[:\s]+(\d{2,5})\b/
+    /// CSI / OSC noise Ghostty sometimes includes in screen text.
+    private static let ansi = /\u{001B}(?:\[[0-9;?]*[A-Za-z]|\][^\u{0007}]*\u{0007})/
+
+    /// Ordered unique URLs found on any live terminal in the project session.
+    /// Prefer the Servers workspace first so named dev servers win over
+    /// incidental agent-cell noise.
+    static func detect(in projectSession: ProjectSession?) -> [String] {
+        guard let projectSession else { return [] }
+        var seen = Set<String>()
+        var urls: [String] = []
+        let ordered = projectSession.workspaces.sorted { a, b in
+            let aServers = a.name == ServerRunner.workspaceName
+            let bServers = b.name == ServerRunner.workspaceName
+            if aServers != bServers { return aServers }
+            return false
+        }
+        for workspace in ordered {
+            for cell in workspace.cells {
+                guard let raw = cell.terminal?.view.readScreenText(), !raw.isEmpty else { continue }
+                appendURLs(from: stripANSI(raw), into: &urls, seen: &seen)
+            }
+        }
+        return urls
+    }
+
+    private static func stripANSI(_ text: String) -> String {
+        text.replacing(ansi, with: "")
+    }
+
+    private static func appendURLs(from text: String, into urls: inout [String], seen: inout Set<String>) {
+        for match in text.matches(of: fullURL) {
+            push(String(match.output), into: &urls, seen: &seen)
+        }
+        for match in text.matches(of: privateLAN) {
+            push(String(match.output), into: &urls, seen: &seen)
+        }
+        for match in text.matches(of: bareHostPort) {
+            push("http://\(String(match.output))", into: &urls, seen: &seen)
+        }
+        for match in text.matches(of: listenOnPort) {
+            let port = String(match.output.1)
+            push("http://localhost:\(port)", into: &urls, seen: &seen)
+        }
+        for match in text.matches(of: portKeyword) {
+            let port = String(match.output.1)
+            push("http://localhost:\(port)", into: &urls, seen: &seen)
+        }
+    }
+
+    private static func push(_ raw: String, into urls: inout [String], seen: inout Set<String>) {
+        var url = raw
+        // Strip trailing punctuation commonly left by log formatters.
+        while let last = url.last, ".,);]>".contains(last) { url.removeLast() }
+        // Collapse 0.0.0.0 (bind-all) to localhost for the browser.
+        if let range = url.range(of: "://0.0.0.0") {
+            url.replaceSubrange(range, with: "://localhost")
+        }
+        guard !url.isEmpty, seen.insert(url).inserted else { return }
+        urls.append(url)
     }
 }
 
@@ -134,8 +296,8 @@ enum BrowserViewport: String, CaseIterable, Identifiable {
 
 /// One agent-owned browser pane: the WKWebView, the element picker, and the
 /// JS-eval plumbing the `agentide browser` verbs use. Owned by BrowserManager;
-/// tied to the terminal that opened it (picker selections are typed into that
-/// terminal's input).
+/// tied to a workspace (for multi-cell agent pick + server URL scan) and
+/// optionally a driving cell (picker selections land in that terminal).
 @Observable
 final class BrowserSession: NSObject, Identifiable, WKNavigationDelegate, WKScriptMessageHandler {
     let id = UUID()
@@ -144,10 +306,15 @@ final class BrowserSession: NSObject, Identifiable, WKNavigationDelegate, WKScri
     /// different one, and the new agent inherits this pane. nil for a
     /// user-opened browser until a cell is attached.
     private(set) weak var ownerCell: WorkspaceCell?
-    /// The workspace a user-opened browser came from — source of the cells
-    /// offered by the attach picker. nil for agent-opened browsers (they
-    /// already have an owner).
+    /// Workspace the launch pad / agent picker draws from. Set for manual
+    /// opens and for agent-opened panes once context is bound.
     private(set) weak var sourceWorkspace: Workspace?
+    /// Project session — used to find the Servers workspace and all cells
+    /// when scanning for localhost URLs / listing agents.
+    private(set) weak var projectSession: ProjectSession?
+    /// True when opened from the workspace globe (vs `agentide browser open`).
+    /// Manual browsers auto-load the first detected localhost URL.
+    let wasOpenedManually: Bool
     let webView: WKWebView
 
     /// The agent currently driving this pane (the bound cell's live
@@ -170,14 +337,21 @@ final class BrowserSession: NSObject, Identifiable, WKNavigationDelegate, WKScri
     var pickerActive = false {
         didSet { applyPicker() }
     }
+    /// When true (manual browsers default), the start page loads the first
+    /// newly-seen localhost URL as soon as a terminal prints one.
+    var autoLoadDetectedURLs: Bool
 
     /// KVO on WKWebView.url / title / history — catches SPA pushState and
     /// in-page navigations that never fire WKNavigationDelegate.
     private var webViewObservations: [NSKeyValueObservation] = []
 
-    init(cell: WorkspaceCell?, workspace: Workspace? = nil) {
+    init(cell: WorkspaceCell?, workspace: Workspace? = nil,
+         projectSession: ProjectSession? = nil, openedManually: Bool = false) {
         self.ownerCell = cell
         self.sourceWorkspace = workspace
+        self.projectSession = projectSession
+        self.wasOpenedManually = openedManually
+        self.autoLoadDetectedURLs = openedManually
 
         let config = WKWebViewConfiguration()
         let controller = WKUserContentController()
@@ -198,6 +372,13 @@ final class BrowserSession: NSObject, Identifiable, WKNavigationDelegate, WKScri
         controller.add(WeakScriptMessageHandler(self), name: "agentidePicker")
         webView.navigationDelegate = self
         startObservingWebView()
+    }
+
+    /// Fill in workspace / project context when it becomes known (agent
+    /// open path, or reusing a manual session). Never clears existing refs.
+    func bindContext(workspace: Workspace?, projectSession: ProjectSession?) {
+        if sourceWorkspace == nil { sourceWorkspace = workspace }
+        if self.projectSession == nil { self.projectSession = projectSession }
     }
 
     private func startObservingWebView() {
@@ -254,11 +435,18 @@ final class BrowserSession: NSObject, Identifiable, WKNavigationDelegate, WKScri
         webView.goForward()
     }
 
-    /// Give a user-opened browser its driving cell. From here on the cell's
-    /// agent (current and future) owns this pane: its `agentide browser`
-    /// verbs hit it and picker selections land in its input.
+    /// Bind (or rebind) the driving cell. The cell's agent — current and
+    /// future — owns this pane: its `agentide browser` verbs hit it and
+    /// picker selections land in its input. Rebinding lets a multi-cell
+    /// workspace hand the same browser to a different agent.
     func attach(to cell: WorkspaceCell) {
         ownerCell = cell
+    }
+
+    /// Drop the driving cell without closing the browser (left column returns
+    /// to the agent picker).
+    func detachAgent() {
+        ownerCell = nil
     }
 
     func load(_ url: URL) {
@@ -517,15 +705,34 @@ final class BrowserSession: NSObject, Identifiable, WKNavigationDelegate, WKScri
     func userContentController(_ userContentController: WKUserContentController,
                                didReceive message: WKScriptMessage) {
         guard message.name == "agentidePicker",
-              let dict = message.body as? [String: Any],
-              let selector = dict["selector"] as? String else { return }
+              let dict = message.body as? [String: Any] else { return }
+
+        // Prefer multi-select `selectors` array; fall back to single `selector`.
+        var selectors: [String] = []
+        if let multi = dict["selectors"] as? [String] {
+            selectors = multi.map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+                .filter { !$0.isEmpty }
+        } else if let one = dict["selector"] as? String, !one.isEmpty {
+            selectors = [one]
+        }
+        guard !selectors.isEmpty else { return }
+
         let text = (dict["text"] as? String) ?? ""
         let html = (dict["html"] as? String) ?? ""
         let note = ((dict["note"] as? String) ?? "")
             .trimmingCharacters(in: .whitespacesAndNewlines)
         let action = (dict["action"] as? String) ?? (note.isEmpty ? "pick" : "annotate")
 
-        var line = action == "annotate" ? "[browser annotate] \(selector)" : "[browser pick] \(selector)"
+        let selectorSummary: String
+        if selectors.count == 1 {
+            selectorSummary = selectors[0]
+        } else {
+            selectorSummary = "\(selectors.count) elements: " + selectors.joined(separator: " ;; ")
+        }
+
+        var line = action == "annotate"
+            ? "[browser annotate] \(selectorSummary)"
+            : "[browser pick] \(selectorSummary)"
         if !text.isEmpty { line += " | text: \"\(text)\"" }
         if !html.isEmpty { line += " | html: \(html)" }
         if !note.isEmpty { line += " | \(note)" }
@@ -536,35 +743,39 @@ final class BrowserSession: NSObject, Identifiable, WKNavigationDelegate, WKScri
         // inserts without submit so the user can append more context first.
         let submit = action == "annotate" && !note.isEmpty
         ownerTab?.view.sendInput(submit ? flat : flat + " ", submit: submit)
+
+        // Force-clear highlights after send (JS also clears; this is belt + braces
+        // in case the page re-paints or hover immediately re-selects).
+        if submit {
+            webView.evaluateJavaScript(
+                "window.__agentidePicker && window.__agentidePicker.clear()",
+                completionHandler: nil)
+        }
     }
 
     // MARK: - Injected JS
 
-    /// Element picker with marquee drag-select + floating annotation chip.
-    /// Injected on every page, dormant until `setActive(true)`. Click or drag
-    /// a range → chip appears under the highlight → type a change note →
-    /// Enter posts to native and submits into the owning agent.
+    /// Element picker with multi-select (marquee + shift/cmd-click), highlight
+    /// boxes, and a floating annotation chip. Dormant until `setActive(true)`.
+    /// After Enter, selection clears so the next pick starts clean.
     private static let pickerJS = #"""
     (function () {
       if (window.__agentidePicker) { return; }
 
       var HIGHLIGHT =
         'position:fixed;z-index:2147483646;pointer-events:none;' +
-        'border:2px solid #007AFF;background:rgba(0,122,255,0.12);border-radius:3px;display:none;';
+        'border:2px solid #007AFF;background:rgba(0,122,255,0.14);border-radius:3px;display:none;';
       var MARQUEE =
         'position:fixed;z-index:2147483645;pointer-events:none;' +
         'border:1px dashed #007AFF;background:rgba(0,122,255,0.08);display:none;';
       var CHIP =
         'position:fixed;z-index:2147483647;display:none;box-sizing:border-box;' +
-        'min-width:220px;max-width:360px;padding:6px 8px;border-radius:10px;' +
+        'min-width:240px;max-width:380px;padding:6px 8px;border-radius:10px;' +
         'background:rgba(28,28,30,0.96);border:1px solid rgba(255,255,255,0.12);' +
         'box-shadow:0 8px 28px rgba(0,0,0,0.45);font:12px -apple-system,system-ui,sans-serif;' +
         'color:#f5f5f7;';
 
-      var box = document.createElement('div');
-      box.setAttribute('data-agentide-ui', '1');
-      box.style.cssText = HIGHLIGHT;
-
+      var boxPool = [];
       var marquee = document.createElement('div');
       marquee.setAttribute('data-agentide-ui', '1');
       marquee.style.cssText = MARQUEE;
@@ -573,22 +784,26 @@ final class BrowserSession: NSObject, Identifiable, WKNavigationDelegate, WKScri
       chip.setAttribute('data-agentide-ui', '1');
       chip.style.cssText = CHIP;
       chip.innerHTML =
-        '<div style="font-size:10px;opacity:0.55;margin:0 0 4px 2px;letter-spacing:0.02em;">' +
-        'Annotate · Enter to send · Esc to cancel</div>' +
+        '<div data-agentide-hint style="font-size:10px;opacity:0.55;margin:0 0 4px 2px;letter-spacing:0.02em;">' +
+        'Annotate · Enter to send · Esc clears · ⇧/⌘-click adds</div>' +
         '<input type="text" data-agentide-ui="1" placeholder="What should change?" ' +
         'style="width:100%;box-sizing:border-box;border:none;outline:none;' +
         'background:rgba(255,255,255,0.08);color:#f5f5f7;border-radius:6px;' +
         'padding:7px 9px;font:12px -apple-system,system-ui,sans-serif;" />';
       var input = chip.querySelector('input');
+      var hint = chip.querySelector('[data-agentide-hint]');
 
       var state = {
         active: false,
-        el: null,
+        selected: [],
+        hover: null,
         dragging: false,
         dragMoved: false,
         startX: 0,
         startY: 0,
-        annotating: false
+        annotating: false,
+        // After send, ignore hover re-select until the next pointer down.
+        suppressHover: false
       };
 
       function isUI(el) {
@@ -597,9 +812,48 @@ final class BrowserSession: NSObject, Identifiable, WKNavigationDelegate, WKScri
 
       function ensureMounted() {
         if (!document.body) { return; }
-        if (!box.isConnected) { document.body.appendChild(box); }
         if (!marquee.isConnected) { document.body.appendChild(marquee); }
         if (!chip.isConnected) { document.body.appendChild(chip); }
+        boxPool.forEach(function (b) {
+          if (!b.isConnected) { document.body.appendChild(b); }
+        });
+      }
+
+      function acquireBox() {
+        for (var i = 0; i < boxPool.length; i++) {
+          if (boxPool[i].style.display === 'none') { return boxPool[i]; }
+        }
+        var b = document.createElement('div');
+        b.setAttribute('data-agentide-ui', '1');
+        b.style.cssText = HIGHLIGHT;
+        boxPool.push(b);
+        if (document.body) { document.body.appendChild(b); }
+        return b;
+      }
+
+      function hideAllBoxes() {
+        boxPool.forEach(function (b) { b.style.display = 'none'; });
+      }
+
+      function placeBox(box, el) {
+        if (!el) { box.style.display = 'none'; return; }
+        var r = el.getBoundingClientRect();
+        if (r.width < 1 || r.height < 1) { box.style.display = 'none'; return; }
+        box.style.display = 'block';
+        box.style.left = r.left + 'px';
+        box.style.top = r.top + 'px';
+        box.style.width = Math.max(0, r.width) + 'px';
+        box.style.height = Math.max(0, r.height) + 'px';
+      }
+
+      function paintSelection() {
+        ensureMounted();
+        hideAllBoxes();
+        var list = state.selected.length ? state.selected
+          : (state.hover && !state.annotating ? [state.hover] : []);
+        list.forEach(function (el) {
+          placeBox(acquireBox(), el);
+        });
       }
 
       function cssPath(el) {
@@ -625,20 +879,7 @@ final class BrowserSession: NSObject, Identifiable, WKNavigationDelegate, WKScri
         return parts.join(' > ');
       }
 
-      function placeBoxOn(el) {
-        if (!el) { box.style.display = 'none'; return; }
-        ensureMounted();
-        var r = el.getBoundingClientRect();
-        box.style.display = 'block';
-        box.style.left = r.left + 'px';
-        box.style.top = r.top + 'px';
-        box.style.width = Math.max(0, r.width) + 'px';
-        box.style.height = Math.max(0, r.height) + 'px';
-      }
-
-      function hideMarquee() {
-        marquee.style.display = 'none';
-      }
+      function hideMarquee() { marquee.style.display = 'none'; }
 
       function updateMarquee(x1, y1, x2, y2) {
         ensureMounted();
@@ -660,37 +901,102 @@ final class BrowserSession: NSObject, Identifiable, WKNavigationDelegate, WKScri
         return x * y;
       }
 
-      /// Largest element mostly inside the marquee = the "component range".
-      /// Falls back to elementFromPoint at the marquee center.
-      function pickFromMarquee(m) {
-        var best = null;
-        var bestArea = 0;
+      /// Prefer "component-sized" nodes: interactive tags, roles, or mid-sized
+      /// blocks — not every span inside a button.
+      function isComponentCandidate(el) {
+        if (!el || el === document.body || el === document.documentElement) { return false; }
+        var tag = el.tagName;
+        if (/^(SCRIPT|STYLE|META|LINK|BR|HR|NOSCRIPT|SVG|PATH|IMG)$/i.test(tag)) {
+          // allow IMG as a component
+          if (!/^IMG$/i.test(tag)) { return false; }
+        }
+        var r = el.getBoundingClientRect();
+        if (r.width < 8 || r.height < 8) { return false; }
+        // Skip near-viewport wrappers that swallow multi-select.
+        if (r.width > window.innerWidth * 0.92 && r.height > window.innerHeight * 0.6) {
+          return false;
+        }
+        var role = (el.getAttribute('role') || '').toLowerCase();
+        var interactive = /^(A|BUTTON|INPUT|SELECT|TEXTAREA|LABEL|SUMMARY|DETAILS|IMG|VIDEO|CANVAS)$/i.test(tag)
+          || !!el.onclick
+          || el.hasAttribute('tabindex')
+          || /^(button|link|checkbox|radio|tab|menuitem|option|switch|textbox|listitem|article|card)$/.test(role);
+        if (interactive) { return true; }
+        // Mid-size structural blocks (cards, sections, list items).
+        if (/^(LI|ARTICLE|SECTION|ASIDE|FIGURE|FIELDSET|TR|TD|TH|HEADER|FOOTER|NAV|MAIN)$/i.test(tag)) {
+          return true;
+        }
+        if (r.width >= 40 && r.height >= 24 && r.width * r.height >= 1200) { return true; }
+        return false;
+      }
+
+      /// Keep outermost selected nodes that don't contain another selected node
+      /// as a leaf preference: prefer deepest components that are siblings.
+      function collapseNested(els) {
+        // Prefer leaves (no selected descendant) so multi-card marquee keeps
+        // each card instead of the shared parent.
+        var leaves = els.filter(function (el) {
+          return !els.some(function (other) {
+            return other !== el && el.contains(other);
+          });
+        });
+        if (leaves.length) { return leaves; }
+        return els;
+      }
+
+      /// Cap runaway multi-select (e.g. selecting every letter).
+      var MAX_SELECT = 24;
+
+      function pickManyFromMarquee(m) {
+        var hits = [];
         var all = document.body ? document.body.querySelectorAll('*') : [];
+        var marqueeArea = Math.max(1, m.width * m.height);
         for (var i = 0; i < all.length; i++) {
           var el = all[i];
-          if (isUI(el)) { continue; }
-          if (el === document.documentElement || el === document.body) { continue; }
+          if (isUI(el) || !isComponentCandidate(el)) { continue; }
           var r = el.getBoundingClientRect();
-          if (r.width < 2 || r.height < 2) { continue; }
           var er = { left: r.left, top: r.top, right: r.right, bottom: r.bottom };
           var overlap = rectOverlap(m, er);
           if (overlap <= 0) { continue; }
           var area = r.width * r.height;
           if (area <= 0) { continue; }
-          // Require most of the element to sit inside the marquee so we don't
-          // latch onto the whole page when the user draws a small box.
-          if (overlap / area < 0.55) { continue; }
-          if (area > bestArea) {
-            bestArea = area;
-            best = el;
-          }
+          // Element mostly inside marquee OR marquee mostly covering element
+          // (drag a box over several cards).
+          var inside = overlap / area;
+          var covers = overlap / marqueeArea;
+          if (inside < 0.45 && covers < 0.08) { continue; }
+          // Prefer better containment.
+          if (inside < 0.35 && !(covers > 0.15 && inside > 0.2)) { continue; }
+          hits.push({ el: el, score: inside * 2 + covers, area: area });
         }
-        if (best) { return best; }
-        var cx = (m.left + m.right) / 2;
-        var cy = (m.top + m.bottom) / 2;
-        var hit = document.elementFromPoint(cx, cy);
-        if (hit && isUI(hit)) { hit = null; }
-        return hit instanceof Element ? hit : null;
+        hits.sort(function (a, b) { return b.score - a.score || a.area - b.area; });
+        var els = hits.map(function (h) { return h.el; });
+        els = collapseNested(els);
+        // If still empty, fall back to center hit.
+        if (!els.length) {
+          var cx = (m.left + m.right) / 2;
+          var cy = (m.top + m.bottom) / 2;
+          var hit = document.elementFromPoint(cx, cy);
+          while (hit && hit !== document.body && !isComponentCandidate(hit)) {
+            hit = hit.parentElement;
+          }
+          if (hit && !isUI(hit) && hit instanceof Element) { els = [hit]; }
+        }
+        return els.slice(0, MAX_SELECT);
+      }
+
+      function pickDeepestAt(x, y) {
+        var hit = document.elementFromPoint(x, y);
+        if (!hit || isUI(hit) || !(hit instanceof Element)) { return null; }
+        // Walk up to the nearest component-sized ancestor so we don't only
+        // grab a nested <span>.
+        var node = hit;
+        var best = null;
+        while (node && node !== document.body) {
+          if (isComponentCandidate(node)) { best = node; break; }
+          node = node.parentElement;
+        }
+        return best || (hit instanceof Element ? hit : null);
       }
 
       function hideChip() {
@@ -699,49 +1005,103 @@ final class BrowserSession: NSObject, Identifiable, WKNavigationDelegate, WKScri
         state.annotating = false;
       }
 
-      function showChipFor(el) {
-        if (!el) { hideChip(); return; }
+      function updateHint() {
+        var n = state.selected.length;
+        if (n <= 1) {
+          hint.textContent = 'Annotate · Enter to send · Esc clears · ⇧/⌘-click adds';
+        } else {
+          hint.textContent = n + ' components · Enter to send · Esc clears · ⇧/⌘-click toggles';
+        }
+      }
+
+      function showChip() {
+        if (!state.selected.length) { hideChip(); return; }
         ensureMounted();
-        state.el = el;
         state.annotating = true;
-        placeBoxOn(el);
-        var r = el.getBoundingClientRect();
-        var chipW = 280;
-        var left = Math.min(Math.max(8, r.left), window.innerWidth - chipW - 8);
-        var top = r.bottom + 8;
-        if (top + 64 > window.innerHeight) {
-          top = Math.max(8, r.top - 64);
+        state.hover = null;
+        paintSelection();
+        updateHint();
+        // Anchor chip under the union of selected rects.
+        var left = Infinity, top = Infinity, right = -Infinity, bottom = -Infinity;
+        state.selected.forEach(function (el) {
+          var r = el.getBoundingClientRect();
+          left = Math.min(left, r.left);
+          top = Math.min(top, r.top);
+          right = Math.max(right, r.right);
+          bottom = Math.max(bottom, r.bottom);
+        });
+        var chipW = 300;
+        var cLeft = Math.min(Math.max(8, left), window.innerWidth - chipW - 8);
+        var cTop = bottom + 8;
+        if (cTop + 64 > window.innerHeight) {
+          cTop = Math.max(8, top - 64);
         }
         chip.style.display = 'block';
-        chip.style.left = left + 'px';
-        chip.style.top = top + 'px';
+        chip.style.left = cLeft + 'px';
+        chip.style.top = cTop + 'px';
         chip.style.width = chipW + 'px';
-        // Defer focus so the mouseup that opened us doesn't steal it back.
         setTimeout(function () { try { input.focus(); input.select(); } catch (e) {} }, 0);
+      }
+
+      function setSelection(els, openChip) {
+        // Dedupe by identity.
+        var seen = [];
+        els.forEach(function (el) {
+          if (el && seen.indexOf(el) < 0) { seen.push(el); }
+        });
+        state.selected = seen.slice(0, MAX_SELECT);
+        state.hover = null;
+        paintSelection();
+        if (openChip && state.selected.length) { showChip(); }
+        else if (!state.selected.length) { hideChip(); }
+      }
+
+      function toggleInSelection(el) {
+        if (!el) { return; }
+        var idx = state.selected.indexOf(el);
+        if (idx >= 0) {
+          state.selected.splice(idx, 1);
+        } else if (state.selected.length < MAX_SELECT) {
+          state.selected.push(el);
+        }
+        state.hover = null;
+        paintSelection();
+        if (state.selected.length) { showChip(); }
+        else { hideChip(); }
       }
 
       function clearSelection() {
         hideChip();
         hideMarquee();
-        box.style.display = 'none';
-        state.el = null;
+        hideAllBoxes();
+        state.selected = [];
+        state.hover = null;
         state.dragging = false;
         state.dragMoved = false;
+        state.suppressHover = true;
       }
 
       function submitAnnotation() {
-        if (!state.el) { return; }
+        if (!state.selected.length) { return; }
         var note = (input.value || '').trim();
         if (!note) { return; }
-        var el = state.el;
-        var text = (el.innerText || el.value || '').trim().replace(/\s+/g, ' ').slice(0, 120);
+        var els = state.selected.slice();
+        var selectors = els.map(cssPath);
+        var texts = els.map(function (el) {
+          return (el.innerText || el.value || el.alt || '').trim().replace(/\s+/g, ' ').slice(0, 80);
+        }).filter(Boolean);
+        var htmls = els.slice(0, 4).map(function (el) {
+          return el.outerHTML.replace(/\s+/g, ' ').slice(0, 200);
+        });
         window.webkit.messageHandlers.agentidePicker.postMessage({
           action: 'annotate',
-          selector: cssPath(el),
-          text: text,
-          html: el.outerHTML.replace(/\s+/g, ' ').slice(0, 400),
+          selectors: selectors,
+          selector: selectors[0] || '',
+          text: texts.slice(0, 3).join(' · ').slice(0, 160),
+          html: htmls.join(' || ').slice(0, 600),
           note: note
         });
+        // Always deselect after send so the user can start a fresh pick.
         clearSelection();
       }
 
@@ -752,29 +1112,36 @@ final class BrowserSession: NSObject, Identifiable, WKNavigationDelegate, WKScri
           var dy = e.clientY - state.startY;
           if (Math.abs(dx) > 4 || Math.abs(dy) > 4) { state.dragMoved = true; }
           if (state.dragMoved) {
-            updateMarquee(state.startX, state.startY, e.clientX, e.clientY);
-            var m = {
-              left: Math.min(state.startX, e.clientX),
-              top: Math.min(state.startY, e.clientY),
-              right: Math.max(state.startX, e.clientX),
-              bottom: Math.max(state.startY, e.clientY)
-            };
-            var preview = pickFromMarquee(m);
-            if (preview) { placeBoxOn(preview); state.el = preview; }
+            var m = updateMarquee(state.startX, state.startY, e.clientX, e.clientY);
+            var preview = pickManyFromMarquee(m);
+            // Live preview without committing chip yet.
+            hideAllBoxes();
+            preview.forEach(function (el) { placeBox(acquireBox(), el); });
+            state.selected = preview;
           }
           return;
         }
-        if (state.annotating) { return; }
-        var el = e.target;
-        if (isUI(el) || !(el instanceof Element)) { return; }
-        state.el = el;
-        placeBoxOn(el);
+        if (state.annotating || state.suppressHover) { return; }
+        if (isUI(e.target)) { return; }
+        var el = pickDeepestAt(e.clientX, e.clientY);
+        state.hover = el;
+        if (!state.selected.length) { paintSelection(); }
       }
 
       function onDown(e) {
         if (!state.active || e.button !== 0) { return; }
         if (isUI(e.target)) { return; }
-        // Starting a new pick dismisses an open chip.
+        state.suppressHover = false;
+        var additive = e.shiftKey || e.metaKey || e.ctrlKey;
+        // Additive click: toggle into selection, don't start marquee.
+        if (additive) {
+          var el = pickDeepestAt(e.clientX, e.clientY);
+          if (el) { toggleInSelection(el); }
+          e.preventDefault();
+          e.stopPropagation();
+          return;
+        }
+        // Fresh drag / click replaces selection unless annotating chip only.
         if (state.annotating) { hideChip(); }
         state.dragging = true;
         state.dragMoved = false;
@@ -790,28 +1157,27 @@ final class BrowserSession: NSObject, Identifiable, WKNavigationDelegate, WKScri
         e.preventDefault();
         e.stopPropagation();
 
-        var el = null;
         if (state.dragMoved) {
           var m = {
             left: Math.min(state.startX, e.clientX),
             top: Math.min(state.startY, e.clientY),
             right: Math.max(state.startX, e.clientX),
-            bottom: Math.max(state.startY, e.clientY)
+            bottom: Math.max(state.startY, e.clientY),
+            width: Math.abs(e.clientX - state.startX),
+            height: Math.abs(e.clientY - state.startY)
           };
-          el = pickFromMarquee(m);
           hideMarquee();
+          setSelection(pickManyFromMarquee(m), true);
         } else {
           hideMarquee();
-          var hit = document.elementFromPoint(e.clientX, e.clientY);
-          if (hit && !isUI(hit) && hit instanceof Element) { el = hit; }
-          else { el = state.el; }
+          var hit = pickDeepestAt(e.clientX, e.clientY);
+          if (hit) { setSelection([hit], true); }
+          else { setSelection([], false); }
         }
-        if (el) { showChipFor(el); }
       }
 
       function onClick(e) {
         if (!state.active) { return; }
-        // Capture-phase swallow so the page doesn't navigate / toggle while picking.
         if (isUI(e.target)) { return; }
         e.preventDefault();
         e.stopPropagation();
@@ -820,7 +1186,7 @@ final class BrowserSession: NSObject, Identifiable, WKNavigationDelegate, WKScri
       function onKey(e) {
         if (!state.active) { return; }
         if (e.key === 'Escape') {
-          if (state.annotating || state.el) {
+          if (state.annotating || state.selected.length || state.hover) {
             e.preventDefault();
             e.stopPropagation();
             clearSelection();
@@ -851,8 +1217,9 @@ final class BrowserSession: NSObject, Identifiable, WKNavigationDelegate, WKScri
           state.active = !!on;
           document.documentElement.style.cursor = on ? 'crosshair' : '';
           if (!on) { clearSelection(); }
-          else { ensureMounted(); }
-        }
+          else { ensureMounted(); state.suppressHover = false; }
+        },
+        clear: function () { clearSelection(); }
       };
 
       document.addEventListener('mousemove', onMove, true);
@@ -860,6 +1227,12 @@ final class BrowserSession: NSObject, Identifiable, WKNavigationDelegate, WKScri
       document.addEventListener('mouseup', onUp, true);
       document.addEventListener('click', onClick, true);
       document.addEventListener('keydown', onKey, true);
+      window.addEventListener('scroll', function () {
+        if (state.active && (state.selected.length || state.hover)) { paintSelection(); }
+      }, true);
+      window.addEventListener('resize', function () {
+        if (state.active && (state.selected.length || state.hover)) { paintSelection(); }
+      }, true);
     })();
     """#
 

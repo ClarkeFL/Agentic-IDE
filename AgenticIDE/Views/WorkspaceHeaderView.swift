@@ -23,8 +23,11 @@ struct WorkspaceHeaderView: View {
                 Spacer(minLength: DS.Space.sm)
 
                 HeaderButton(systemName: "globe",
-                             help: "Open a browser — pick an agent to drive it",
-                             action: { BrowserManager.shared.openManual(from: workspace) })
+                             help: "Open a browser — run servers, pick an agent, auto-detect localhost",
+                             action: {
+                                 BrowserManager.shared.openManual(from: workspace,
+                                                                  projectSession: session)
+                             })
 
                 HeaderButton(systemName: "note.text",
                              help: "Notes (⇧⌘N)",

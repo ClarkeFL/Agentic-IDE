@@ -92,12 +92,18 @@ final class AgentBridge {
           agentide grid <rows> <cols> Resize to a uniform grid (max 8 cells), or
           agentide grid rows|cols <n>... Uneven layout: groups along the axis,
                                       e.g. 'grid cols 1 2' = tall left + 2 stacked.
-          agentide launch <n> <tool>  Launch <tool> in cell <n>.
+          agentide launch <n> <tool>  Launch <tool> in cell <n> (agents/terminals — NOT servers).
           agentide close <n>          Close the program in cell <n>.
           agentide send <n> <text>    Type <text> into cell <n> and press Enter.
           agentide read <n>           Print cell <n>'s screen, to review its progress.
           agentide status <n>         Print cell <n>'s status (idle/working/completed/failed).
           agentide wait <n> [secs]    Block until cell <n> finishes (default 600s).
+        Dev servers (dedicated Servers workspace — do NOT put these in grid cells):
+          agentide servers            List configured/running servers and how to start them.
+          agentide server run [name|all]  Start a configured server (or all) in Servers workspace.
+          agentide server run <name> <command>  Start an ad-hoc server (e.g. web npm run dev).
+          agentide server stop [name|all] Stop a running server (or all).
+          agentide server read <name> Print that server's terminal output.
         Your own browser pane (visible to the user, great for testing UI):
           agentide browser open [url] Open (or navigate) your browser pane; no url = blank start page.
           agentide browser read       Snapshot the page: title, interactive elements + selectors, text.
@@ -124,14 +130,23 @@ final class AgentBridge {
 
         cmd="$1"; [ $# -gt 0 ] && shift
         case "$cmd" in
-          cells)  req "cells $sid" ;;
-          tools)  req "tools $sid" ;;
-          read)   req "read $sid $1" ;;
-          status) req "status $sid $1" ;;
-          close)  req "close $sid $1" ;;
-          grid)   req "grid $sid $*" ;;
-          send)   n="$1"; shift; req "send $sid $n" "$*" ;;
-          launch) n="$1"; shift; req "launch $sid $n" "$*" ;;
+          cells)   req "cells $sid" ;;
+          tools)   req "tools $sid" ;;
+          servers) req "servers $sid" ;;
+          read)    req "read $sid $1" ;;
+          status)  req "status $sid $1" ;;
+          close)   req "close $sid $1" ;;
+          grid)    req "grid $sid $*" ;;
+          send)    n="$1"; shift; req "send $sid $n" "$*" ;;
+          launch)  n="$1"; shift; req "launch $sid $n" "$*" ;;
+          server)
+            sub="$1"; [ $# -gt 0 ] && shift
+            case "$sub" in
+              run)  name="$1"; [ $# -gt 0 ] && shift; req "server $sid run $name" "$*" ;;
+              stop) req "server $sid stop $1" ;;
+              read) req "server $sid read $1" ;;
+              *) usage; exit 1 ;;
+            esac ;;
           browser)
             sub="$1"; [ $# -gt 0 ] && shift
             case "$sub" in
