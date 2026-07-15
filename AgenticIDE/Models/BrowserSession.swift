@@ -707,6 +707,13 @@ final class BrowserSession: NSObject, Identifiable, WKNavigationDelegate, WKScri
         guard message.name == "agentidePicker",
               let dict = message.body as? [String: Any] else { return }
 
+        let action = (dict["action"] as? String) ?? ""
+        // Esc with empty selection exits annotate mode (JS already cleared).
+        if action == "cancel" {
+            pickerActive = false
+            return
+        }
+
         // Prefer multi-select `selectors` array; fall back to single `selector`.
         var selectors: [String] = []
         if let multi = dict["selectors"] as? [String] {
@@ -721,7 +728,9 @@ final class BrowserSession: NSObject, Identifiable, WKNavigationDelegate, WKScri
         let html = (dict["html"] as? String) ?? ""
         let note = ((dict["note"] as? String) ?? "")
             .trimmingCharacters(in: .whitespacesAndNewlines)
-        let action = (dict["action"] as? String) ?? (note.isEmpty ? "pick" : "annotate")
+        let resolvedAction = action.isEmpty
+            ? (note.isEmpty ? "pick" : "annotate")
+            : action
 
         let selectorSummary: String
         if selectors.count == 1 {
@@ -730,7 +739,7 @@ final class BrowserSession: NSObject, Identifiable, WKNavigationDelegate, WKScri
             selectorSummary = "\(selectors.count) elements: " + selectors.joined(separator: " ;; ")
         }
 
-        var line = action == "annotate"
+        var line = resolvedAction == "annotate"
             ? "[browser annotate] \(selectorSummary)"
             : "[browser pick] \(selectorSummary)"
         if !text.isEmpty { line += " | text: \"\(text)\"" }
@@ -741,33 +750,36 @@ final class BrowserSession: NSObject, Identifiable, WKNavigationDelegate, WKScri
         let flat = line.replacingOccurrences(of: "\n", with: " ")
         // Annotate (chip + Enter) submits immediately. Bare pick (legacy) still
         // inserts without submit so the user can append more context first.
-        let submit = action == "annotate" && !note.isEmpty
+        let submit = resolvedAction == "annotate" && !note.isEmpty
         ownerTab?.view.sendInput(submit ? flat : flat + " ", submit: submit)
 
-        // Force-clear highlights after send (JS also clears; this is belt + braces
-        // in case the page re-paints or hover immediately re-selects).
+        // Annotate send: clear highlights and leave annotate mode so the user
+        // can browse again. Toggle ⌘⇧E to pick more. (JS already setActive(false);
+        // this updates the toolbar button state.)
         if submit {
-            webView.evaluateJavaScript(
-                "window.__agentidePicker && window.__agentidePicker.clear()",
-                completionHandler: nil)
+            pickerActive = false
         }
     }
 
     // MARK: - Injected JS
 
     /// Element picker with multi-select (marquee + shift/cmd-click), highlight
-    /// boxes, and a floating annotation chip. Dormant until `setActive(true)`.
-    /// After Enter, selection clears so the next pick starts clean.
+    /// overlays + element outlines, and a floating annotation chip. Dormant
+    /// until `setActive(true)`. Enter sends the note, clears selection, and
+    /// Swift turns annotate mode off.
     private static let pickerJS = #"""
     (function () {
       if (window.__agentidePicker) { return; }
 
+      var HL_CLASS = 'agentide-hl';
+      var HL_STYLE_ID = 'agentide-hl-style';
       var HIGHLIGHT =
-        'position:fixed;z-index:2147483646;pointer-events:none;' +
-        'border:2px solid #007AFF;background:rgba(0,122,255,0.14);border-radius:3px;display:none;';
+        'position:fixed;z-index:2147483646;pointer-events:none;box-sizing:border-box;' +
+        'border:2px solid #007AFF;background:rgba(0,122,255,0.16);border-radius:4px;' +
+        'box-shadow:0 0 0 1px rgba(0,122,255,0.35);display:none;';
       var MARQUEE =
-        'position:fixed;z-index:2147483645;pointer-events:none;' +
-        'border:1px dashed #007AFF;background:rgba(0,122,255,0.08);display:none;';
+        'position:fixed;z-index:2147483645;pointer-events:none;box-sizing:border-box;' +
+        'border:1.5px dashed #007AFF;background:rgba(0,122,255,0.08);display:none;';
       var CHIP =
         'position:fixed;z-index:2147483647;display:none;box-sizing:border-box;' +
         'min-width:240px;max-width:380px;padding:6px 8px;border-radius:10px;' +
@@ -785,7 +797,7 @@ final class BrowserSession: NSObject, Identifiable, WKNavigationDelegate, WKScri
       chip.style.cssText = CHIP;
       chip.innerHTML =
         '<div data-agentide-hint style="font-size:10px;opacity:0.55;margin:0 0 4px 2px;letter-spacing:0.02em;">' +
-        'Annotate · Enter to send · Esc clears · ⇧/⌘-click adds</div>' +
+        'Annotate · Enter sends & exits · Esc clears · ⇧/⌘-click or ⇧-drag groups</div>' +
         '<input type="text" data-agentide-ui="1" placeholder="What should change?" ' +
         'style="width:100%;box-sizing:border-box;border:none;outline:none;' +
         'background:rgba(255,255,255,0.08);color:#f5f5f7;border-radius:6px;' +
@@ -799,10 +811,10 @@ final class BrowserSession: NSObject, Identifiable, WKNavigationDelegate, WKScri
         hover: null,
         dragging: false,
         dragMoved: false,
+        additiveDrag: false,
         startX: 0,
         startY: 0,
         annotating: false,
-        // After send, ignore hover re-select until the next pointer down.
         suppressHover: false
       };
 
@@ -810,8 +822,24 @@ final class BrowserSession: NSObject, Identifiable, WKNavigationDelegate, WKScri
         return !!(el && el.closest && el.closest('[data-agentide-ui]'));
       }
 
+      function ensureStyle() {
+        if (document.getElementById(HL_STYLE_ID)) { return; }
+        var s = document.createElement('style');
+        s.id = HL_STYLE_ID;
+        s.setAttribute('data-agentide-ui', '1');
+        s.textContent =
+          '.' + HL_CLASS + '{' +
+          'outline:2px solid #007AFF !important;' +
+          'outline-offset:2px !important;' +
+          'box-shadow:0 0 0 4px rgba(0,122,255,0.22) !important;' +
+          'border-radius:3px;' +
+          '}';
+        (document.head || document.documentElement).appendChild(s);
+      }
+
       function ensureMounted() {
         if (!document.body) { return; }
+        ensureStyle();
         if (!marquee.isConnected) { document.body.appendChild(marquee); }
         if (!chip.isConnected) { document.body.appendChild(chip); }
         boxPool.forEach(function (b) {
@@ -835,24 +863,35 @@ final class BrowserSession: NSObject, Identifiable, WKNavigationDelegate, WKScri
         boxPool.forEach(function (b) { b.style.display = 'none'; });
       }
 
+      function clearElementOutlines() {
+        try {
+          document.querySelectorAll('.' + HL_CLASS).forEach(function (el) {
+            el.classList.remove(HL_CLASS);
+          });
+        } catch (e) {}
+      }
+
       function placeBox(box, el) {
-        if (!el) { box.style.display = 'none'; return; }
+        if (!el || !el.getBoundingClientRect) { box.style.display = 'none'; return; }
         var r = el.getBoundingClientRect();
         if (r.width < 1 || r.height < 1) { box.style.display = 'none'; return; }
         box.style.display = 'block';
-        box.style.left = r.left + 'px';
-        box.style.top = r.top + 'px';
-        box.style.width = Math.max(0, r.width) + 'px';
-        box.style.height = Math.max(0, r.height) + 'px';
+        box.style.left = Math.round(r.left) + 'px';
+        box.style.top = Math.round(r.top) + 'px';
+        box.style.width = Math.max(0, Math.round(r.width)) + 'px';
+        box.style.height = Math.max(0, Math.round(r.height)) + 'px';
       }
 
       function paintSelection() {
         ensureMounted();
         hideAllBoxes();
+        clearElementOutlines();
         var list = state.selected.length ? state.selected
           : (state.hover && !state.annotating ? [state.hover] : []);
         list.forEach(function (el) {
+          if (!el || !el.isConnected) { return; }
           placeBox(acquireBox(), el);
+          try { el.classList.add(HL_CLASS); } catch (e) {}
         });
       }
 
@@ -864,7 +903,9 @@ final class BrowserSession: NSObject, Identifiable, WKNavigationDelegate, WKScri
           if (node.id) { parts.unshift('#' + CSS.escape(node.id)); break; }
           var part = node.tagName.toLowerCase();
           var cls = (typeof node.className === 'string' ? node.className : '')
-            .trim().split(/\s+/).filter(Boolean).slice(0, 2);
+            .trim().split(/\s+/).filter(function (c) {
+              return c && c !== HL_CLASS && c.indexOf('agentide') !== 0;
+            }).slice(0, 2);
           if (cls.length) { part += '.' + cls.map(CSS.escape).join('.'); }
           var parent = node.parentElement;
           if (parent) {
@@ -901,86 +942,193 @@ final class BrowserSession: NSObject, Identifiable, WKNavigationDelegate, WKScri
         return x * y;
       }
 
-      /// Prefer "component-sized" nodes: interactive tags, roles, or mid-sized
-      /// blocks — not every span inside a button.
+      function elArea(el) {
+        var r = el.getBoundingClientRect();
+        return Math.max(0, r.width) * Math.max(0, r.height);
+      }
+
+      /// Prefer "component-sized" nodes: interactive tags, roles, cards, mid blocks.
       function isComponentCandidate(el) {
         if (!el || el === document.body || el === document.documentElement) { return false; }
+        if (isUI(el)) { return false; }
         var tag = el.tagName;
-        if (/^(SCRIPT|STYLE|META|LINK|BR|HR|NOSCRIPT|SVG|PATH|IMG)$/i.test(tag)) {
-          // allow IMG as a component
-          if (!/^IMG$/i.test(tag)) { return false; }
-        }
+        if (/^(SCRIPT|STYLE|META|LINK|BR|HR|NOSCRIPT|SVG|PATH)$/i.test(tag)) { return false; }
         var r = el.getBoundingClientRect();
-        if (r.width < 8 || r.height < 8) { return false; }
+        if (r.width < 10 || r.height < 10) { return false; }
         // Skip near-viewport wrappers that swallow multi-select.
-        if (r.width > window.innerWidth * 0.92 && r.height > window.innerHeight * 0.6) {
+        if (r.width > window.innerWidth * 0.92 && r.height > window.innerHeight * 0.55) {
           return false;
         }
         var role = (el.getAttribute('role') || '').toLowerCase();
+        var cls = (typeof el.className === 'string' ? el.className : '').toLowerCase();
         var interactive = /^(A|BUTTON|INPUT|SELECT|TEXTAREA|LABEL|SUMMARY|DETAILS|IMG|VIDEO|CANVAS)$/i.test(tag)
-          || !!el.onclick
+          || typeof el.onclick === 'function'
           || el.hasAttribute('tabindex')
-          || /^(button|link|checkbox|radio|tab|menuitem|option|switch|textbox|listitem|article|card)$/.test(role);
+          || el.hasAttribute('contenteditable')
+          || /^(button|link|checkbox|radio|tab|menuitem|option|switch|textbox|listitem|article|card|group)$/.test(role);
         if (interactive) { return true; }
-        // Mid-size structural blocks (cards, sections, list items).
-        if (/^(LI|ARTICLE|SECTION|ASIDE|FIGURE|FIELDSET|TR|TD|TH|HEADER|FOOTER|NAV|MAIN)$/i.test(tag)) {
+        if (/^(LI|ARTICLE|SECTION|ASIDE|FIGURE|FIELDSET|TR|TD|TH|HEADER|FOOTER|NAV|MAIN|FORM|UL|OL|DL)$/i.test(tag)) {
           return true;
         }
-        if (r.width >= 40 && r.height >= 24 && r.width * r.height >= 1200) { return true; }
+        // Common component class hints (cards, tiles, rows, items).
+        if (/\b(card|tile|item|row|cell|panel|widget|product|post|entry|box|col|column|grid-item)\b/.test(cls)) {
+          return true;
+        }
+        if (r.width >= 36 && r.height >= 20 && r.width * r.height >= 900) { return true; }
         return false;
       }
 
-      /// Keep outermost selected nodes that don't contain another selected node
-      /// as a leaf preference: prefer deepest components that are siblings.
-      function collapseNested(els) {
-        // Prefer leaves (no selected descendant) so multi-card marquee keeps
-        // each card instead of the shared parent.
-        var leaves = els.filter(function (el) {
-          return !els.some(function (other) {
-            return other !== el && el.contains(other);
-          });
-        });
-        if (leaves.length) { return leaves; }
-        return els;
+      /// Score how "component-like" an element is for multi-select grouping.
+      /// Higher = better peer to keep when marquee-selecting cards/items.
+      function componentScore(el) {
+        var r = el.getBoundingClientRect();
+        var area = r.width * r.height;
+        var vp = window.innerWidth * window.innerHeight;
+        var score = 0;
+        var tag = el.tagName;
+        var role = (el.getAttribute('role') || '').toLowerCase();
+        var cls = (typeof el.className === 'string' ? el.className : '').toLowerCase();
+        if (/^(LI|ARTICLE|SECTION|ASIDE|FIGURE|A|BUTTON|IMG|TR)$/i.test(tag)) { score += 4; }
+        if (/listitem|article|card|button|link/.test(role)) { score += 4; }
+        if (/\b(card|tile|item|row|product|post|entry|grid-item)\b/.test(cls)) { score += 5; }
+        // Prefer mid-size peers (cards), not tiny icons or giant sections.
+        var frac = area / Math.max(1, vp);
+        if (frac > 0.002 && frac < 0.25) { score += 3; }
+        else if (frac >= 0.25) { score -= 2; }
+        // Similar aspect ratio to a card/row helps grouping.
+        var ar = r.width / Math.max(1, r.height);
+        if (ar > 0.4 && ar < 6) { score += 1; }
+        // Prefer direct children of flex/grid parents (common card lists).
+        var p = el.parentElement;
+        if (p) {
+          try {
+            var cs = window.getComputedStyle(p);
+            if (cs.display === 'flex' || cs.display === 'grid'
+                || cs.display === 'inline-flex' || cs.display === 'inline-grid') {
+              score += 3;
+            }
+          } catch (e) {}
+        }
+        return score;
       }
 
-      /// Cap runaway multi-select (e.g. selecting every letter).
+      /// Collapse nested hits into a peer group: prefer similar siblings
+      /// (cards in a row) over deepest leaves or a giant shared parent.
+      function groupComponents(els) {
+        if (!els || !els.length) { return []; }
+        // Dedupe
+        var uniq = [];
+        els.forEach(function (el) {
+          if (el && uniq.indexOf(el) < 0) { uniq.push(el); }
+        });
+        if (uniq.length === 1) { return uniq; }
+
+        // Cluster by parent — keep the densest sibling group with similar area.
+        var byParent = new Map();
+        uniq.forEach(function (el) {
+          var p = el.parentElement || document.body;
+          if (!byParent.has(p)) { byParent.set(p, []); }
+          byParent.get(p).push(el);
+        });
+        var bestGroup = null;
+        var bestKey = -1;
+        byParent.forEach(function (group) {
+          if (group.length < 2) { return; }
+          var areas = group.map(elArea).sort(function (a, b) { return a - b; });
+          var med = areas[Math.floor(areas.length / 2)] || 1;
+          var peers = group.filter(function (el) {
+            var a = elArea(el);
+            return a > med * 0.25 && a < med * 4;
+          });
+          if (peers.length < 2) { return; }
+          var scoreSum = peers.reduce(function (s, el) { return s + componentScore(el); }, 0);
+          var key = peers.length * 10 + scoreSum;
+          if (key > bestKey) {
+            bestKey = key;
+            bestGroup = peers;
+          }
+        });
+        if (bestGroup && bestGroup.length >= 2) {
+          return bestGroup.slice(0, MAX_SELECT);
+        }
+
+        // No clear sibling set: among containment chains, keep the best-scoring
+        // node in each chain (mid-level card, not every nested button).
+        var scored = uniq.map(function (el) {
+          return { el: el, score: componentScore(el), area: elArea(el) };
+        });
+        scored.sort(function (a, b) { return b.score - a.score || a.area - b.area; });
+        var kept = [];
+        scored.forEach(function (item) {
+          var el = item.el;
+          var dominated = kept.some(function (k) {
+            return k !== el && (k.contains(el) || el.contains(k));
+          });
+          if (dominated) {
+            // Replace a kept ancestor/descendant if this one scores better
+            // and is a tighter peer size.
+            for (var i = 0; i < kept.length; i++) {
+              var k = kept[i];
+              if (k === el) { return; }
+              if (k.contains(el) || el.contains(k)) {
+                var ks = componentScore(k);
+                if (item.score > ks || (item.score === ks && item.area < elArea(k))) {
+                  kept[i] = el;
+                }
+                return;
+              }
+            }
+            return;
+          }
+          kept.push(el);
+        });
+        // Final pass: drop pure nesting leftovers (keep outer when nested pair remains).
+        kept = kept.filter(function (el) {
+          return !kept.some(function (other) {
+            return other !== el && other.contains(el) && componentScore(other) >= componentScore(el);
+          });
+        });
+        return kept.slice(0, MAX_SELECT);
+      }
+
       var MAX_SELECT = 24;
 
       function pickManyFromMarquee(m) {
         var hits = [];
         var all = document.body ? document.body.querySelectorAll('*') : [];
         var marqueeArea = Math.max(1, m.width * m.height);
+        // Center-in-marquee is the most reliable multi-card signal.
         for (var i = 0; i < all.length; i++) {
           var el = all[i];
-          if (isUI(el) || !isComponentCandidate(el)) { continue; }
+          if (!isComponentCandidate(el)) { continue; }
           var r = el.getBoundingClientRect();
           var er = { left: r.left, top: r.top, right: r.right, bottom: r.bottom };
+          var cx = (er.left + er.right) / 2;
+          var cy = (er.top + er.bottom) / 2;
+          var centerIn = cx >= m.left && cx <= m.right && cy >= m.top && cy <= m.bottom;
           var overlap = rectOverlap(m, er);
-          if (overlap <= 0) { continue; }
+          if (overlap <= 0 && !centerIn) { continue; }
           var area = r.width * r.height;
           if (area <= 0) { continue; }
-          // Element mostly inside marquee OR marquee mostly covering element
-          // (drag a box over several cards).
           var inside = overlap / area;
           var covers = overlap / marqueeArea;
-          if (inside < 0.45 && covers < 0.08) { continue; }
-          // Prefer better containment.
-          if (inside < 0.35 && !(covers > 0.15 && inside > 0.2)) { continue; }
-          hits.push({ el: el, score: inside * 2 + covers, area: area });
+          // Keep if center is in marquee, mostly inside, or marquee covers a useful chunk.
+          if (!centerIn && inside < 0.3 && covers < 0.05) { continue; }
+          hits.push({
+            el: el,
+            score: (centerIn ? 3 : 0) + inside * 2 + covers + componentScore(el) * 0.15,
+            area: area
+          });
         }
         hits.sort(function (a, b) { return b.score - a.score || a.area - b.area; });
-        var els = hits.map(function (h) { return h.el; });
-        els = collapseNested(els);
-        // If still empty, fall back to center hit.
+        // Cap raw hits before grouping to keep work bounded.
+        var els = hits.slice(0, 80).map(function (h) { return h.el; });
+        els = groupComponents(els);
         if (!els.length) {
-          var cx = (m.left + m.right) / 2;
-          var cy = (m.top + m.bottom) / 2;
-          var hit = document.elementFromPoint(cx, cy);
-          while (hit && hit !== document.body && !isComponentCandidate(hit)) {
-            hit = hit.parentElement;
-          }
-          if (hit && !isUI(hit) && hit instanceof Element) { els = [hit]; }
+          var mx = (m.left + m.right) / 2;
+          var my = (m.top + m.bottom) / 2;
+          var hit = pickDeepestAt(mx, my);
+          if (hit) { els = [hit]; }
         }
         return els.slice(0, MAX_SELECT);
       }
@@ -988,15 +1136,28 @@ final class BrowserSession: NSObject, Identifiable, WKNavigationDelegate, WKScri
       function pickDeepestAt(x, y) {
         var hit = document.elementFromPoint(x, y);
         if (!hit || isUI(hit) || !(hit instanceof Element)) { return null; }
-        // Walk up to the nearest component-sized ancestor so we don't only
-        // grab a nested <span>.
+        // Walk up collecting candidates; prefer best component score near the leaf.
         var node = hit;
-        var best = null;
+        var candidates = [];
         while (node && node !== document.body) {
-          if (isComponentCandidate(node)) { best = node; break; }
+          if (isComponentCandidate(node)) { candidates.push(node); }
           node = node.parentElement;
         }
-        return best || (hit instanceof Element ? hit : null);
+        if (!candidates.length) {
+          return hit instanceof Element ? hit : null;
+        }
+        // Prefer the tightest good component (first few ancestors), scored.
+        var best = candidates[0];
+        var bestS = componentScore(best);
+        for (var i = 1; i < Math.min(candidates.length, 5); i++) {
+          var s = componentScore(candidates[i]);
+          // Prefer deeper (smaller) unless outer scores clearly better (card vs icon).
+          if (s > bestS + 2) {
+            best = candidates[i];
+            bestS = s;
+          }
+        }
+        return best;
       }
 
       function hideChip() {
@@ -1008,9 +1169,9 @@ final class BrowserSession: NSObject, Identifiable, WKNavigationDelegate, WKScri
       function updateHint() {
         var n = state.selected.length;
         if (n <= 1) {
-          hint.textContent = 'Annotate · Enter to send · Esc clears · ⇧/⌘-click adds';
+          hint.textContent = 'Annotate · Enter sends & exits · Esc clears · ⇧/⌘-click or ⇧-drag groups';
         } else {
-          hint.textContent = n + ' components · Enter to send · Esc clears · ⇧/⌘-click toggles';
+          hint.textContent = n + ' components grouped · Enter sends & exits · Esc clears · ⇧/⌘ toggles';
         }
       }
 
@@ -1021,15 +1182,16 @@ final class BrowserSession: NSObject, Identifiable, WKNavigationDelegate, WKScri
         state.hover = null;
         paintSelection();
         updateHint();
-        // Anchor chip under the union of selected rects.
         var left = Infinity, top = Infinity, right = -Infinity, bottom = -Infinity;
         state.selected.forEach(function (el) {
+          if (!el.getBoundingClientRect) { return; }
           var r = el.getBoundingClientRect();
           left = Math.min(left, r.left);
           top = Math.min(top, r.top);
           right = Math.max(right, r.right);
           bottom = Math.max(bottom, r.bottom);
         });
+        if (!isFinite(left)) { left = 16; top = 16; right = 16; bottom = 16; }
         var chipW = 300;
         var cLeft = Math.min(Math.max(8, left), window.innerWidth - chipW - 8);
         var cTop = bottom + 8;
@@ -1044,16 +1206,23 @@ final class BrowserSession: NSObject, Identifiable, WKNavigationDelegate, WKScri
       }
 
       function setSelection(els, openChip) {
-        // Dedupe by identity.
         var seen = [];
-        els.forEach(function (el) {
-          if (el && seen.indexOf(el) < 0) { seen.push(el); }
+        (els || []).forEach(function (el) {
+          if (el && el.isConnected && seen.indexOf(el) < 0) { seen.push(el); }
         });
         state.selected = seen.slice(0, MAX_SELECT);
         state.hover = null;
         paintSelection();
         if (openChip && state.selected.length) { showChip(); }
         else if (!state.selected.length) { hideChip(); }
+      }
+
+      function mergeSelection(els, openChip) {
+        var merged = state.selected.slice();
+        (els || []).forEach(function (el) {
+          if (el && merged.indexOf(el) < 0) { merged.push(el); }
+        });
+        setSelection(groupComponents(merged), openChip);
       }
 
       function toggleInSelection(el) {
@@ -1065,6 +1234,8 @@ final class BrowserSession: NSObject, Identifiable, WKNavigationDelegate, WKScri
           state.selected.push(el);
         }
         state.hover = null;
+        // Re-group if nested pairs appear.
+        state.selected = groupComponents(state.selected);
         paintSelection();
         if (state.selected.length) { showChip(); }
         else { hideChip(); }
@@ -1074,10 +1245,12 @@ final class BrowserSession: NSObject, Identifiable, WKNavigationDelegate, WKScri
         hideChip();
         hideMarquee();
         hideAllBoxes();
+        clearElementOutlines();
         state.selected = [];
         state.hover = null;
         state.dragging = false;
         state.dragMoved = false;
+        state.additiveDrag = false;
         state.suppressHover = true;
       }
 
@@ -1101,8 +1274,10 @@ final class BrowserSession: NSObject, Identifiable, WKNavigationDelegate, WKScri
           html: htmls.join(' || ').slice(0, 600),
           note: note
         });
-        // Always deselect after send so the user can start a fresh pick.
+        // Clear local UI immediately; Swift sets pickerActive = false.
         clearSelection();
+        state.active = false;
+        document.documentElement.style.cursor = '';
       }
 
       function onMove(e) {
@@ -1114,10 +1289,27 @@ final class BrowserSession: NSObject, Identifiable, WKNavigationDelegate, WKScri
           if (state.dragMoved) {
             var m = updateMarquee(state.startX, state.startY, e.clientX, e.clientY);
             var preview = pickManyFromMarquee(m);
-            // Live preview without committing chip yet.
+            if (state.additiveDrag && state.selected.length) {
+              // Show union preview while additive-dragging.
+              var union = state.selected.slice();
+              preview.forEach(function (el) {
+                if (union.indexOf(el) < 0) { union.push(el); }
+              });
+              preview = groupComponents(union);
+            }
+            // Live highlight without opening chip mid-drag.
             hideAllBoxes();
-            preview.forEach(function (el) { placeBox(acquireBox(), el); });
-            state.selected = preview;
+            clearElementOutlines();
+            preview.forEach(function (el) {
+              placeBox(acquireBox(), el);
+              try { el.classList.add(HL_CLASS); } catch (err) {}
+            });
+            // Don't clobber committed selection until mouseup when additive.
+            if (!state.additiveDrag) {
+              state.selected = preview;
+            } else {
+              state._marqueePreview = preview;
+            }
           }
           return;
         }
@@ -1133,20 +1325,15 @@ final class BrowserSession: NSObject, Identifiable, WKNavigationDelegate, WKScri
         if (isUI(e.target)) { return; }
         state.suppressHover = false;
         var additive = e.shiftKey || e.metaKey || e.ctrlKey;
-        // Additive click: toggle into selection, don't start marquee.
-        if (additive) {
-          var el = pickDeepestAt(e.clientX, e.clientY);
-          if (el) { toggleInSelection(el); }
-          e.preventDefault();
-          e.stopPropagation();
-          return;
-        }
-        // Fresh drag / click replaces selection unless annotating chip only.
-        if (state.annotating) { hideChip(); }
+        // Additive click (no drag intent yet): toggle into selection.
+        // Still allow ⇧-drag by starting marquee when movement exceeds threshold.
+        state.additiveDrag = additive;
+        if (state.annotating && !additive) { hideChip(); }
         state.dragging = true;
         state.dragMoved = false;
         state.startX = e.clientX;
         state.startY = e.clientY;
+        state._marqueePreview = null;
         e.preventDefault();
         e.stopPropagation();
       }
@@ -1156,6 +1343,9 @@ final class BrowserSession: NSObject, Identifiable, WKNavigationDelegate, WKScri
         state.dragging = false;
         e.preventDefault();
         e.stopPropagation();
+
+        var additive = state.additiveDrag || e.shiftKey || e.metaKey || e.ctrlKey;
+        state.additiveDrag = false;
 
         if (state.dragMoved) {
           var m = {
@@ -1167,12 +1357,20 @@ final class BrowserSession: NSObject, Identifiable, WKNavigationDelegate, WKScri
             height: Math.abs(e.clientY - state.startY)
           };
           hideMarquee();
-          setSelection(pickManyFromMarquee(m), true);
+          var picked = state._marqueePreview || pickManyFromMarquee(m);
+          state._marqueePreview = null;
+          if (additive) { mergeSelection(picked, true); }
+          else { setSelection(picked, true); }
         } else {
           hideMarquee();
           var hit = pickDeepestAt(e.clientX, e.clientY);
-          if (hit) { setSelection([hit], true); }
-          else { setSelection([], false); }
+          if (additive) {
+            if (hit) { toggleInSelection(hit); }
+          } else if (hit) {
+            setSelection([hit], true);
+          } else {
+            setSelection([], false);
+          }
         }
       }
 
@@ -1190,6 +1388,11 @@ final class BrowserSession: NSObject, Identifiable, WKNavigationDelegate, WKScri
             e.preventDefault();
             e.stopPropagation();
             clearSelection();
+          } else {
+            // Second Esc (nothing selected) exits annotate mode via host.
+            window.webkit.messageHandlers.agentidePicker.postMessage({ action: 'cancel' });
+            state.active = false;
+            document.documentElement.style.cursor = '';
           }
           return;
         }
@@ -1217,7 +1420,7 @@ final class BrowserSession: NSObject, Identifiable, WKNavigationDelegate, WKScri
           state.active = !!on;
           document.documentElement.style.cursor = on ? 'crosshair' : '';
           if (!on) { clearSelection(); }
-          else { ensureMounted(); state.suppressHover = false; }
+          else { ensureMounted(); state.suppressHover = false; paintSelection(); }
         },
         clear: function () { clearSelection(); }
       };
