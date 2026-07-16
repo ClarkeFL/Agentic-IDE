@@ -104,14 +104,17 @@ struct BrowserModeView: View {
                 pager
             }
 
-            // Same system CPU/MEM as the sidebar — stay on the browser without
-            // bouncing back to the grid to watch load while servers run.
+            // Weekly plan usage (horizontal — the agent column is wider than
+            // the project sidebar) + system CPU/MEM, same sources as the
+            // left-sidebar footer so you don't leave browser mode to check.
             Divider()
-            ResourceBar(layout: .inline)
-                .padding(.horizontal, DS.Space.sm)
-                .padding(.vertical, DS.Space.xs)
-                .frame(height: DS.Control.header)
-                .background(Color(nsColor: .windowBackgroundColor))
+            VStack(alignment: .leading, spacing: DS.Space.sm) {
+                UsageBar(layout: .inline)
+                ResourceBar(layout: .inline)
+            }
+            .padding(.horizontal, DS.Space.md)
+            .padding(.vertical, DS.Space.sm)
+            .background(Color(nsColor: .windowBackgroundColor))
         }
     }
 
