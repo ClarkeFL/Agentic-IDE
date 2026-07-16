@@ -25,13 +25,16 @@ struct ResourceBar: View {
                 }
                 .frame(maxWidth: .infinity, alignment: .leading)
             case .inline:
-                HStack(spacing: DS.Space.md) {
+                // Browser agent-column footer: center the pair so it sits under
+                // the wider usage chips rather than hugging the leading edge.
+                HStack(spacing: DS.Space.lg) {
+                    Spacer(minLength: 0)
                     metric(systemImage: "cpu", label: "CPU", value: formattedCPU, tint: cpuColor)
                     metric(systemImage: "memorychip", label: "MEM",
                            value: formattedMemoryUsed, tint: memoryColor)
                     Spacer(minLength: 0)
                 }
-                .frame(maxWidth: .infinity, alignment: .leading)
+                .frame(maxWidth: .infinity)
             }
         }
         .font(.system(size: 11, weight: .medium, design: .monospaced))

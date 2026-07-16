@@ -75,20 +75,23 @@ struct ProjectSidebarView: View {
             .animation(.easeOut(duration: 0.12), value: hoveredDropKey)
 
             Divider()
-            // Footer: CPU / MEM readout on the left, the add / new-group /
-            // update actions on the right (moved down from the old header).
-            HStack(spacing: DS.Space.xxs) {
-                ResourceBar()
-                Spacer(minLength: DS.Space.sm)
-                SidebarHeaderAddButton(createProject: createProject,
-                                       addProject: addProject)
-                SidebarHeaderButton(systemName: "folder.badge.plus",
-                                    help: "New Group",
-                                    action: startNewGroup)
-                SidebarHeaderButton(systemName: "arrow.triangle.2.circlepath",
-                                    help: "Check for Updates",
-                                    action: { updater.checkForUpdates() })
-                    .disabled(!updater.canCheckForUpdates)
+            // Footer stack: weekly AI plan usage (Claude / Codex / Grok),
+            // then CPU · MEM + add / group / update actions.
+            VStack(alignment: .leading, spacing: DS.Space.sm) {
+                UsageBar()
+                HStack(spacing: DS.Space.xxs) {
+                    ResourceBar()
+                    Spacer(minLength: DS.Space.sm)
+                    SidebarHeaderAddButton(createProject: createProject,
+                                           addProject: addProject)
+                    SidebarHeaderButton(systemName: "folder.badge.plus",
+                                        help: "New Group",
+                                        action: startNewGroup)
+                    SidebarHeaderButton(systemName: "arrow.triangle.2.circlepath",
+                                        help: "Check for Updates",
+                                        action: { updater.checkForUpdates() })
+                        .disabled(!updater.canCheckForUpdates)
+                }
             }
             .padding(.horizontal, DS.Space.md)
             .padding(.vertical, DS.Space.sm)
