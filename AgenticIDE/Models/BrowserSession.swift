@@ -114,6 +114,14 @@ final class BrowserManager {
         guard let idx = sessions.firstIndex(where: { $0.id == session.id }) else { return }
         sessions.remove(at: idx)
         session.tearDown()
+        // Closing the workspace's own pane withdraws the browser preference —
+        // otherwise every return to the workspace re-opens a browser the user
+        // explicitly closed.
+        if session.wasOpenedManually || session.ownerCell == nil,
+           let ws = session.sourceWorkspace, ws.prefersBrowserMode {
+            ws.prefersBrowserMode = false
+            session.projectSession?.markDirty()
+        }
         if focusedId == session.id { focusedId = sessions.first?.id }
         // Always leave browser mode when the focused pane is closed; if other
         // panes remain, stay only if mode was already showing them.
