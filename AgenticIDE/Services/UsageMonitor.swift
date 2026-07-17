@@ -83,8 +83,10 @@ struct ProviderUsage: Identifiable, Equatable, Sendable {
 /// Sources:
 /// - **Claude** — Anthropic OAuth usage API (same data as `/usage`), using the
 ///   token Claude Code already stores in the login Keychain.
-/// - **Codex** — latest `rate_limits` block written into `~/.codex/sessions`
-///   rollouts (updated after each turn).
+/// - **Codex** — live ChatGPT usage API (`backend-api/wham/usage`) using the
+///   OAuth token opencode stores in `~/.local/share/opencode/auth.json`;
+///   falls back to the latest `rate_limits` block in `~/.codex/sessions`
+///   rollouts (Codex CLI, updated after each turn).
 /// - **Grok** — latest `billing: fetched credits config` line in
 ///   `~/.grok/logs/unified.jsonl` (written whenever the Grok CLI refreshes
 ///   SuperGrok credits). No public HTTP endpoint for plan % yet.
@@ -267,6 +269,7 @@ final class UsageMonitor {
     // MARK: - Codex
 
     private func fetchCodex() -> ProviderUsage {
+        if let live = fetchCodexLive() { return live }
         guard let limits = Self.latestCodexRateLimits() else {
             return .empty(.codex, placeholder: "—")
         }
@@ -299,6 +302,101 @@ final class UsageMonitor {
             shortWindowDetail: detail,
             placeholder: "—",
             sampledAt: limits.sampledAt ?? Date()
+        )
+    }
+
+    /// Live plan usage from the ChatGPT backend, authenticated with the
+    /// OAuth token opencode keeps in `~/.local/share/opencode/auth.json`.
+    /// Returns nil (→ file-scan fallback) when there's no valid token or
+    /// the request fails.
+    private func fetchCodexLive() -> ProviderUsage? {
+        guard let auth = Self.openCodeOpenAIAuth() else { return nil }
+
+        var request = URLRequest(
+            url: URL(string: "https://chatgpt.com/backend-api/wham/usage")!
+        )
+        request.setValue("application/json", forHTTPHeaderField: "Accept")
+        request.setValue("Bearer \(auth.access)", forHTTPHeaderField: "Authorization")
+        if let account = auth.accountId {
+            request.setValue(account, forHTTPHeaderField: "chatgpt-account-id")
+        }
+        request.timeoutInterval = 12
+
+        do {
+            let (data, response) = try Self.syncData(for: request)
+            guard let http = response as? HTTPURLResponse,
+                  (200..<300).contains(http.statusCode),
+                  let json = try JSONSerialization.jsonObject(with: data) as? [String: Any],
+                  let rateLimit = json["rate_limit"] as? [String: Any] else {
+                log.debug("Codex live usage unavailable, falling back to rollouts")
+                return nil
+            }
+
+            let weekly = Self.parseWhamWindow(rateLimit["primary_window"] as? [String: Any])
+            let short = Self.parseWhamWindow(rateLimit["secondary_window"] as? [String: Any])
+
+            let warn = (short?.usedPercent ?? 0) >= Self.shortWindowWarnThreshold
+            let detail: String? = short.map { s in
+                var parts = [String(format: "5h %.0f%%", s.usedPercent)]
+                if let resets = s.resetsAt {
+                    parts.append("resets \(Self.relativeReset(resets))")
+                }
+                return parts.joined(separator: " · ")
+            }
+
+            return ProviderUsage(
+                provider: .codex,
+                weeklyPercent: weekly?.usedPercent,
+                weeklyResetsAt: weekly?.resetsAt,
+                shortWindowWarning: warn,
+                shortWindowDetail: detail,
+                placeholder: "—",
+                sampledAt: Date() // live API response
+            )
+        } catch {
+            log.debug("Codex live usage fetch failed: \(error.localizedDescription, privacy: .public)")
+            return nil
+        }
+    }
+
+    private static func parseWhamWindow(_ dict: [String: Any]?) -> CodexWindow? {
+        guard let dict, let percent = number(dict["used_percent"]) else { return nil }
+        let seconds = number(dict["limit_window_seconds"]) ?? 0
+        var resets: Date?
+        if let ts = number(dict["reset_at"]) {
+            resets = Date(timeIntervalSince1970: ts)
+        }
+        return CodexWindow(
+            usedPercent: percent,
+            windowMinutes: Int(seconds / 60),
+            resetsAt: resets
+        )
+    }
+
+    private struct OpenCodeOpenAIAuth {
+        var access: String
+        var accountId: String?
+    }
+
+    /// Reads opencode's OpenAI OAuth token; nil when missing or expired
+    /// (opencode refreshes it whenever it's used, so we never refresh here).
+    private static func openCodeOpenAIAuth() -> OpenCodeOpenAIAuth? {
+        let url = URL(fileURLWithPath: NSHomeDirectory())
+            .appendingPathComponent(".local/share/opencode/auth.json")
+        guard let data = try? Data(contentsOf: url),
+              let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let openai = json["openai"] as? [String: Any],
+              let access = openai["access"] as? String,
+              !access.isEmpty else {
+            return nil
+        }
+        if let expiresMs = number(openai["expires"]),
+           Date(timeIntervalSince1970: expiresMs / 1000) < Date() {
+            return nil
+        }
+        return OpenCodeOpenAIAuth(
+            access: access,
+            accountId: openai["accountId"] as? String
         )
     }
 
