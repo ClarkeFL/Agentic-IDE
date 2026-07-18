@@ -108,9 +108,39 @@ final class ProjectStore {
         save()
     }
 
+    /// Assigns a project to `groupId` (nil = Ungrouped) without reordering.
+    /// Prefer `moveProject` when the caller knows an insertion point.
     func setProjectGroup(projectId: UUID, groupId: UUID?) {
-        guard let idx = projects.firstIndex(where: { $0.id == projectId }) else { return }
-        projects[idx].groupId = groupId
+        moveProject(id: projectId, toGroup: groupId, before: nil)
+    }
+
+    /// Move a project into `groupId` (nil = Ungrouped), placing it immediately
+    /// before `beforeId` in the persisted order. When `beforeId` is nil the
+    /// project is appended after the last member of that group (or at the end
+    /// of the list if the group is empty). Sidebar order within each group is
+    /// the relative order of those projects in `projects`.
+    func moveProject(id: UUID, toGroup groupId: UUID?, before beforeId: UUID?) {
+        guard let fromIdx = projects.firstIndex(where: { $0.id == id }) else { return }
+
+        // Dropping onto self: only apply a group change if needed.
+        if beforeId == id {
+            if projects[fromIdx].groupId != groupId {
+                projects[fromIdx].groupId = groupId
+                save()
+            }
+            return
+        }
+
+        var moving = projects.remove(at: fromIdx)
+        moving.groupId = groupId
+
+        if let beforeId, let toIdx = projects.firstIndex(where: { $0.id == beforeId }) {
+            projects.insert(moving, at: toIdx)
+        } else if let lastInGroup = projects.lastIndex(where: { $0.groupId == groupId }) {
+            projects.insert(moving, at: lastInGroup + 1)
+        } else {
+            projects.append(moving)
+        }
         save()
     }
 

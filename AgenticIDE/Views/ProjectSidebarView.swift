@@ -244,10 +244,10 @@ struct ProjectSidebarView: View {
             }
         }
         .padding(.bottom, DS.Space.md)
+        // Section-level drop (header / empty padding): append to end of Ungrouped.
+        // Project rows own their own drop targets for insert-before placement.
         .dropDestination(for: String.self) { items, _ in
-            let projectIds = items.filter { !$0.hasPrefix("group:") }
-            moveProjects(from: projectIds, to: nil)
-            return !projectIds.isEmpty
+            moveProjects(from: items, to: nil, before: nil)
         } isTargeted: { entering in
             isTargetedBinding("ungrouped").wrappedValue = entering
         }
@@ -271,6 +271,8 @@ struct ProjectSidebarView: View {
             }
         }
         .padding(.bottom, DS.Space.md)
+        // Section-level drop: group payloads reorder groups; project payloads
+        // append at the end of this group. Row-level drops handle insert-before.
         .dropDestination(for: String.self) { items, _ in
             handleSectionDrop(items, targetGroupId: group.id)
         } isTargeted: { entering in
@@ -331,6 +333,15 @@ struct ProjectSidebarView: View {
                     .padding(DS.Space.sm)
                     .background(.thinMaterial, in: RoundedRectangle(cornerRadius: DS.Radius.lg))
             }
+            // Drop onto a row → insert immediately above it (same group as the
+            // target row). Gives ordered placement inside a category instead of
+            // always landing at the section top/end.
+            .dropDestination(for: String.self) { items, _ in
+                moveProjects(from: items, to: project.groupId, before: project.id)
+            } isTargeted: { entering in
+                isTargetedBinding("before:\(project.id.uuidString)").wrappedValue = entering
+            }
+            .modifier(DropInsertHighlight(active: hoveredDropKey == "before:\(project.id.uuidString)"))
             .contextMenu {
                 if let ide = ExternalIDEService.preferredIDE() {
                     Button("Open in \(ide.displayName)") {
@@ -391,17 +402,23 @@ struct ProjectSidebarView: View {
         return buckets
     }
 
-    private func moveProjects(from items: [String], to groupId: UUID?) {
+    /// Moves every project UUID in `items` into `groupId`, inserting each
+    /// immediately before `before` (nil = append after the group's last member).
+    /// Group payloads (`group:…`) are ignored — those only reorder via section drop.
+    @discardableResult
+    private func moveProjects(from items: [String], to groupId: UUID?, before: UUID?) -> Bool {
+        var didSomething = false
         for raw in items {
-            // Skip group payloads — only project UUIDs land here.
             if raw.hasPrefix("group:") { continue }
             guard let id = UUID(uuidString: raw) else { continue }
-            store.setProjectGroup(projectId: id, groupId: groupId)
+            store.moveProject(id: id, toGroup: groupId, before: before)
+            didSomething = true
         }
+        return didSomething
     }
 
     /// Dispatches a drop on a group's section. Group payloads reorder; project
-    /// payloads move into the group.
+    /// payloads append into the group (row drops handle insert-before).
     private func handleSectionDrop(_ items: [String], targetGroupId: UUID) -> Bool {
         var didSomething = false
         for raw in items {
@@ -412,7 +429,7 @@ struct ProjectSidebarView: View {
                 store.reorderGroup(id: movingId, before: targetGroupId)
                 didSomething = true
             } else if let pid = UUID(uuidString: raw) {
-                store.setProjectGroup(projectId: pid, groupId: targetGroupId)
+                store.moveProject(id: pid, toGroup: targetGroupId, before: nil)
                 didSomething = true
             }
         }
@@ -512,6 +529,24 @@ private struct DropZoneHighlight: ViewModifier {
                     RoundedRectangle(cornerRadius: DS.Radius.sm, style: .continuous)
                         .fill(Color.accentColor.opacity(active ? 0.16 : 0.0))
                 }
+            }
+    }
+}
+
+/// Horizontal insertion line above a project row while a drag targets that
+/// row as "insert before me".
+private struct DropInsertHighlight: ViewModifier {
+    let active: Bool
+
+    func body(content: Content) -> some View {
+        content
+            .overlay(alignment: .top) {
+                Capsule()
+                    .fill(Color.accentColor)
+                    .frame(height: 2)
+                    .padding(.horizontal, DS.Space.sm)
+                    .offset(y: -1)
+                    .opacity(active ? 1 : 0)
             }
     }
 }
