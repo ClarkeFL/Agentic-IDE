@@ -14,15 +14,22 @@ enum PtyService {
     /// Intentionally minimal — advertise truecolor, don't force color on every
     /// CLI (`FORCE_COLOR` etc. over-steers tools like Grok that have their own
     /// theme). Inherited `NO_COLOR` is stripped in the shell bootstrap instead.
+    ///
+    /// `TERM_PROGRAM` is `ghostty` (not `AgenticIDE`) on purpose: Claude Code's
+    /// color/theme stack only special-cases a short list (ghostty, iTerm.app,
+    /// Apple_Terminal, …). An unknown program name is why Claude alone went
+    /// monochrome while Grok/opencode/etc. still painted fine in the same cell.
+    /// Identity for our tooling lives in `AGENTIDE_*` / the sock path instead.
     static func terminalEnvironment() -> [String: String] {
         var env: [String: String] = [
             "CLICOLOR": "1",
             "COLORTERM": "truecolor",
-            "TERM_PROGRAM": "AgenticIDE",
+            "TERM_PROGRAM": "ghostty",
             "TERM_PROGRAM_VERSION": appVersion(),
             // Socket the `agentide` helper talks to so a cell's agent can
             // drive/observe sibling cells.
-            "AGENTIDE_SOCK": AgentBridge.socketURL.path
+            "AGENTIDE_SOCK": AgentBridge.socketURL.path,
+            "AGENTIDE": "1",
         ]
         let inherited = ProcessInfo.processInfo.environment
         if let value = inherited["LSCOLORS"], !value.isEmpty {
@@ -58,18 +65,35 @@ enum PtyService {
         let augmented = augmentedCommand(ql.command)
         let escaped = augmented.replacingOccurrences(of: "'", with: "'\\''")
         let cmd = "\(shell) -ilc '\(terminalBootstrapCommand()); clear; \(escaped)'"
-        return SurfaceConfig(command: cmd, workingDirectory: cwd, env: terminalEnvironment())
+        var env = terminalEnvironment()
+        // Prefer the configured port so frameworks that honor PORT (Vite, Next,
+        // Rails, Flask, …) bind where the agent/UI expect.
+        if let port = ql.port, port > 0, port <= 65535 {
+            env["PORT"] = String(port)
+            env["AGENTIDE_PORT"] = String(port)
+        }
+        return SurfaceConfig(command: cmd, workingDirectory: cwd, env: env)
     }
 
-    /// Strip inherited monochrome kill-switches (`NO_COLOR`) so chalk/Ink CLIs
-    /// (notably Claude) can use color when the host process was launched from
-    /// an agent harness. Keep this minimal — no `FORCE_COLOR` / force-on
-    /// exports that recolor tools with their own themes (Grok, etc.).
+    /// Strip inherited monochrome kill-switches so chalk/Ink CLIs (notably
+    /// Claude) can use color when the host was launched from an agent harness.
+    /// Keep this minimal — no force-on exports (`FORCE_COLOR=1`) that recolor
+    /// tools with their own themes (Grok, etc.).
+    ///
+    /// Live Claude cells under AgenticIDE were observed with `FORCE_COLOR=0`
+    /// + `CLICOLOR_FORCE=0` in their environ; chalk treats `FORCE_COLOR=0` as
+    /// hard monochrome even with `COLORTERM=truecolor`.
     private static func terminalBootstrapCommand() -> String {
         // Also prepend the bridge helper's bin dir to PATH (after the login
         // profile has run) so `agentide` is available in every cell.
         let bin = AgentBridge.binDirectoryURL.path
-        return "unset NO_COLOR; export PATH=\"\(bin):$PATH\""
+        // Unset force-OFF flags only; leave FORCE_COLOR=1 alone if a user set it.
+        return "unset NO_COLOR NODE_DISABLE_COLORS PIP_NO_COLOR PYTHON_DISABLE_COLORS; "
+            + "[ \"${FORCE_COLOR-}\" = 0 ] && unset FORCE_COLOR; "
+            + "[ \"${CLICOLOR_FORCE-}\" = 0 ] && unset CLICOLOR_FORCE; "
+            + "[ \"${NPM_CONFIG_COLOR-}\" = false ] && unset NPM_CONFIG_COLOR; "
+            + "[ \"${CARGO_TERM_COLOR-}\" = never ] && unset CARGO_TERM_COLOR; "
+            + "export PATH=\"\(bin):$PATH\""
     }
 
     /// Existing saved sessions contain the full command line that was built
@@ -89,6 +113,13 @@ enum PtyService {
             "unset NO_COLOR PIP_NO_COLOR PYTHON_DISABLE_COLORS; "
                 + "export CLICOLOR=1 CLICOLOR_FORCE=1 FORCE_COLOR=1 COLORTERM=truecolor "
                 + "NPM_CONFIG_COLOR=true CARGO_TERM_COLOR=always; "
+                + "export PATH=\"\(bin):$PATH\"; ",
+            // 2026-07 FORCE_COLOR=0 scrub (current-shaped, keep last for match)
+            "unset NO_COLOR NODE_DISABLE_COLORS PIP_NO_COLOR PYTHON_DISABLE_COLORS; "
+                + "[ \"${FORCE_COLOR-}\" = 0 ] && unset FORCE_COLOR; "
+                + "[ \"${CLICOLOR_FORCE-}\" = 0 ] && unset CLICOLOR_FORCE; "
+                + "[ \"${NPM_CONFIG_COLOR-}\" = false ] && unset NPM_CONFIG_COLOR; "
+                + "[ \"${CARGO_TERM_COLOR-}\" = never ] && unset CARGO_TERM_COLOR; "
                 + "export PATH=\"\(bin):$PATH\"; ",
             "unset NO_COLOR; export PATH=\"\(bin):$PATH\"; ",
             "unset NO_COLOR; ",

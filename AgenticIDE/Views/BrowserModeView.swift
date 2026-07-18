@@ -1,3 +1,4 @@
+import AppKit
 import SwiftUI
 import WebKit
 
@@ -25,16 +26,16 @@ struct BrowserModeView: View {
             agentColumn
                 .frame(width: 380)
                 .frame(maxHeight: .infinity)
-                .background(Color(nsColor: .textBackgroundColor), ignoresSafeAreaEdges: [])
+                .background(DS.Surface.editor, ignoresSafeAreaEdges: [])
             if let session = manager.focused {
                 Divider()
                 BrowserColumn(manager: manager, session: session, onRequestExit: onRequestExit)
                     .id(session.id)
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
-                    .background(Color(nsColor: .controlBackgroundColor), ignoresSafeAreaEdges: [])
+                    .background(DS.Surface.app, ignoresSafeAreaEdges: [])
             }
         }
-        .background(Color(nsColor: .windowBackgroundColor))
+        .background(DS.Surface.app)
         // Same top-strip reclaim as the main layout: the headers own the
         // hidden-titlebar strip instead of leaving an empty band above them.
         .ignoresSafeArea(.container, edges: .top)
@@ -64,7 +65,7 @@ struct BrowserModeView: View {
                                        onStopAll: { stopAllServers(for: session) })
                 }
             }
-            .background(Color(nsColor: .windowBackgroundColor))
+            .background(DS.Surface.app)
 
             Group {
                 if let tab = manager.focused?.ownerTab {
@@ -114,7 +115,7 @@ struct BrowserModeView: View {
             }
             .padding(.horizontal, DS.Space.md)
             .padding(.vertical, DS.Space.sm)
-            .background(Color(nsColor: .windowBackgroundColor))
+            .background(DS.Surface.app)
         }
     }
 
@@ -228,7 +229,7 @@ struct BrowserModeView: View {
         }
         .frame(maxWidth: .infinity)
         .frame(height: DS.Control.header)
-        .background(Color(nsColor: .windowBackgroundColor))
+        .background(DS.Surface.app)
     }
 }
 
@@ -264,15 +265,27 @@ private struct BrowserServerStrip: View {
         }()
 
         HStack(spacing: DS.Space.sm) {
+            if let name = project?.name {
+                Text(name)
+                    .font(DS.Font.control)
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+                    .help("Servers for project “\(name)”")
+            }
             if servers.isEmpty {
                 Button {
                     showServersEditor = true
                 } label: {
-                    Label("Set up servers", systemImage: "server.rack")
+                    Label(project == nil ? "No project bound" : "Set up servers",
+                          systemImage: "server.rack")
                         .font(DS.Font.control)
                 }
                 .buttonStyle(.plain)
                 .foregroundStyle(Color.accentColor)
+                .disabled(project == nil)
+                .help(project == nil
+                      ? "Browser isn’t tied to a project — press ⌘B from a selected project"
+                      : "Configure dev servers for this project")
             } else {
                 ScrollView(.horizontal, showsIndicators: false) {
                     HStack(spacing: DS.Space.sm) {
@@ -330,7 +343,7 @@ private struct BrowserServerStrip: View {
         }
         .padding(.horizontal, DS.Space.sm)
         .frame(height: DS.Control.header)
-        .background(Color(nsColor: .controlBackgroundColor))
+        .background(DS.Surface.app)
         .overlay(alignment: .bottom) {
             Divider()
         }
@@ -350,7 +363,8 @@ private struct BrowserServerStrip: View {
 // MARK: - Launch pad (no agent attached yet)
 
 /// Left-column control surface for a workspace browser: project servers,
-/// every cell in the multi-cell grid, and launchers for empty slots.
+/// grid setup (layout + per-cell agent picks when nothing is running), or
+/// attach / fill empty slots once the grid already has agents.
 private struct BrowserLaunchPad: View {
     @Environment(SessionManager.self) private var sessions
     @Environment(ProjectStore.self) private var store
@@ -364,6 +378,12 @@ private struct BrowserLaunchPad: View {
     let onStopAllServers: () -> Void
 
     @State private var showServersEditor = false
+    /// Setup wizard when the grid has no running agents yet.
+    @State private var setupLayout: GridLayout?
+    /// Per-cell tool id for the setup step (`nil` = leave empty).
+    @State private var setupPicks: [UUID?] = []
+    /// Which cell tile is active in the assign step (chips apply to this one).
+    @State private var setupFocusIndex: Int = 0
 
     private var projectSession: ProjectSession? {
         session.projectSession
@@ -384,12 +404,26 @@ private struct BrowserLaunchPad: View {
         return ServerRunner(project: project, session: projectSession, store: store)
     }
 
+    /// Fresh browser / empty grid — walk the user through layout + agents.
+    private var needsSetup: Bool {
+        let cells = workspace?.cells ?? []
+        return cells.isEmpty || cells.allSatisfy { $0.terminal == nil }
+    }
+
+    private var agentTools: [LaunchTool] {
+        launchTools.filter { $0.role == .command || $0.role == .terminal }
+    }
+
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: DS.Space.lg) {
                 serversSection
-                agentsSection
-                launchSection
+                if needsSetup {
+                    setupSection
+                } else {
+                    agentsSection
+                    launchSection
+                }
             }
             .padding(DS.Space.lg)
             .frame(maxWidth: .infinity, alignment: .topLeading)
@@ -493,7 +527,180 @@ private struct BrowserLaunchPad: View {
         }
     }
 
-    // MARK: Agents
+    // MARK: Setup wizard (no agents running yet)
+
+    @ViewBuilder
+    private var setupSection: some View {
+        if let layout = setupLayout {
+            setupAssignAgents(layout: layout)
+        } else {
+            setupPickLayout
+        }
+    }
+
+    /// Matches `LayoutChooserView.gridLayoutStep` — centered title + card row.
+    private var setupPickLayout: some View {
+        VStack(spacing: DS.Space.lg) {
+            VStack(spacing: DS.Space.xs) {
+                Text("Choose a layout")
+                    .font(.title3.weight(.semibold))
+                Text("Then assign an agent to each cell.")
+                    .font(.subheadline)
+                    .foregroundStyle(.secondary)
+                    .multilineTextAlignment(.center)
+            }
+            .frame(maxWidth: .infinity)
+
+            // Same card language as the main grid chooser (glyph + title).
+            LazyVGrid(
+                columns: [GridItem(.adaptive(minimum: 100), spacing: DS.Space.sm)],
+                spacing: DS.Space.sm
+            ) {
+                ForEach(Array(GridLayout.quickPresets.enumerated()), id: \.offset) { _, preset in
+                    Button {
+                        chooseLayout(preset.layout)
+                    } label: {
+                        VStack(spacing: DS.Space.md) {
+                            LayoutGlyph(layout: preset.layout, square: 14, gap: 4) { _, _ in
+                                Color.accentColor.opacity(0.85)
+                            }
+                            .frame(height: 40)
+                            Text(preset.title)
+                                .font(DS.Font.bodySemibold)
+                                .multilineTextAlignment(.center)
+                                .lineLimit(2)
+                                .fixedSize(horizontal: false, vertical: true)
+                        }
+                        .frame(maxWidth: .infinity)
+                        .frame(height: 120)
+                        .padding(.horizontal, DS.Space.xs)
+                        .background(
+                            RoundedRectangle(cornerRadius: DS.Radius.lg, style: .continuous)
+                                .fill(Color.primary.opacity(0.04))
+                        )
+                        .overlay(
+                            RoundedRectangle(cornerRadius: DS.Radius.lg, style: .continuous)
+                                .strokeBorder(Color.primary.opacity(0.08), lineWidth: 1)
+                        )
+                        .contentShape(Rectangle())
+                    }
+                    .buttonStyle(.plain)
+                    .help(preset.title)
+                }
+            }
+            .frame(maxWidth: .infinity)
+        }
+        .frame(maxWidth: .infinity)
+        .padding(.top, DS.Space.sm)
+    }
+
+    /// Centered mini-grid of cells (real layout shape) + agent chip palette.
+    private func setupAssignAgents(layout: GridLayout) -> some View {
+        let focus = min(setupFocusIndex, max(0, layout.cellCount - 1))
+        let pick = setupPicks.indices.contains(focus) ? setupPicks[focus] : nil
+
+        return VStack(spacing: DS.Space.lg) {
+            VStack(spacing: DS.Space.xs) {
+                Text("Choose agents")
+                    .font(.title3.weight(.semibold))
+                Text("Tap a cell, then an agent. Tap the agent again to clear.")
+                    .font(.subheadline)
+                    .foregroundStyle(.secondary)
+                    .multilineTextAlignment(.center)
+            }
+            .frame(maxWidth: .infinity)
+
+            // Live shape of the chosen layout — same glyph family as the chooser.
+            SetupCellGrid(
+                layout: layout,
+                picks: setupPicks,
+                tools: agentTools,
+                focusIndex: focus,
+                onSelectCell: { setupFocusIndex = $0 }
+            )
+            .frame(maxWidth: .infinity)
+            .padding(.vertical, DS.Space.xs)
+
+            // Even 2-column chip grid so nothing orphans on its own row.
+            FlowAgentChips(tools: agentTools, selectedId: pick) { toolId in
+                if pick == toolId {
+                    setPick(nil, at: focus)
+                } else {
+                    setPick(toolId, at: focus)
+                    // Advance focus so multi-cell setup is click-click-click.
+                    if focus + 1 < layout.cellCount {
+                        setupFocusIndex = focus + 1
+                    }
+                }
+            }
+            .frame(maxWidth: 280)
+            .frame(maxWidth: .infinity)
+
+            HStack(spacing: DS.Space.lg) {
+                Button("Back") {
+                    setupLayout = nil
+                    setupPicks = []
+                    setupFocusIndex = 0
+                }
+                .buttonStyle(.plain)
+                .font(.callout)
+                .foregroundStyle(.secondary)
+
+                Button {
+                    startSetup(layout: layout)
+                } label: {
+                    Text(setupPicks.contains(where: { $0 != nil }) ? "Launch" : "Open empty grid")
+                        .font(DS.Font.bodySemibold)
+                        .frame(minWidth: 120)
+                }
+                .buttonStyle(.borderedProminent)
+                .controlSize(.regular)
+            }
+            .frame(maxWidth: .infinity)
+        }
+        .frame(maxWidth: .infinity)
+        .padding(.top, DS.Space.sm)
+    }
+
+    private func chooseLayout(_ layout: GridLayout) {
+        setupLayout = layout
+        setupPicks = Array(repeating: nil, count: layout.cellCount)
+        setupFocusIndex = 0
+        // Sensible default: first cell gets the first agent tool if any.
+        if let first = agentTools.first {
+            setupPicks[0] = first.id
+        }
+    }
+
+    private func setPick(_ id: UUID?, at index: Int) {
+        guard setupPicks.indices.contains(index) else { return }
+        setupPicks[index] = id
+    }
+
+    private func startSetup(layout: GridLayout) {
+        guard let workspace, let projectSession else { return }
+        projectSession.resizeWorkspace(workspace, layout: layout)
+
+        var firstLaunched: WorkspaceCell?
+        for (index, toolId) in setupPicks.enumerated() {
+            guard let toolId,
+                  let tool = agentTools.first(where: { $0.id == toolId }),
+                  workspace.cells.indices.contains(index) else { continue }
+            let cell = workspace.cells[index]
+            onLaunch(tool, cell)
+            if firstLaunched == nil { firstLaunched = cell }
+        }
+        // Prefer the first agent we actually started; otherwise attach nothing
+        // (empty grid — user stays on the launch pad / start page).
+        if let firstLaunched {
+            onAttach(firstLaunched)
+        }
+        setupLayout = nil
+        setupPicks = []
+        setupFocusIndex = 0
+    }
+
+    // MARK: Agents (grid already has runners)
 
     @ViewBuilder
     private var agentsSection: some View {
@@ -624,6 +831,144 @@ private struct BrowserLaunchPad: View {
     }
 }
 
+/// Even one-tap agent chips (fixed 2 columns) so the palette reads as a
+/// tidy centered grid instead of a ragged wrap with a lone last chip.
+private struct FlowAgentChips: View {
+    let tools: [LaunchTool]
+    let selectedId: UUID?
+    let onSelect: (UUID) -> Void
+
+    private let columns = [
+        GridItem(.flexible(), spacing: DS.Space.xs),
+        GridItem(.flexible(), spacing: DS.Space.xs),
+    ]
+
+    var body: some View {
+        LazyVGrid(columns: columns, alignment: .center, spacing: DS.Space.xs) {
+            ForEach(tools) { tool in
+                let on = tool.id == selectedId
+                Button {
+                    onSelect(tool.id)
+                } label: {
+                    HStack(spacing: 5) {
+                        quickLaunchIcon(name: tool.icon, size: 12)
+                        Text(tool.name)
+                            .font(DS.Font.control)
+                            .lineLimit(1)
+                    }
+                    .frame(maxWidth: .infinity)
+                    .frame(height: DS.Control.large)
+                    .background(
+                        RoundedRectangle(cornerRadius: DS.Radius.lg, style: .continuous)
+                            .fill(on ? Color.accentColor.opacity(0.18) : Color.primary.opacity(0.04))
+                    )
+                    .overlay(
+                        RoundedRectangle(cornerRadius: DS.Radius.lg, style: .continuous)
+                            .strokeBorder(on ? Color.accentColor : Color.primary.opacity(0.08),
+                                          lineWidth: on ? 1.5 : 1)
+                    )
+                    .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .help(on ? "\(tool.name) — tap to clear" : tool.name)
+            }
+        }
+    }
+}
+
+/// Interactive mini-map of the chosen layout: one tile per cell, laid out
+/// in the real shape (rows/cols). Selected tile gets an accent ring; filled
+/// tiles show the agent icon.
+private struct SetupCellGrid: View {
+    let layout: GridLayout
+    let picks: [UUID?]
+    let tools: [LaunchTool]
+    let focusIndex: Int
+    let onSelectCell: (Int) -> Void
+
+    private let tile: CGFloat = 64
+    private let gap: CGFloat = 8
+
+    var body: some View {
+        let isRows = layout.axis == .rows
+        let maxCount = max(1, layout.counts.max() ?? 1)
+        let span = CGFloat(maxCount) * tile + CGFloat(maxCount - 1) * gap
+
+        Group {
+            if isRows {
+                VStack(spacing: gap) {
+                    ForEach(Array(layout.counts.enumerated()), id: \.offset) { g, c in
+                        HStack(spacing: gap) {
+                            ForEach(0..<c, id: \.self) { i in
+                                let flat = flatIndex(group: g, index: i)
+                                let len = (span - gap * CGFloat(c - 1)) / CGFloat(c)
+                                cellTile(flat: flat, width: len, height: tile)
+                            }
+                        }
+                    }
+                }
+            } else {
+                HStack(spacing: gap) {
+                    ForEach(Array(layout.counts.enumerated()), id: \.offset) { g, c in
+                        VStack(spacing: gap) {
+                            ForEach(0..<c, id: \.self) { i in
+                                let flat = flatIndex(group: g, index: i)
+                                let len = (span - gap * CGFloat(c - 1)) / CGFloat(c)
+                                cellTile(flat: flat, width: tile, height: len)
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    private func flatIndex(group g: Int, index i: Int) -> Int {
+        layout.counts.prefix(g).reduce(0, +) + i
+    }
+
+    private func cellTile(flat: Int, width: CGFloat, height: CGFloat) -> some View {
+        let focused = flat == focusIndex
+        let tool = picks.indices.contains(flat)
+            ? picks[flat].flatMap { id in tools.first(where: { $0.id == id }) }
+            : nil
+        return Button {
+            onSelectCell(flat)
+        } label: {
+            VStack(spacing: 4) {
+                if let tool {
+                    quickLaunchIcon(name: tool.icon, size: 18)
+                    Text(tool.name)
+                        .font(DS.Font.footnote)
+                        .lineLimit(1)
+                } else {
+                    Image(systemName: "square.dashed")
+                        .font(.system(size: 16, weight: .light))
+                        .foregroundStyle(.tertiary)
+                    Text("#\(flat + 1)")
+                        .font(DS.Font.footnote)
+                        .foregroundStyle(.secondary)
+                }
+            }
+            .frame(width: width, height: height)
+            .background(
+                RoundedRectangle(cornerRadius: DS.Radius.lg, style: .continuous)
+                    .fill(focused
+                          ? Color.accentColor.opacity(0.14)
+                          : Color.primary.opacity(0.04))
+            )
+            .overlay(
+                RoundedRectangle(cornerRadius: DS.Radius.lg, style: .continuous)
+                    .strokeBorder(focused ? Color.accentColor : Color.primary.opacity(0.08),
+                                  lineWidth: focused ? 1.5 : 1)
+            )
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .help(tool.map { "Cell #\(flat + 1) — \($0.name)" } ?? "Cell #\(flat + 1) — empty")
+    }
+}
+
 // MARK: - Right: browser column
 
 /// Right side: toolbar (back to grid, URL, reload, picker, close) + web view
@@ -642,6 +987,7 @@ private struct BrowserColumn: View {
     /// same chip if the user navigated away).
     @State private var autoLoaded: Set<String> = []
     @State private var showServersEditor = false
+    @FocusState private var urlFieldFocused: Bool
 
     private let poll = Timer.publish(every: 1.5, on: .main, in: .common).autoconnect()
 
@@ -677,7 +1023,7 @@ private struct BrowserColumn: View {
                 Divider()
             }
             // Opaque chrome so AppKit doesn't treat the strip as window-drag.
-            .background(Color(nsColor: .windowBackgroundColor))
+            .background(DS.Surface.app)
         }
         .onReceive(poll) { _ in
             guard session.urlString.isEmpty else { return }
@@ -732,7 +1078,7 @@ private struct BrowserColumn: View {
             .frame(maxWidth: .infinity)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
-        .background(Color(nsColor: .windowBackgroundColor))
+        .background(DS.Surface.app)
     }
 
     @ViewBuilder
@@ -889,28 +1235,43 @@ private struct BrowserColumn: View {
         session.load(parsed)
     }
 
-    /// Fit fills the card; a device preset renders the page at its logical
-    /// resolution and aspect-fits it (WKWebView magnification, capped at 1:1
-    /// so devices smaller than the card show at real size, centered).
-    /// One subtree for both cases — a branch here would re-parent the
-    /// WKWebView on every viewport switch, and a magnification set mid-
-    /// reparent gets silently dropped (stale zoom + phantom white space).
+    /// Fit fills the card; a device preset lays out at the logical device size
+    /// (`pageZoom` = 1) and is aspect-fit with a view transform so DOM coords,
+    /// hit-testing, and the element picker stay aligned. One subtree for both
+    /// cases — branching would re-parent the WKWebView on every switch.
     private var viewportBody: some View {
         GeometryReader { geo in
-            let size = session.viewport.size
-            let scale = size.map { min(geo.size.width / $0.width,
-                                       geo.size.height / $0.height, 1) } ?? 1
-            WebView(webView: session.webView, zoom: scale)
-                .frame(width: size.map { $0.width * scale } ?? geo.size.width,
-                       height: size.map { $0.height * scale } ?? geo.size.height)
+            let logical = session.viewport.size
+            let baseW = logical?.width ?? geo.size.width
+            let baseH = logical?.height ?? geo.size.height
+            let scale = logical.map {
+                min(geo.size.width / $0.width, geo.size.height / $0.height, 1)
+            } ?? 1
+            WebView(webView: session.webView, pageZoom: 1)
+                .frame(width: max(1, baseW), height: max(1, baseH))
+                .scaleEffect(scale, anchor: .center)
+                .frame(width: max(1, baseW * scale), height: max(1, baseH * scale))
                 .overlay(
                     Rectangle()
                         .strokeBorder(Color(nsColor: .separatorColor),
-                                      lineWidth: size == nil ? 0 : 1)
+                                      lineWidth: logical == nil ? 0 : 1)
                 )
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
+                .onChange(of: scale) { _, new in session.displayScale = new }
+                .onAppear { session.displayScale = scale }
         }
-        .background(Color(nsColor: .windowBackgroundColor), ignoresSafeAreaEdges: [])
+        .background(DS.Surface.app, ignoresSafeAreaEdges: [])
+        .background {
+            // Local shortcuts so they work while the WKWebView has focus
+            // (SwiftUI .keyboardShortcut often loses to the web process).
+            BrowserKeyMonitor(
+                onReload: { session.webView.reload() },
+                onBack: { session.goBack() },
+                onForward: { session.goForward() },
+                onFocusURL: { urlFieldFocused = true },
+                onTogglePicker: { session.pickerActive.toggle() }
+            )
+        }
     }
 
     private var toolbar: some View {
@@ -932,12 +1293,12 @@ private struct BrowserColumn: View {
             Divider().frame(height: 14)
 
             BrowserToolbarButton(systemName: "chevron.left",
-                                 help: "Back",
+                                 help: "Back (⌘[)",
                                  isEnabled: session.canGoBack) {
                 session.goBack()
             }
             BrowserToolbarButton(systemName: "chevron.right",
-                                 help: "Forward",
+                                 help: "Forward (⌘])",
                                  isEnabled: session.canGoForward) {
                 session.goForward()
             }
@@ -945,6 +1306,7 @@ private struct BrowserColumn: View {
             TextField("URL", text: $session.urlString)
                 .textFieldStyle(.roundedBorder)
                 .font(DS.Font.footnote)
+                .focused($urlFieldFocused)
                 .onSubmit {
                     if let url = BrowserManager.normalizeURL(session.urlString) {
                         session.load(url)
@@ -973,7 +1335,7 @@ private struct BrowserColumn: View {
             .frame(width: DS.Control.large)
             .help("Emulate a device screen size")
 
-            BrowserToolbarButton(systemName: "arrow.clockwise", help: "Reload") {
+            BrowserToolbarButton(systemName: "arrow.clockwise", help: "Reload (⌘R)") {
                 session.webView.reload()
             }
             BrowserToolbarButton(systemName: "cursorarrow.rays",
@@ -983,7 +1345,6 @@ private struct BrowserColumn: View {
                                  isActive: session.pickerActive) {
                 session.pickerActive.toggle()
             }
-            .keyboardShortcut("e", modifiers: [.command, .shift])
             BrowserToolbarButton(systemName: "xmark", help: "Close this browser") {
                 manager.close(session)
                 if manager.sessions.isEmpty {
@@ -995,6 +1356,92 @@ private struct BrowserColumn: View {
         .frame(height: DS.Control.header)
         .frame(maxWidth: .infinity)
         .contentShape(Rectangle())
+    }
+}
+
+/// AppKit key monitor for browser chrome shortcuts while the web view has
+/// first responder. ⌘←/⌘→ stay reserved for the browser-pane pager.
+private struct BrowserKeyMonitor: NSViewRepresentable {
+    let onReload: () -> Void
+    let onBack: () -> Void
+    let onForward: () -> Void
+    let onFocusURL: () -> Void
+    let onTogglePicker: () -> Void
+
+    func makeNSView(context: Context) -> NSView {
+        let view = NSView()
+        context.coordinator.install(onReload: onReload, onBack: onBack,
+                                    onForward: onForward, onFocusURL: onFocusURL,
+                                    onTogglePicker: onTogglePicker)
+        return view
+    }
+
+    func updateNSView(_ nsView: NSView, context: Context) {
+        context.coordinator.onReload = onReload
+        context.coordinator.onBack = onBack
+        context.coordinator.onForward = onForward
+        context.coordinator.onFocusURL = onFocusURL
+        context.coordinator.onTogglePicker = onTogglePicker
+    }
+
+    static func dismantleNSView(_ nsView: NSView, coordinator: Coordinator) {
+        coordinator.teardown()
+    }
+
+    func makeCoordinator() -> Coordinator { Coordinator() }
+
+    final class Coordinator {
+        var onReload: (() -> Void)?
+        var onBack: (() -> Void)?
+        var onForward: (() -> Void)?
+        var onFocusURL: (() -> Void)?
+        var onTogglePicker: (() -> Void)?
+        private var monitor: Any?
+
+        func install(onReload: @escaping () -> Void, onBack: @escaping () -> Void,
+                     onForward: @escaping () -> Void, onFocusURL: @escaping () -> Void,
+                     onTogglePicker: @escaping () -> Void) {
+            self.onReload = onReload
+            self.onBack = onBack
+            self.onForward = onForward
+            self.onFocusURL = onFocusURL
+            self.onTogglePicker = onTogglePicker
+            guard monitor == nil else { return }
+            monitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] event in
+                guard let self else { return event }
+                let flags = event.modifierFlags.intersection(.deviceIndependentFlagsMask)
+                let chars = event.charactersIgnoringModifiers?.lowercased() ?? ""
+                // ⌘R reload
+                if flags == .command, chars == "r" {
+                    self.onReload?(); return nil
+                }
+                // ⌘[ back / ⌘] forward (history; pane pager keeps ⌘←/→)
+                if flags == .command, chars == "[" {
+                    self.onBack?(); return nil
+                }
+                if flags == .command, chars == "]" {
+                    self.onForward?(); return nil
+                }
+                // ⌘L focus URL bar
+                if flags == .command, chars == "l" {
+                    self.onFocusURL?(); return nil
+                }
+                // ⌘⇧E toggle annotate
+                if flags == [.command, .shift], chars == "e" {
+                    self.onTogglePicker?(); return nil
+                }
+                return event
+            }
+        }
+
+        func teardown() {
+            if let monitor {
+                NSEvent.removeMonitor(monitor)
+                self.monitor = nil
+            }
+        }
+
+        deinit { teardown() }
     }
 }
 
@@ -1055,57 +1502,335 @@ private struct BrowserToolbarButton: View {
 
 private struct WebView: NSViewRepresentable {
     let webView: WKWebView
-    /// pageZoom, not magnification: pageZoom scales in the web process (like
-    /// Safari ⌘+) so content always fills the view — magnification is a
-    /// scroll-view canvas transform that letterboxes the page against the
-    /// under-page background when a set gets dropped mid-layout.
-    var zoom: CGFloat = 1
+    /// Always 1 for device presets — the card scales the view with
+    /// `scaleEffect` so DOM/layout size matches the emulated device and the
+    /// picker hit-tests correctly. Fit mode is also 1 (frame = card size).
+    var pageZoom: CGFloat = 1
 
     func makeNSView(context: Context) -> WKWebView { webView }
 
     func updateNSView(_ nsView: WKWebView, context: Context) {
-        if abs(nsView.pageZoom - zoom) > 0.001 {
-            nsView.pageZoom = zoom
+        if abs(nsView.pageZoom - pageZoom) > 0.001 {
+            nsView.pageZoom = pageZoom
+        }
+        // Clear any leftover magnification from older builds.
+        if abs(nsView.magnification - 1) > 0.001 {
+            nsView.magnification = 1
         }
     }
 }
 
-/// Full-height slim panel docked to the trailing window edge while browsers
-/// are open but browser mode is collapsed — matches the other pane cards.
-/// Click anywhere on it to expand browser mode.
-struct BrowserEdgeBar: View {
-    let count: Int
-    let action: () -> Void
+/// Hover the trailing window edge (outside browser mode) to slide a drawer
+/// out. Lists open browser panes for quick jump, or offers “Open browser” for
+/// the active workspace when none exist. ⌘B still toggles full browser mode;
+/// this is only a picker / start affordance.
+///
+/// The edge strip uses a hit-through AppKit tracker so it never steals clicks
+/// from cell chrome underneath (close ✕ on right-edge cells). A short dwell
+/// before reveal stops the drawer from flashing open while aiming at those
+/// buttons.
+struct BrowserEdgeDrawer: View {
+    @Bindable var manager: BrowserManager
+    /// Active project session — used for “open browser on this workspace”.
+    var projectSession: ProjectSession?
+    let onSelect: (BrowserSession) -> Void
+    let onStartBrowser: () -> Void
 
-    @State private var hovering = false
+    @State private var edgeHover = false
+    @State private var panelHover = false
+    /// Actually visible — lags edge hover by `showDelay` so quick trips to
+    /// the cell close button don't open the drawer.
+    @State private var revealed = false
+    @State private var showWorkItem: DispatchWorkItem?
+    @State private var hideWorkItem: DispatchWorkItem?
+
+    private var open: Bool { revealed }
+
+    /// How long the pointer must stay on the edge before the drawer opens.
+    private static let showDelay: TimeInterval = 0.25
+    /// Grace when crossing the gap between hot zone and panel.
+    private static let hideDelay: TimeInterval = 0.18
+
+    /// Leading corners of a right-edge drawer (mirror of the file editor's
+    /// trailing corners on its left-edge panel).
+    private var panelShape: UnevenRoundedRectangle {
+        UnevenRoundedRectangle(
+            topLeadingRadius: DS.Radius.lg,
+            bottomLeadingRadius: DS.Radius.lg,
+            bottomTrailingRadius: 0,
+            topTrailingRadius: 0,
+            style: .continuous
+        )
+    }
 
     var body: some View {
-        Button(action: action) {
-            VStack(spacing: DS.Space.md) {
-                Spacer()
-                Image(systemName: "chevron.left")
-                    .font(.system(size: DS.Icon.small, weight: .semibold))
+        // ZStack keeps the panel flush to the window's trailing edge.
+        // Panel sits above the hot zone when open so its buttons stay clickable;
+        // the strip itself never participates in hit-testing (clicks pass
+        // through to cell close / zoom underneath).
+        ZStack(alignment: .trailing) {
+            EdgeHoverStrip(onHover: setEdgeHover)
+                .frame(width: 14)
+                .frame(maxHeight: .infinity)
+                .help(manager.sessions.isEmpty
+                      ? "Hover for browser — open one for this workspace"
+                      : "Hover to pick an open browser")
+
+            if open {
+                panel
+                    .transition(.move(edge: .trailing).combined(with: .opacity))
+                    .onHover { setPanelHover($0) }
+            }
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .trailing)
+        .animation(.easeOut(duration: 0.16), value: open)
+    }
+
+    private var panel: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            HStack(spacing: DS.Space.xs) {
                 Image(systemName: "globe")
                     .font(.system(size: DS.Icon.small, weight: .semibold))
-                if count > 1 {
-                    Text("\(count)")
-                        .font(DS.Font.badge)
+                    .foregroundStyle(.secondary)
+                Text(manager.sessions.isEmpty ? "Browser" : "Browsers")
+                    .font(DS.Font.bodySemibold)
+                Spacer(minLength: 0)
+                if !manager.sessions.isEmpty {
+                    Text("\(manager.sessions.count)")
+                        .font(.system(size: 10, weight: .semibold, design: .rounded))
+                        .monospacedDigit()
+                        .foregroundStyle(.secondary)
+                        .padding(.horizontal, 5)
+                        .padding(.vertical, 1)
+                        .background(Capsule().fill(Color.primary.opacity(0.08)))
                 }
-                Spacer()
             }
-            .foregroundStyle(hovering ? Color.accentColor : Color.secondary)
-            .frame(width: 28)
-            .frame(maxHeight: .infinity)
-            .contentShape(Rectangle())
+            .padding(.horizontal, DS.Space.md)
+            .frame(height: DS.Control.header)
+
+            Divider()
+
+            if manager.sessions.isEmpty {
+                emptyBody
+            } else {
+                sessionList
+            }
         }
-        .buttonStyle(.plain)
-        .background(Color(nsColor: .controlBackgroundColor))
-        .overlay(alignment: .leading) {
-            Rectangle()
-                .fill(Color(nsColor: .separatorColor))
-                .frame(width: 1)
+        .frame(width: 260)
+        .frame(maxHeight: .infinity)
+        .background(DS.Surface.app)
+        .clipShape(panelShape)
+        .overlay(
+            panelShape
+                .strokeBorder(Color.primary.opacity(0.12), lineWidth: 1)
+        )
+        .shadow(color: .black.opacity(0.28), radius: 14, x: -4, y: 0)
+    }
+
+    private var emptyBody: some View {
+        VStack(alignment: .leading, spacing: DS.Space.md) {
+            Text("No browsers open")
+                .font(DS.Font.bodySemibold)
+            Text(workspaceHint)
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+
+            Button(action: onStartBrowser) {
+                Label("Open browser", systemImage: "globe")
+                    .font(DS.Font.control)
+                    .frame(maxWidth: .infinity)
+                    .frame(height: DS.Control.large)
+                    .background(
+                        RoundedRectangle(cornerRadius: DS.Radius.md, style: .continuous)
+                            .fill(Color.accentColor.opacity(0.14))
+                    )
+                    .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .disabled(projectSession?.activeWorkspace == nil)
+            .help(projectSession?.activeWorkspace == nil
+                  ? "Select a project with a workspace first"
+                  : "Open a browser for the active workspace (or press ⌘B)")
+
+            Text("Tip: ⌘B toggles full browser mode anytime.")
+                .font(.caption2)
+                .foregroundStyle(.tertiary)
+
+            Spacer(minLength: 0)
         }
-        .onHover { hovering = $0 }
-        .help("Show agent browser")
+        .padding(DS.Space.lg)
+    }
+
+    private var workspaceHint: String {
+        if let name = projectSession?.activeWorkspace?.name {
+            return "Start one for “\(name)” — servers, agents, and localhost preview."
+        }
+        return "Select a project workspace, then open a browser here."
+    }
+
+    private var sessionList: some View {
+        ScrollView {
+            VStack(spacing: DS.Space.xxs) {
+                ForEach(manager.sessions) { session in
+                    Button {
+                        onSelect(session)
+                    } label: {
+                        sessionRow(session)
+                    }
+                    .buttonStyle(.plain)
+                }
+            }
+            .padding(DS.Space.sm)
+        }
+    }
+
+    private func sessionRow(_ session: BrowserSession) -> some View {
+        let focused = manager.focusedId == session.id
+        return HStack(alignment: .top, spacing: DS.Space.sm) {
+            Image(systemName: "globe")
+                .font(.system(size: DS.Icon.small, weight: .semibold))
+                .foregroundStyle(focused ? Color.accentColor : .secondary)
+                .frame(width: 16)
+                .padding(.top, 2)
+
+            VStack(alignment: .leading, spacing: 2) {
+                Text(sessionTitle(session))
+                    .font(DS.Font.control)
+                    .fontWeight(focused ? .semibold : .regular)
+                    .lineLimit(1)
+                    .foregroundStyle(.primary)
+                Text(sessionSubtitle(session))
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+            }
+            Spacer(minLength: 0)
+        }
+        .padding(.horizontal, DS.Space.sm)
+        .padding(.vertical, DS.Space.sm)
+        .background(
+            RoundedRectangle(cornerRadius: DS.Radius.md, style: .continuous)
+                .fill(focused ? Color.accentColor.opacity(0.14) : Color.primary.opacity(0.04))
+        )
+        .contentShape(Rectangle())
+        .help("Open this browser")
+    }
+
+    private func sessionTitle(_ session: BrowserSession) -> String {
+        let title = session.pageTitle.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !title.isEmpty { return title }
+        if !session.urlString.isEmpty { return session.urlString }
+        if let agent = session.ownerTab?.title, !agent.isEmpty { return agent }
+        if session.wasOpenedManually { return "Workspace browser" }
+        return "Browser"
+    }
+
+    private func sessionSubtitle(_ session: BrowserSession) -> String {
+        var parts: [String] = []
+        if let agent = session.ownerTab?.title, !agent.isEmpty {
+            parts.append(agent)
+        } else if session.ownerCell != nil {
+            parts.append("Empty cell")
+        } else if let ws = session.sourceWorkspace?.name {
+            parts.append(ws)
+        }
+        let url = session.urlString
+        if !url.isEmpty, url != sessionTitle(session) {
+            parts.append(url)
+        }
+        return parts.isEmpty ? "Blank" : parts.joined(separator: " · ")
+    }
+
+    private func setEdgeHover(_ hovering: Bool) {
+        edgeHover = hovering
+        if hovering {
+            hideWorkItem?.cancel()
+            scheduleShowIfNeeded()
+        } else {
+            showWorkItem?.cancel()
+            scheduleHideIfNeeded()
+        }
+    }
+
+    private func setPanelHover(_ hovering: Bool) {
+        panelHover = hovering
+        if hovering {
+            // Already on the panel — open immediately and keep it.
+            hideWorkItem?.cancel()
+            showWorkItem?.cancel()
+            revealed = true
+        } else {
+            scheduleHideIfNeeded()
+        }
+    }
+
+    private func scheduleShowIfNeeded() {
+        showWorkItem?.cancel()
+        guard !revealed else { return }
+        // Cancelled in setEdgeHover(false) if the pointer leaves before delay.
+        let work = DispatchWorkItem { revealed = true }
+        showWorkItem = work
+        DispatchQueue.main.asyncAfter(deadline: .now() + Self.showDelay, execute: work)
+    }
+
+    private func scheduleHideIfNeeded() {
+        hideWorkItem?.cancel()
+        // Keep the panel up briefly when crossing from hot zone → panel so it
+        // doesn't flicker closed in the gap.
+        guard !edgeHover, !panelHover else { return }
+        let work = DispatchWorkItem {
+            revealed = false
+        }
+        hideWorkItem = work
+        DispatchQueue.main.asyncAfter(deadline: .now() + Self.hideDelay, execute: work)
+    }
+}
+
+/// Full-height trailing strip that reports hover without intercepting clicks.
+/// Cell header controls (close, zoom) on right-edge cells sit under this zone;
+/// a normal SwiftUI `Color.clear` + `contentShape` would steal their hits.
+private struct EdgeHoverStrip: NSViewRepresentable {
+    var onHover: (Bool) -> Void
+
+    func makeNSView(context: Context) -> EdgeHoverNSView {
+        let view = EdgeHoverNSView()
+        view.onHover = onHover
+        return view
+    }
+
+    func updateNSView(_ nsView: EdgeHoverNSView, context: Context) {
+        nsView.onHover = onHover
+    }
+}
+
+private final class EdgeHoverNSView: NSView {
+    var onHover: ((Bool) -> Void)?
+    private var trackingArea: NSTrackingArea?
+
+    override var acceptsFirstResponder: Bool { false }
+
+    /// Pass every mouse event through to the views underneath.
+    override func hitTest(_ point: NSPoint) -> NSView? { nil }
+
+    override func updateTrackingAreas() {
+        if let trackingArea { removeTrackingArea(trackingArea) }
+        let area = NSTrackingArea(
+            rect: .zero,
+            options: [.mouseEnteredAndExited, .activeInKeyWindow, .inVisibleRect],
+            owner: self,
+            userInfo: nil
+        )
+        addTrackingArea(area)
+        trackingArea = area
+        super.updateTrackingAreas()
+    }
+
+    override func mouseEntered(with event: NSEvent) {
+        onHover?(true)
+    }
+
+    override func mouseExited(with event: NSEvent) {
+        onHover?(false)
     }
 }

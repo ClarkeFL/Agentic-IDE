@@ -14,6 +14,10 @@ struct ProjectWorkspaceView: View {
     @State private var showLayoutChooser = false
     @State private var swipeDirection = 1
 
+    /// Cold-launch only: auto-enter browser at most once per process so
+    /// later project clicks never yank the user out of the grid.
+    private static var didAutoRestoreBrowser = false
+
     var body: some View {
         let session = sessions.session(for: project.id)
 
@@ -22,11 +26,8 @@ struct ProjectWorkspaceView: View {
                 if showLayoutChooser || session.activeWorkspace == nil {
                     LayoutChooserView(
                         canCancel: session.activeWorkspace != nil,
-                        onSelectGrid: {
-                            // Always start at 1×1 — resize from the header
-                            // grid picker once you're in the workspace.
-                            session.addWorkspace(
-                                layout: GridLayout(axis: .rows, counts: [1]))
+                        onSelectLayout: { layout in
+                            session.addWorkspace(layout: layout)
                             showLayoutChooser = false
                         },
                         onSelectBrowser: {
@@ -68,7 +69,7 @@ struct ProjectWorkspaceView: View {
                 slide(direction, in: session)
             }
         }
-        .background(Color(nsColor: .controlBackgroundColor))
+        .background(DS.Surface.app)
         // Explicit hairline on the leading edge so the workspace always has a
         // visible left border, whatever pane (explorer, rail) sits beside it.
         .overlay(alignment: .leading) {
@@ -84,35 +85,26 @@ struct ProjectWorkspaceView: View {
             slide(direction, in: session)
         }
         .onReceive(NotificationCenter.default.publisher(for: .newWorkspace)) { _ in
-            // Always offer grid vs browser (and layout size for grid) so a
-            // browser workspace is one click, not create-then-globe.
+            // Offer layout presets + browser so a browser workspace is one click.
             showLayoutChooser = true
         }
         .onReceive(NotificationCenter.default.publisher(for: .workspaceSessionRestored)) { note in
-            // Only place that auto-opens browser — app relaunch, not Grid exit.
+            // Cold launch only for the first restored project this process.
+            // Project switches and workspace swipes never auto-enter browser —
+            // the user opens it via globe / hover drawer / ⌘B.
             guard (note.object as? UUID) == project.id else { return }
+            guard !Self.didAutoRestoreBrowser else { return }
+            Self.didAutoRestoreBrowser = true
             restoreBrowserIfPreferred(for: session)
         }
         .onChange(of: project.id) { _, _ in
             // Different project — drop any transient chooser state.
             showLayoutChooser = false
         }
-        .onChange(of: session.activeWorkspaceId) { _, _ in
-            // Swiping to another workspace: enter browser only if THAT
-            // workspace prefers it; leave browser when landing on a grid one.
-            // Never re-open just because the grid view appeared after Grid.
-            guard let ws = session.activeWorkspace else { return }
-            let browsers = BrowserManager.shared
-            if ws.prefersBrowserMode {
-                browsers.openManual(from: ws, projectSession: session)
-            } else if browsers.isModeActive {
-                browsers.collapseMode()
-            }
-        }
     }
 
     /// App launch only: re-open browser mode if the restored active workspace
-    /// was a browser workspace last time.
+    /// was a browser workspace last time. Never called on project/workspace switch.
     private func restoreBrowserIfPreferred(for session: ProjectSession) {
         guard let ws = session.activeWorkspace, ws.prefersBrowserMode else { return }
         BrowserManager.shared.openManual(from: ws, projectSession: session)
@@ -203,21 +195,43 @@ private final class WorkspaceSwipeNSView: NSView {
 }
 
 /// Centered chooser shown before a workspace exists (or when adding a new
-/// one). Two one-click paths — both start as a single cell:
-/// **Grid** (agent cell in the workspace) or **Browser** (same + browser mode
-/// for servers / agents / localhost). Grow the grid later from the header.
+/// one). Step 1: **Grid** vs **Browser**. Step 2 (Grid only): the four daily
+/// layout shapes. Full layout palette stays on the header once a workspace
+/// is open.
 private struct LayoutChooserView: View {
     let canCancel: Bool
-    let onSelectGrid: () -> Void
+    let onSelectLayout: (GridLayout) -> Void
     let onSelectBrowser: () -> Void
     let onCancel: () -> Void
 
+    /// After tapping Grid, show the four layout presets instead of the mode pair.
+    @State private var pickingGridLayout = false
+
     var body: some View {
+        VStack(spacing: DS.Space.lg) {
+            if pickingGridLayout {
+                gridLayoutStep
+            } else {
+                modeStep
+            }
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .padding(DS.Space.xxl)
+        // controlBackgroundColor (not windowBackgroundColor) so the canvas
+        // matches the rest of the app and renders identically whether the
+        // window is active or not — windowBackgroundColor is wallpaper-tinted
+        // only for the active app, which made this pane look lighter/"off" on
+        // the inactive (e.g. release) window.
+        .background(DS.Surface.app)
+    }
+
+    /// Step 1 — Grid or Browser.
+    private var modeStep: some View {
         VStack(spacing: DS.Space.lg) {
             VStack(spacing: DS.Space.xs) {
                 Text("New workspace")
                     .font(.title3.weight(.semibold))
-                Text("Starts as one cell — expand the grid anytime from the header.")
+                Text("Agent cells in a grid, or a browser for servers and preview.")
                     .font(.subheadline)
                     .foregroundStyle(.secondary)
                     .multilineTextAlignment(.center)
@@ -225,9 +239,9 @@ private struct LayoutChooserView: View {
 
             HStack(spacing: DS.Space.md) {
                 modeCard(title: "Grid",
-                         subtitle: "One agent cell",
+                         subtitle: "Agent cells",
                          systemImage: "square.grid.2x2",
-                         action: onSelectGrid)
+                         action: { pickingGridLayout = true })
                 modeCard(title: "Browser",
                          subtitle: "Servers + preview",
                          systemImage: "globe",
@@ -241,14 +255,60 @@ private struct LayoutChooserView: View {
                     .foregroundStyle(.secondary)
             }
         }
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
-        .padding(DS.Space.xxl)
-        // controlBackgroundColor (not windowBackgroundColor) so the canvas
-        // matches the rest of the app and renders identically whether the
-        // window is active or not — windowBackgroundColor is wallpaper-tinted
-        // only for the active app, which made this pane look lighter/"off" on
-        // the inactive (e.g. release) window.
-        .background(Color(nsColor: .controlBackgroundColor))
+    }
+
+    /// Step 2 — four quick layouts after Grid is chosen.
+    private var gridLayoutStep: some View {
+        VStack(spacing: DS.Space.lg) {
+            VStack(spacing: DS.Space.xs) {
+                Text("Choose a layout")
+                    .font(.title3.weight(.semibold))
+                Text("More shapes anytime from the header once you're in.")
+                    .font(.subheadline)
+                    .foregroundStyle(.secondary)
+                    .multilineTextAlignment(.center)
+            }
+
+            HStack(spacing: DS.Space.sm) {
+                ForEach(Array(GridLayout.quickPresets.enumerated()), id: \.offset) { _, preset in
+                    layoutCard(preset)
+                }
+            }
+
+            Button("Back") { pickingGridLayout = false }
+                .buttonStyle(.plain)
+                .font(.callout)
+                .foregroundStyle(.secondary)
+        }
+    }
+
+    private func layoutCard(_ preset: (title: String, layout: GridLayout)) -> some View {
+        Button { onSelectLayout(preset.layout) } label: {
+            VStack(spacing: DS.Space.md) {
+                LayoutGlyph(layout: preset.layout, square: 14, gap: 4) { _, _ in
+                    Color.accentColor.opacity(0.85)
+                }
+                .frame(height: 40)
+                Text(preset.title)
+                    .font(DS.Font.bodySemibold)
+                    .multilineTextAlignment(.center)
+                    .lineLimit(2)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            .frame(width: 110, height: 130)
+            .padding(.horizontal, DS.Space.xs)
+            .background(
+                RoundedRectangle(cornerRadius: DS.Radius.lg, style: .continuous)
+                    .fill(Color.primary.opacity(0.04))
+            )
+            .overlay(
+                RoundedRectangle(cornerRadius: DS.Radius.lg, style: .continuous)
+                    .strokeBorder(Color.primary.opacity(0.08), lineWidth: 1)
+            )
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .help(preset.title)
     }
 
     private func modeCard(title: String, subtitle: String,

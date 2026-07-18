@@ -70,6 +70,9 @@ final class CellBus {
         case "servers":
             return serverListing(session: session)
 
+        case "ports":
+            return portsListing(session: session)
+
         case "server":
             return handleServer(args: args, body: body, session: session)
 
@@ -304,23 +307,41 @@ final class CellBus {
         let live = runner.runningLabels()
         var lines: [String] = [
             "Servers workspace: dedicated place for long-running dev servers "
-                + "(not grid cells). Use `agentide server run [name|all]` / "
-                + "`agentide server stop [name|all]` / `agentide server read <name>`.",
+                + "(not grid cells). Configure: `agentide server add|set|rm`; "
+                + "control: `run|stop|read`. Ports list: `agentide ports`.",
         ]
         if project.servers.isEmpty && live.isEmpty {
-            lines.append("(no servers configured — run ad-hoc with "
-                + "`agentide server run <name> <command>`, e.g. "
-                + "`agentide server run web npm run dev`)")
+            lines.append("(no servers configured — "
+                + "`agentide server add web \"npm run dev\" --port 3000` "
+                + "or ad-hoc `agentide server run web npm run dev`)")
             return lines.joined(separator: "\n")
         }
         for s in project.servers {
             let state = live.contains(s.label) ? "running" : "stopped"
-            lines.append("\(s.label): [\(state)]  \(s.command)")
+            let port = s.port.map { "port \($0)  " } ?? ""
+            lines.append("\(s.label): [\(state)]  \(port)\(s.command)")
         }
         // Ad-hoc / leftover cells not in the configured list.
         for label in live.sorted() where !project.servers.contains(where: { $0.label == label }) {
             lines.append("\(label): [running]  (ad-hoc)")
         }
+        return lines.joined(separator: "\n")
+    }
+
+    /// Cross-project port inventory so agents can avoid collisions.
+    private func portsListing(session: ProjectSession) -> String {
+        guard let store else { return "error: app not ready" }
+        var lines: [String] = ["Configured ports across projects:"]
+        var any = false
+        for project in store.projects where !project.archived {
+            for s in project.servers {
+                guard let port = s.port else { continue }
+                any = true
+                let mine = project.id == session.projectId ? " (this project)" : ""
+                lines.append("  :\(port)  \(project.name)/\(s.label)\(mine)  — \(s.command)")
+            }
+        }
+        if !any { lines.append("  (none — set ports with `agentide server add|set … --port N`)") }
         return lines.joined(separator: "\n")
     }
 
@@ -331,26 +352,172 @@ final class CellBus {
               let runner = runner(for: session) else {
             return "error: app not ready"
         }
-        let usage = "error: usage: server run [name|all] | server run <name> <command> | "
+        let usage = "error: usage: server add <name> <command> [--port N] | "
+            + "server set <name> [--command …] [--port N|clear] | server rm <name> | "
+            + "server run [name|all] | server run <name> <command> | "
             + "server stop [name|all] | server read <name>"
         guard let sub = args.first?.lowercased() else { return usage }
         let rest = Array(args.dropFirst())
-        let name = rest.first ?? ""
-        let cmdFromArgs = rest.dropFirst().joined(separator: " ")
-            .trimmingCharacters(in: .whitespaces)
-        let cmdFromBody = (body ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
-        let command = !cmdFromBody.isEmpty ? cmdFromBody : cmdFromArgs
 
         switch sub {
+        case "add":
+            return serverAdd(rest: rest, body: body, project: project, store: store)
+        case "set":
+            return serverSet(rest: rest, body: body, project: project, store: store)
+        case "rm", "remove", "delete":
+            return serverRemove(name: rest.first ?? "", project: project, store: store, runner: runner)
         case "run":
+            let name = rest.first ?? ""
+            let cmdFromArgs = rest.dropFirst().joined(separator: " ")
+                .trimmingCharacters(in: .whitespaces)
+            let cmdFromBody = (body ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+            let command = !cmdFromBody.isEmpty ? cmdFromBody : cmdFromArgs
             return serverRun(name: name, command: command, project: project, runner: runner)
         case "stop":
-            return serverStop(name: name, runner: runner)
+            return serverStop(name: rest.first ?? "", runner: runner)
         case "read":
-            return serverRead(name: name, runner: runner)
+            return serverRead(name: rest.first ?? "", runner: runner)
         default:
             return usage
         }
+    }
+
+    /// Parse trailing `--port N` / `--port clear` from tokens; returns remaining
+    /// tokens and the optional port intent (nil = not specified, .some(nil) = clear).
+    private func extractPort(_ tokens: [String]) -> (rest: [String], port: Int??) {
+        var rest: [String] = []
+        var port: Int?? = nil
+        var i = 0
+        while i < tokens.count {
+            let t = tokens[i]
+            if t == "--port", i + 1 < tokens.count {
+                let v = tokens[i + 1]
+                if v.caseInsensitiveCompare("clear") == .orderedSame || v == "-" {
+                    port = .some(nil)
+                } else if let n = Int(v), n > 0, n <= 65535 {
+                    port = .some(n)
+                }
+                i += 2
+                continue
+            }
+            if t.hasPrefix("--port=") {
+                let v = String(t.dropFirst("--port=".count))
+                if v.caseInsensitiveCompare("clear") == .orderedSame {
+                    port = .some(nil)
+                } else if let n = Int(v), n > 0, n <= 65535 {
+                    port = .some(n)
+                }
+                i += 1
+                continue
+            }
+            rest.append(t)
+            i += 1
+        }
+        return (rest, port)
+    }
+
+    private func portConflictWarning(port: Int, excludingProjectId: UUID, store: ProjectStore) -> String? {
+        var hits: [String] = []
+        for p in store.projects where !p.archived && p.id != excludingProjectId {
+            for s in p.servers where s.port == port {
+                hits.append("\(p.name)/\(s.label)")
+            }
+        }
+        guard !hits.isEmpty else { return nil }
+        return "warning: port \(port) also configured on \(hits.joined(separator: ", "))"
+    }
+
+    private func serverAdd(rest: [String], body: String?,
+                           project: Project, store: ProjectStore) -> String {
+        let (tokens, portOpt) = extractPort(rest)
+        guard let name = tokens.first, !name.isEmpty else {
+            return "error: usage: server add <name> <command> [--port N]"
+        }
+        if project.servers.contains(where: { $0.label.caseInsensitiveCompare(name) == .orderedSame }) {
+            return "error: server '\(name)' already exists — use `server set` to update"
+        }
+        let cmdFromArgs = tokens.dropFirst().joined(separator: " ")
+            .trimmingCharacters(in: .whitespaces)
+        let cmdFromBody = (body ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+        let command = !cmdFromBody.isEmpty ? cmdFromBody : cmdFromArgs
+        guard !command.isEmpty else {
+            return "error: usage: server add <name> <command> [--port N]"
+        }
+        let port: Int? = {
+            if case .some(let p) = portOpt { return p }
+            return nil
+        }()
+        var list = project.servers
+        list.append(QuickLaunch(label: name, command: command, icon: "play.circle", port: port))
+        store.updateServers(projectId: project.id, list)
+        var msg = "ok: added server '\(name)'"
+        if let port { msg += " (port \(port))" }
+        msg += " — \(command)"
+        if let port, let warn = portConflictWarning(port: port, excludingProjectId: project.id, store: store) {
+            msg += "\n\(warn)"
+        }
+        return msg
+    }
+
+    private func serverSet(rest: [String], body: String?,
+                           project: Project, store: ProjectStore) -> String {
+        let (tokens, portOpt) = extractPort(rest)
+        guard let name = tokens.first, !name.isEmpty else {
+            return "error: usage: server set <name> [--command …] [--port N|clear]"
+        }
+        guard let idx = project.servers.firstIndex(where: {
+            $0.label.caseInsensitiveCompare(name) == .orderedSame
+        }) else {
+            return "error: no server named '\(name)' — use `server add` first"
+        }
+        var list = project.servers
+        var row = list[idx]
+        // Allow `server set web --command npm run dev` or bare remaining args as command.
+        var commandTokens = Array(tokens.dropFirst())
+        if let cIdx = commandTokens.firstIndex(of: "--command") {
+            commandTokens = Array(commandTokens.suffix(from: cIdx + 1))
+        }
+        let cmdFromFlags = commandTokens.joined(separator: " ").trimmingCharacters(in: .whitespaces)
+        let cmdFromBody = (body ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+        let newCommand = !cmdFromBody.isEmpty ? cmdFromBody
+            : (!cmdFromFlags.isEmpty ? cmdFromFlags : nil)
+        if let newCommand { row.command = newCommand }
+        if case .some(let p) = portOpt { row.port = p }
+        // Nothing to change?
+        if newCommand == nil, portOpt == nil {
+            return "error: nothing to set — pass a command and/or --port N|clear"
+        }
+        list[idx] = row
+        store.updateServers(projectId: project.id, list)
+        var msg = "ok: updated '\(row.label)'"
+        if let port = row.port { msg += " port=\(port)" }
+        else if case .some(nil) = portOpt { msg += " port=cleared" }
+        msg += " — \(row.command)"
+        if let port = row.port,
+           let warn = portConflictWarning(port: port, excludingProjectId: project.id, store: store) {
+            msg += "\n\(warn)"
+        }
+        return msg
+    }
+
+    private func serverRemove(name: String, project: Project, store: ProjectStore,
+                              runner: ServerRunner) -> String {
+        guard !name.isEmpty else { return "error: usage: server rm <name>" }
+        guard let idx = project.servers.firstIndex(where: {
+            $0.label.caseInsensitiveCompare(name) == .orderedSame
+        }) else {
+            return "error: no server named '\(name)'"
+        }
+        let label = project.servers[idx].label
+        var list = project.servers
+        list.remove(at: idx)
+        store.updateServers(projectId: project.id, list)
+        // Stop if running so the config and runtime stay aligned.
+        if runner.runningLabels().contains(label) {
+            runner.stop(label)
+            return "ok: removed and stopped '\(label)'"
+        }
+        return "ok: removed '\(label)'"
     }
 
     private func serverRun(name: String, command: String,
@@ -360,8 +527,8 @@ final class CellBus {
         if name.isEmpty || name.caseInsensitiveCompare("all") == .orderedSame {
             guard !project.servers.isEmpty else {
                 return "error: no servers configured for this project — "
-                    + "use `agentide server run <name> <command>` for an ad-hoc server "
-                    + "(e.g. `agentide server run web npm run dev`), or set servers up in the bar"
+                    + "use `agentide server add <name> <command> [--port N]` or "
+                    + "`agentide server run <name> <command>` for an ad-hoc server"
             }
             let already = project.servers.filter { live.contains($0.label) }.map(\.label)
             runner.run(project.servers, activate: false)
@@ -373,7 +540,7 @@ final class CellBus {
             return "ok: started \(started.joined(separator: ", ")) in Servers workspace\(note)"
         }
 
-        // Named configured server (optional command override ignored if empty).
+        // Named configured server (optional command override for this run).
         if let configured = project.servers.first(where: {
             $0.label.caseInsensitiveCompare(name) == .orderedSame
         }) {
@@ -382,9 +549,13 @@ final class CellBus {
             }
             let ql = command.isEmpty
                 ? configured
-                : QuickLaunch(id: configured.id, label: configured.label, command: command)
+                : QuickLaunch(id: configured.id, label: configured.label,
+                              command: command, icon: configured.icon,
+                              port: configured.port)
             runner.run([ql], activate: false)
-            return "ok: started \(configured.label) in Servers workspace"
+            var msg = "ok: started \(configured.label) in Servers workspace"
+            if let port = ql.port { msg += " (PORT=\(port))" }
+            return msg
         }
 
         // Ad-hoc: name + command → one-shot into Servers workspace.

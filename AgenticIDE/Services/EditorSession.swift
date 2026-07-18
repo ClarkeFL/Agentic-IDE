@@ -2,10 +2,12 @@ import AppKit
 import Foundation
 import Observation
 
-/// In-memory state for the editor pane of one project: open tabs and which
-/// one is focused. Created lazily by `EditorSessionManager` on first use,
-/// retained for the rest of the app's lifetime so unsaved buffers survive
-/// project switches.
+/// In-memory state for the floating editor of one project. Single-file
+/// mode: at most one tab is open. Opening another file replaces the
+/// current one (with a dirty prompt if needed). Collapsing the float
+/// closes the file. Created lazily by `EditorSessionManager` on first
+/// use; retained for the app's lifetime so an unsaved buffer survives
+/// project switches until the user discards it.
 @Observable
 final class EditorSession: Identifiable {
     let projectId: UUID
@@ -21,10 +23,13 @@ final class EditorSession: Identifiable {
         return tabs.first(where: { $0.id == id })
     }
 
-    /// If `url` is already open, activate that tab. Otherwise create a new
-    /// tab, schedule its initial disk read, and activate it. Skips
-    /// directories — the file tree handles "open folder" by toggling
-    /// expansion, the editor never opens a folder.
+    /// Whether a file is currently open (drives the floating editor overlay).
+    var hasOpenFile: Bool { !tabs.isEmpty }
+
+    /// If `url` is already open, keep it. Otherwise close any current file
+    /// (prompting when dirty) and open this one. Skips directories — the
+    /// file tree handles folders by toggling expansion.
+    /// Returns nil if the user cancels a dirty prompt or `url` isn't a file.
     @MainActor
     @discardableResult
     func open(_ url: URL) -> EditorTab? {
@@ -33,8 +38,18 @@ final class EditorSession: Identifiable {
               !isDir.boolValue else { return nil }
 
         if let existing = tabs.first(where: { $0.url == url }) {
+            // Already open — single-file mode means nothing else should be
+            // hanging around, but prune just in case.
             activeTabId = existing.id
+            for tab in tabs where tab.id != existing.id {
+                _ = close(id: tab.id)
+            }
             return existing
+        }
+
+        // Replace whatever is open. Dirty → Save / Discard / Cancel.
+        if !closeAllPromptingIfDirty() {
+            return nil
         }
 
         let tab = EditorTab(url: url)
@@ -44,6 +59,46 @@ final class EditorSession: Identifiable {
             await self?.load(tab: tab)
         }
         return tab
+    }
+
+    /// Close every open file after the usual dirty prompt. Returns false if
+    /// the user cancels (caller should leave the float open).
+    @MainActor
+    @discardableResult
+    func closeAllPromptingIfDirty() -> Bool {
+        // Snapshot first — close mutates `tabs`.
+        let open = tabs
+        for tab in open {
+            if tab.isDirty {
+                let alert = NSAlert()
+                alert.messageText = "Save changes to \(tab.displayName)?"
+                alert.informativeText = "Your changes will be lost if you don't save them."
+                alert.alertStyle = .warning
+                alert.addButton(withTitle: "Save")
+                alert.addButton(withTitle: "Discard")
+                alert.addButton(withTitle: "Cancel")
+                switch alert.runModal() {
+                case .alertFirstButtonReturn:
+                    do {
+                        try save(tab)
+                    } catch {
+                        let err = NSAlert()
+                        err.messageText = "Couldn't save \(tab.displayName)"
+                        err.informativeText = error.localizedDescription
+                        err.alertStyle = .warning
+                        err.addButton(withTitle: "OK")
+                        err.runModal()
+                        return false
+                    }
+                case .alertSecondButtonReturn:
+                    break // discard
+                default:
+                    return false // cancel
+                }
+            }
+            _ = close(id: tab.id)
+        }
+        return true
     }
 
     /// Close a tab. Caller is expected to have prompted the user about

@@ -1,3 +1,4 @@
+import AppKit
 import SwiftUI
 
 /// App-wide design tokens. Every view consumes `DS.*` instead of inline
@@ -138,6 +139,59 @@ enum DS {
         static let codeHeader = SwiftUI.Font.system(size: FontSize.captionMono,
                                                    weight: .semibold,
                                                    design: .monospaced)
+    }
+
+    // MARK: - Surfaces
+
+    /// App background roles, sampled from the Grok-style dark pair:
+    /// sidebar `#1E1E1E` (left) and main canvas `#141414` (right). Light
+    /// mode keeps the system window/control colours so we don't force a
+    /// dark paint on light chrome.
+    enum Surface {
+        /// Projects sidebar — slightly lifted charcoal in dark mode.
+        static let sidebar = Color(nsColor: NSColor(name: nil, dynamicProvider: { appearance in
+            if appearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua {
+                return NSColor(srgbRed: 30 / 255, green: 30 / 255, blue: 30 / 255, alpha: 1) // #1E1E1E
+            }
+            return .windowBackgroundColor
+        }))
+
+        /// Main app canvas (explorer, workspace, editor, notes) — Grok bg.
+        static let app = Color(nsColor: NSColor(name: nil, dynamicProvider: { appearance in
+            if appearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua {
+                return NSColor(srgbRed: 20 / 255, green: 20 / 255, blue: 20 / 255, alpha: 1) // #141414
+            }
+            return .controlBackgroundColor
+        }))
+
+        /// Text-editing / terminal fill — same as `app` in dark mode so the
+        /// whole window reads as one surface; system text bg in light mode.
+        static let editor = Color(nsColor: NSColor(name: nil, dynamicProvider: { appearance in
+            if appearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua {
+                return NSColor(srgbRed: 20 / 255, green: 20 / 255, blue: 20 / 255, alpha: 1) // #141414
+            }
+            return .textBackgroundColor
+        }))
+
+        /// AppKit twin of `app` for `NSView` / `NSTextView` backgrounds.
+        static var appNSColor: NSColor {
+            NSColor(name: nil, dynamicProvider: { appearance in
+                if appearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua {
+                    return NSColor(srgbRed: 20 / 255, green: 20 / 255, blue: 20 / 255, alpha: 1)
+                }
+                return .controlBackgroundColor
+            })
+        }
+
+        /// AppKit twin of `editor` for text views.
+        static var editorNSColor: NSColor {
+            NSColor(name: nil, dynamicProvider: { appearance in
+                if appearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua {
+                    return NSColor(srgbRed: 20 / 255, green: 20 / 255, blue: 20 / 255, alpha: 1)
+                }
+                return .textBackgroundColor
+            })
+        }
     }
 
     // MARK: - Tree / outline metrics

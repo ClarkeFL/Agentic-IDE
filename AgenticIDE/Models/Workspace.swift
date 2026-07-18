@@ -46,6 +46,15 @@ struct GridLayout: Equatable {
         return GridLayout(axis: .rows, counts: [maxGroup, count - maxGroup]).clamped()
     }
 
+    /// The four layouts offered on the new-workspace chooser — the shapes
+    /// used day-to-day. Header picker still exposes the full `presetsByCount`.
+    static let quickPresets: [(title: String, layout: GridLayout)] = [
+        ("Single", GridLayout(axis: .rows, counts: [1])),
+        ("2 columns", GridLayout(axis: .cols, counts: [1, 1])),
+        ("2×2", GridLayout(axis: .rows, counts: [2, 2])),
+        ("Tall left", GridLayout(axis: .cols, counts: [1, 2])),
+    ]
+
     /// Preset layouts the picker offers, grouped by total cell count. Curated —
     /// each is a tidy arrangement; the user drags seams afterwards for ratios.
     static let presetsByCount: [(count: Int, layouts: [GridLayout])] = [

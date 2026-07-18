@@ -45,11 +45,15 @@ final class GhosttyApp {
             return
         }
         ghostty_config_load_default_files(cfg)
-        // Match the terminal background to the app's content surface so the
-        // embedded surface blends with the cell it sits in instead of showing
-        // a darker seam.
-        let bgLine = Self.appBackgroundConfigLine()
-        bgLine.withCString { ptr in
+        // Match the terminal background to the app canvas and zero window
+        // padding so the surface doesn't inset a lighter gutter inside the cell.
+        let configBlob = [
+            Self.appBackgroundConfigLine(),
+            "window-padding-x = 0",
+            "window-padding-y = 0",
+            "window-padding-balance = false",
+        ].joined(separator: "\n")
+        configBlob.withCString { ptr in
             ghostty_config_load_string(cfg, ptr, UInt(strlen(ptr)), "agentide")
         }
         ghostty_config_finalize(cfg)
@@ -90,9 +94,30 @@ final class GhosttyApp {
 
     /// Drop process-level monochrome kill-switches only. Safe to call once at
     /// bootstrap — does not force color on; CLIs keep their own themes.
+    ///
+    /// Agent harnesses often export `FORCE_COLOR=0` / `CLICOLOR_FORCE=0` (not
+    /// just `NO_COLOR`). Chalk treats `FORCE_COLOR=0` as hard monochrome even
+    /// when `COLORTERM=truecolor` and `TERM_PROGRAM=ghostty` — which is why
+    /// Claude alone stayed black-and-white while other CLIs looked fine.
     private func scrubInheritedMonochromeEnvironment() {
         // Presence of NO_COLOR (even empty) means "no color" for most tools.
         unsetenv("NO_COLOR")
+        unsetenv("NODE_DISABLE_COLORS")
+        unsetenv("PIP_NO_COLOR")
+        unsetenv("PYTHON_DISABLE_COLORS")
+        // `=0` / `=false` / `=never` are force-OFF, not force-on.
+        if let v = getenv("FORCE_COLOR"), String(cString: v) == "0" {
+            unsetenv("FORCE_COLOR")
+        }
+        if let v = getenv("CLICOLOR_FORCE"), String(cString: v) == "0" {
+            unsetenv("CLICOLOR_FORCE")
+        }
+        if let v = getenv("NPM_CONFIG_COLOR"), String(cString: v) == "false" {
+            unsetenv("NPM_CONFIG_COLOR")
+        }
+        if let v = getenv("CARGO_TERM_COLOR"), String(cString: v) == "never" {
+            unsetenv("CARGO_TERM_COLOR")
+        }
         // `TERM=dumb` is common when launched from an agent harness — it
         // kills color even when isatty is true. Ghostty sets a real TERM on
         // each surface; clear the host's dumb value so nothing inherits it.
@@ -145,14 +170,15 @@ final class GhosttyApp {
         return fm.fileExists(atPath: terminfoURL.path, isDirectory: &isDirectory) && isDirectory.boolValue
     }
 
-    /// A `background = RRGGBB` config line resolved from the app's content
-    /// surface colour (`textBackgroundColor`) in the current appearance, so the
-    /// terminal matches the cell around it.
+    /// A `background = RRGGBB` config line resolved from `DS.Surface.editor`
+    /// so the terminal matches the cell chrome / Grok canvas (#141414 dark)
+    /// instead of the system text-background (which is lighter and showed as
+    /// a seam at the bottom of CLI cells).
     private static func appBackgroundConfigLine() -> String {
         let appearance = NSApp?.effectiveAppearance ?? NSApplication.shared.effectiveAppearance
-        var hex = "1e1e1e"
+        var hex = "141414"
         appearance.performAsCurrentDrawingAppearance {
-            if let c = NSColor.textBackgroundColor.usingColorSpace(.sRGB) {
+            if let c = DS.Surface.editorNSColor.usingColorSpace(.sRGB) {
                 hex = String(format: "%02x%02x%02x",
                              Int((c.redComponent * 255).rounded()),
                              Int((c.greenComponent * 255).rounded()),

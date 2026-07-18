@@ -52,7 +52,7 @@ struct UnifiedDiffView: View {
                 }
                 .frame(maxWidth: .infinity, alignment: .leading)
             }
-            .background(Color(nsColor: .textBackgroundColor))
+            .background(DS.Surface.editor)
         }
         .task(id: InputKey(head: headText, work: workingText, path: fileURL.path)) {
             await rebuild()
@@ -80,7 +80,7 @@ struct UnifiedDiffView: View {
         }
         .padding(.horizontal, DS.Space.md)
         .padding(.vertical, 6)
-        .background(Color(nsColor: .controlBackgroundColor))
+        .background(DS.Surface.app)
     }
 
     // MARK: - Async rebuild

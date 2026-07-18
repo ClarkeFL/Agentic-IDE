@@ -16,6 +16,18 @@ struct GridLayoutPicker: View {
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: DS.Space.md) {
+                // Daily layouts pinned at the top for one-click access.
+                VStack(alignment: .leading, spacing: DS.Space.xs) {
+                    Text("Quick")
+                        .font(DS.Font.control)
+                        .foregroundStyle(.secondary)
+                    LazyVGrid(columns: columns, spacing: DS.Space.sm) {
+                        ForEach(Array(GridLayout.quickPresets.enumerated()), id: \.offset) { _, preset in
+                            thumbnail(preset.layout, help: preset.title)
+                        }
+                    }
+                }
+
                 ForEach(GridLayout.presetsByCount, id: \.count) { group in
                     VStack(alignment: .leading, spacing: DS.Space.xs) {
                         Text("\(group.count) cell\(group.count == 1 ? "" : "s")")
@@ -31,11 +43,13 @@ struct GridLayoutPicker: View {
             }
             .padding(DS.Space.md)
         }
-        .frame(width: 360, height: 460)
+        .frame(width: 360, height: 500)
     }
 
-    private func thumbnail(_ layout: GridLayout) -> some View {
+    private func thumbnail(_ layout: GridLayout, help: String? = nil) -> some View {
         let selected = layout == current
+        let tip = help ?? (layout.cellCount == 1 ? "Single cell"
+              : "\(layout.cellCount) cells · \(layout.counts.map(String.init).joined(separator: "+")) \(layout.axis.rawValue)")
         return Button { onSelect(layout) } label: {
             LayoutGlyph(layout: layout, square: 10, gap: 3) { _, _ in
                 selected ? Color.accentColor : Color.primary.opacity(0.3)
@@ -55,7 +69,6 @@ struct GridLayoutPicker: View {
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
-        .help(layout.cellCount == 1 ? "Single cell"
-              : "\(layout.cellCount) cells · \(layout.counts.map(String.init).joined(separator: "+")) \(layout.axis.rawValue)")
+        .help(tip)
     }
 }

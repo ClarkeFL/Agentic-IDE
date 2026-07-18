@@ -1,8 +1,9 @@
 import SwiftUI
 
-/// Bottom strip of the workspace pane: workspace navigation plus one chip per
-/// configured server (green = running, grey = stopped), Run all / Stop all /
-/// Edit. The strip stays visible before the first workspace has been created.
+/// Bottom strip of the workspace pane: one chip per configured server
+/// (green = running, grey = stopped), Run all / Stop all / Edit.
+/// Workspace switching lives on the keyboard (prev/next) and the left pane —
+/// the old chevron/dot pager was removed as redundant.
 struct ServerBar: View {
     @Environment(ProjectStore.self) private var store
     let project: Project
@@ -54,13 +55,10 @@ struct ServerBar: View {
                 .menuIndicator(.hidden)
                 .fixedSize()
             }
-
-            WorkspacePager(session: session)
-                .layoutPriority(1)
         }
         .padding(.horizontal, DS.Space.lg - 2)
         .frame(height: DS.Control.header)
-        .background(Color(nsColor: .controlBackgroundColor))
+        .background(DS.Surface.app)
         .sheet(isPresented: $showEditor) {
             ServersEditor(initial: project.servers,
                           onSave: { updated in
@@ -69,51 +67,6 @@ struct ServerBar: View {
                           },
                           onCancel: { showEditor = false })
         }
-    }
-}
-
-private struct WorkspacePager: View {
-    @Bindable var session: ProjectSession
-
-    var body: some View {
-        HStack(spacing: DS.Space.xs) {
-            Button { session.moveWorkspace(by: -1) } label: {
-                Image(systemName: "chevron.left")
-                    .font(.system(size: DS.Icon.micro, weight: .semibold))
-                    .frame(width: DS.Control.compact, height: DS.Control.compact)
-                    .contentShape(Rectangle())
-            }
-            .buttonStyle(.plain)
-            .disabled(session.workspaces.count < 2)
-            .help("Previous workspace")
-
-            HStack(spacing: DS.Space.xs) {
-                ForEach(session.workspaces) { workspace in
-                    Button { session.activeWorkspaceId = workspace.id } label: {
-                        Circle()
-                            .fill(session.activeWorkspace?.id == workspace.id
-                                  ? Color.accentColor
-                                  : Color.secondary.opacity(0.35))
-                            .frame(width: DS.Space.sm, height: DS.Space.sm)
-                            .frame(width: DS.Control.micro, height: DS.Control.compact)
-                            .contentShape(Rectangle())
-                    }
-                    .buttonStyle(.plain)
-                    .help(workspace.name)
-                }
-            }
-
-            Button { session.moveWorkspace(by: 1) } label: {
-                Image(systemName: "chevron.right")
-                    .font(.system(size: DS.Icon.micro, weight: .semibold))
-                    .frame(width: DS.Control.compact, height: DS.Control.compact)
-                    .contentShape(Rectangle())
-            }
-            .buttonStyle(.plain)
-            .disabled(session.workspaces.count < 2)
-            .help("Next workspace")
-        }
-        .fixedSize()
     }
 }
 
@@ -177,7 +130,10 @@ struct ServersEditor: View {
             ForEach($rows) { $row in
                 HStack(spacing: DS.Space.sm) {
                     TextField("name", text: $row.label)
-                        .frame(width: 90)
+                        .frame(width: 80)
+                    TextField("port", text: portBinding(for: $row))
+                        .frame(width: 56)
+                        .help("Preferred TCP port (injected as PORT when run)")
                     TextField("command e.g. npm run dev", text: $row.command)
                     Button {
                         rows.removeAll { $0.id == row.id }
@@ -207,7 +163,22 @@ struct ServersEditor: View {
             }
         }
         .padding(DS.Space.xl)
-        .frame(width: 440)
+        .frame(width: 520)
+    }
+
+    /// Bind a free-form port text field to `QuickLaunch.port`.
+    private func portBinding(for row: Binding<QuickLaunch>) -> Binding<String> {
+        Binding(
+            get: { row.wrappedValue.port.map(String.init) ?? "" },
+            set: { text in
+                let trimmed = text.trimmingCharacters(in: .whitespaces)
+                if trimmed.isEmpty {
+                    row.wrappedValue.port = nil
+                } else if let n = Int(trimmed), n > 0, n <= 65535 {
+                    row.wrappedValue.port = n
+                }
+            }
+        )
     }
 
     /// Trim each row and drop the blanks so empty rows never persist.
@@ -216,7 +187,8 @@ struct ServersEditor: View {
             let name = row.label.trimmingCharacters(in: .whitespaces)
             let cmd = row.command.trimmingCharacters(in: .whitespaces)
             guard !name.isEmpty, !cmd.isEmpty else { return nil }
-            return QuickLaunch(id: row.id, label: name, command: cmd)
+            return QuickLaunch(id: row.id, label: name, command: cmd,
+                               icon: row.icon, isBuiltin: row.isBuiltin, port: row.port)
         }
     }
 }

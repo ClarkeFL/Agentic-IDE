@@ -40,10 +40,22 @@ struct ProjectSidebarView: View {
             if reserveTrafficLights {
                 Color.clear.frame(height: DS.Control.header)
             }
-            PaneTitle("Projects", count: visibleCount)
-                .padding(.leading, DS.Gutter.sidebar + DS.Space.sm)
-                .padding(.trailing, DS.Space.sm)
-                .frame(height: DS.Control.header)
+            // Title left, project actions right-aligned on the same row.
+            HStack(spacing: DS.Space.xs) {
+                PaneTitle("Projects", count: visibleCount)
+                SidebarHeaderAddButton(createProject: createProject,
+                                       addProject: addProject)
+                SidebarHeaderButton(systemName: "folder.badge.plus",
+                                    help: "New Group",
+                                    action: startNewGroup)
+                SidebarHeaderButton(systemName: "arrow.triangle.2.circlepath",
+                                    help: "Check for Updates",
+                                    action: { updater.checkForUpdates() })
+                    .disabled(!updater.canCheckForUpdates)
+            }
+            .padding(.leading, DS.Gutter.sidebar + DS.Space.sm)
+            .padding(.trailing, DS.Space.sm)
+            .frame(height: DS.Control.header)
 
             // `.scrollIndicators(.hidden)` alone doesn't reclaim the
             // trailing scroller gutter on macOS — the underlying NSScrollView
@@ -75,36 +87,18 @@ struct ProjectSidebarView: View {
             .animation(.easeOut(duration: 0.12), value: hoveredDropKey)
 
             Divider()
-            // Footer stack: weekly AI plan usage (Claude / Codex / Grok),
-            // then CPU · MEM + add / group / update actions.
+            // Footer: weekly AI plan usage (Claude / Codex / Grok) + CPU · MEM.
             VStack(alignment: .leading, spacing: DS.Space.sm) {
                 UsageBar()
-                HStack(spacing: DS.Space.xxs) {
-                    ResourceBar()
-                    Spacer(minLength: DS.Space.sm)
-                    SidebarHeaderAddButton(createProject: createProject,
-                                           addProject: addProject)
-                    SidebarHeaderButton(systemName: "folder.badge.plus",
-                                        help: "New Group",
-                                        action: startNewGroup)
-                    SidebarHeaderButton(systemName: "arrow.triangle.2.circlepath",
-                                        help: "Check for Updates",
-                                        action: { updater.checkForUpdates() })
-                        .disabled(!updater.canCheckForUpdates)
-                }
+                ResourceBar()
             }
             .padding(.horizontal, DS.Space.md)
             .padding(.vertical, DS.Space.sm)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
-        // Flat edge-to-edge pane, deliberately lighter than the content panes
-        // so the sidebar reads as chrome and the workspace as content. The
-        // white overlay lifts it above windowBackgroundColor in dark mode
-        // (where the two system colours are nearly identical); in light mode
-        // 5% white on light grey is invisible, and the grey-vs-white split
-        // already provides the contrast.
-        .background(Color.white.opacity(0.05))
-        .background(Color(nsColor: .windowBackgroundColor))
+        // Sidebar surface (#1E1E1E dark) — a touch lifted off the main
+        // Grok canvas (#141414) so the projects column reads as chrome.
+        .background(DS.Surface.sidebar)
         // Menu-bar commands (File → New Project / Add Existing Project) post
         // these; the sidebar owns the panels + store so it observes here.
         .onReceive(NotificationCenter.default.publisher(for: .newProject)) { _ in
@@ -522,7 +516,7 @@ private struct DropZoneHighlight: ViewModifier {
     }
 }
 
-/// Compact icon button sitting in the "Projects" header — just the glyph with a
+/// Compact icon button in the Projects header row — just the glyph with a
 /// small hit area and a hover background, no big pill.
 private struct SidebarHeaderButton: View {
     let systemName: String
@@ -549,7 +543,8 @@ private struct SidebarHeaderButton: View {
 }
 
 /// The "+" header button — same compact look, but opens the New / Add Existing
-/// project popover instead of firing a single action.
+/// project popover instead of firing a single action. Anchored under the title
+/// so the menu drops into the project list (arrowEdge: .bottom).
 private struct SidebarHeaderAddButton: View {
     let createProject: () -> Void
     let addProject: () -> Void
@@ -637,41 +632,18 @@ private struct ProjectSummaryRow: View {
     let savedWorkspaceCount: Int
 
     var body: some View {
-        VStack(alignment: .leading, spacing: DS.Space.xs) {
-            HStack(spacing: DS.Space.sm) {
-                if savedWorkspaceCount > 0 {
-                    Image(systemName: "chevron.right")
-                        .font(.system(size: DS.Icon.micro, weight: .bold))
-                        .foregroundStyle(.secondary)
-                        .frame(width: DS.Tree.chevronColumn)
-                }
-                Image(systemName: "folder.fill")
-                    .foregroundStyle(.tint)
-                Text(project.name)
-                    .font(.body.weight(.medium))
-                    .lineLimit(1)
-                Spacer(minLength: 4)
+        HStack(spacing: DS.Space.sm) {
+            Image(systemName: "folder.fill")
+                .foregroundStyle(.tint)
+            Text(project.name)
+                .font(.body.weight(.medium))
+                .lineLimit(1)
+            if savedWorkspaceCount > 0 {
+                WorkspaceCountBadge(count: savedWorkspaceCount)
             }
-
-            HStack(spacing: DS.Space.sm) {
-                if savedWorkspaceCount > 0 {
-                    Label(workspaceCountLabel, systemImage: "square.grid.2x2")
-                        .labelStyle(.titleAndIcon)
-                        .font(.caption2)
-                        .foregroundStyle(.secondary)
-                } else {
-                    Text("No activity")
-                        .font(.caption2)
-                        .foregroundStyle(.tertiary)
-                }
-                Spacer(minLength: 0)
-            }
+            Spacer(minLength: 4)
         }
         .padding(.vertical, DS.Space.xxs)
-    }
-
-    private var workspaceCountLabel: String {
-        savedWorkspaceCount == 1 ? "1 workspace" : "\(savedWorkspaceCount) workspaces"
     }
 }
 
@@ -687,18 +659,14 @@ private struct ProjectRow: View {
     var body: some View {
         VStack(alignment: .leading, spacing: DS.Space.xs) {
             HStack(spacing: DS.Space.sm) {
-                if !session.workspaces.isEmpty {
-                    Image(systemName: "chevron.right")
-                        .font(.system(size: DS.Icon.micro, weight: .bold))
-                        .foregroundStyle(.secondary)
-                        .frame(width: DS.Tree.chevronColumn)
-                        .rotationEffect(.degrees(isExpanded ? 90 : 0))
-                }
                 Image(systemName: "folder.fill")
                     .foregroundStyle(.tint)
                 Text(project.name)
                     .font(.body.weight(.medium))
                     .lineLimit(1)
+                if !session.workspaces.isEmpty {
+                    WorkspaceCountBadge(count: session.workspaces.count)
+                }
                 Spacer(minLength: 4)
                 // Live mini-grids — collapsed rows only. One glyph per workspace
                 // (capped) shows each grid's shape + per-cell status at a glance.
@@ -712,43 +680,8 @@ private struct ProjectRow: View {
                 }
             }
 
-            // Summary line — workspace count + live agent-work timer. Lives
-            // below the title so the row height doesn't shift when expanding/
-            // collapsing children. The timer counts up from the moment a cell
-            // entered `.working` (set by agent hooks / terminal events) and
-            // disappears — resetting — once the agent finishes.
-            HStack(spacing: DS.Space.sm) {
-                if !session.workspaces.isEmpty {
-                    Label(workspaceCountLabel, systemImage: "square.grid.2x2")
-                        .labelStyle(.titleAndIcon)
-                        .font(.caption2)
-                        .foregroundStyle(.secondary)
-                }
-                if let since = earliestWorkingSince {
-                    if !session.workspaces.isEmpty {
-                        Text("·").font(.caption2).foregroundStyle(.tertiary)
-                    }
-                    WorkingTimerLabel(since: since)
-                }
-                if session.workspaces.isEmpty {
-                    Text("No activity")
-                        .font(.caption2)
-                        .foregroundStyle(.tertiary)
-                }
-                // Forces the HStack — and therefore the parent VStack — to
-                // claim the full proposed width. Without it the summary line
-                // stops at its content and the VStack reports a natural width
-                // shorter than the parent, which is what was making the
-                // outer blue tile end before the sidebar's right edge.
-                Spacer(minLength: 0)
-            }
-
-            // Workspace children — only inserted into the layout when expanded.
-            // Conditional rendering means the parent VStack doesn't reserve its
-            // `spacing` slot when collapsed, so the blue tile's top/bottom
-            // padding stay symmetric. The asymmetric leading inset reads as
-            // nesting under the project; the small trailing inset keeps the
-            // inner tiles off the outer tile's border.
+            // Workspace children — only when selected. Revealed by the card
+            // growing (no slide-from-top — that read as "adding" rows).
             if isExpanded {
                 VStack(spacing: 1) {
                     ForEach(session.workspaces) { ws in
@@ -760,55 +693,58 @@ private struct ProjectRow: View {
                     }
                     AddWorkspaceRow(action: onAddWorkspace)
                 }
-                // Asymmetric on purpose: a clear hierarchy indent on the
-                // leading side (so the row reads as a child of the project)
-                // and a small breathing-room inset on the trailing side so
-                // the row's blue tile doesn't bleed into the outer tile's
-                // border. Roughly aligns with where the title text begins
-                // (chevron + folder-icon column).
+                // Indent under the folder + title so children read nested.
                 .padding(.leading, DS.Space.lg + 2)
                 .padding(.trailing, DS.Space.xs)
-                .transition(.opacity.combined(with: .move(edge: .top)))
+                .transition(.identity)
             }
         }
         .padding(.vertical, DS.Space.xxs)
-        .animation(.spring(response: 0.40, dampingFraction: 0.85), value: session.workspaces.map(\.id))
-        .animation(.easeInOut(duration: 0.18), value: isExpanded)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        // Height-only feel: short ease, no spring bounce on expand/collapse.
+        .animation(.easeInOut(duration: 0.14), value: isExpanded)
+        .animation(.easeInOut(duration: 0.14), value: session.workspaces.map(\.id))
     }
+}
 
-    private var allRunningCells: [WorkspaceCell] {
-        session.workspaces.flatMap { $0.runningCells }
-    }
+/// Compact count pill next to a project title (workspace count).
+private struct WorkspaceCountBadge: View {
+    let count: Int
 
-    private var workspaceCountLabel: String {
-        let n = session.workspaces.count
-        return n == 1 ? "1 workspace" : "\(n) workspaces"
-    }
-
-    /// Start time of the longest-running working cell in this project, or nil
-    /// when no agent is working. Multiple working cells collapse into one timer
-    /// (the earliest start) so the row answers "how long has AI been busy here".
-    private var earliestWorkingSince: Date? {
-        allRunningCells
-            .compactMap { $0.terminal?.status == .working ? $0.terminal?.workingSince : nil }
-            .min()
+    var body: some View {
+        Text("\(count)")
+            .font(.system(size: 10, weight: .semibold, design: .rounded))
+            .monospacedDigit()
+            .foregroundStyle(.secondary)
+            .padding(.horizontal, 5)
+            .padding(.vertical, 1)
+            .background(
+                Capsule(style: .continuous)
+                    .fill(Color.primary.opacity(0.08))
+            )
+            .help(count == 1 ? "1 workspace" : "\(count) workspaces")
     }
 }
 
 /// Live elapsed-time readout for a working agent. `TimelineView` re-renders
 /// just this label once a second, so the rest of the sidebar doesn't pay for
 /// the tick — and there's no shared runloop timer to manage.
+/// Always a single horizontal line (`⏱ 0:03`) — never wraps in a tight row.
 private struct WorkingTimerLabel: View {
     let since: Date
 
     var body: some View {
         TimelineView(.periodic(from: .now, by: 1)) { context in
-            Label(Self.format(context.date.timeIntervalSince(since)),
-                  systemImage: "timer")
-                .labelStyle(.titleAndIcon)
-                .font(.caption2)
-                .monospacedDigit()
-                .foregroundStyle(TerminalStatusBadge.info(for: .working)?.color ?? .secondary)
+            HStack(spacing: 3) {
+                Image(systemName: "timer")
+                    .font(.system(size: 10, weight: .semibold))
+                Text(Self.format(context.date.timeIntervalSince(since)))
+                    .font(.system(size: 11, weight: .medium, design: .rounded))
+                    .monospacedDigit()
+            }
+            .foregroundStyle(TerminalStatusBadge.info(for: .working)?.color ?? .secondary)
+            .fixedSize(horizontal: true, vertical: true)
+            .layoutPriority(1)
         }
     }
 
@@ -824,6 +760,7 @@ private struct WorkingTimerLabel: View {
 
 /// One workspace row nested under a project. Click selects + activates it,
 /// hover reveals close, double-click swaps the name into an inline TextField.
+/// Working-agent timer sits after the name so you see which workspace is busy.
 private struct WorkspaceChildRow: View {
     @Bindable var workspace: Workspace
     let isActive: Bool
@@ -837,11 +774,13 @@ private struct WorkspaceChildRow: View {
     @FocusState private var nameFieldFocused: Bool
 
     var body: some View {
-        HStack(spacing: DS.Space.sm) {
+        // Tight spacing: glyph uses its natural width (was a 24pt slot that
+        // left a wide gap before the name for small grids).
+        HStack(spacing: DS.Space.xs) {
             // Live mini-grid — encodes the layout AND each cell's status
             // (blue = working, green = done), replacing the old icon + dots.
             WorkspaceGridGlyph(workspace: workspace, square: 4.5, gap: 1.2)
-                .frame(width: 24, alignment: .leading)
+                .fixedSize()
 
             if isEditing {
                 TextField("", text: $draftName)
@@ -855,12 +794,20 @@ private struct WorkspaceChildRow: View {
                     .font(.system(size: DS.FontSize.body, weight: isActive ? .semibold : .regular))
                     .foregroundStyle(isActive ? .primary : .secondary)
                     .lineLimit(1)
+                    .truncationMode(.tail)
+                    // Name yields width to the timer so "0:03" never stacks.
+                    .layoutPriority(0)
+            }
+
+            if let since = workingSince {
+                WorkingTimerLabel(since: since)
             }
 
             Spacer(minLength: DS.Space.xs)
             // Reserve close-button space so layout doesn't reflow on hover.
             Color.clear.frame(width: DS.Control.compact, height: DS.Control.badge)
         }
+        .lineLimit(1)
         .padding(.horizontal, DS.Space.sm)
         .padding(.vertical, DS.Space.xs)
         .frame(minHeight: DS.Control.standard)
@@ -900,6 +847,13 @@ private struct WorkspaceChildRow: View {
             Divider()
             Button("Close Workspace", role: .destructive) { onClose() }
         }
+    }
+
+    /// Earliest `.working` start among cells in this workspace, if any.
+    private var workingSince: Date? {
+        workspace.runningCells
+            .compactMap { $0.terminal?.status == .working ? $0.terminal?.workingSince : nil }
+            .min()
     }
 
     private func startRename() {

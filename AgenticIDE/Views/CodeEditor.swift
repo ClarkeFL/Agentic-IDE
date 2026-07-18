@@ -141,7 +141,7 @@ struct CodeEditor: NSViewRepresentable {
         textView.textContainerInset = NSSize(width: 6, height: 20)
         textView.font = Self.editorFont
         textView.textColor = .labelColor
-        textView.backgroundColor = .textBackgroundColor
+        textView.backgroundColor = DS.Surface.editorNSColor
         textView.drawsBackground = true
         textView.insertionPointColor = .labelColor
         textView.typingAttributes = [
@@ -366,7 +366,7 @@ final class LineNumberRulerView: NSRulerView {
               let container = tv.textContainer else { return }
 
         // Background.
-        NSColor.windowBackgroundColor.setFill()
+        DS.Surface.appNSColor.setFill()
         bounds.fill()
 
         // Right-edge separator.

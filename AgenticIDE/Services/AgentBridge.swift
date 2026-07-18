@@ -100,6 +100,12 @@ final class AgentBridge {
           agentide wait <n> [secs]    Block until cell <n> finishes (default 600s).
         Dev servers (dedicated Servers workspace — do NOT put these in grid cells):
           agentide servers            List configured/running servers and how to start them.
+          agentide ports              List configured ports across all projects.
+          agentide server add <name> <command> [--port N]
+                                      Persist a server (and optional port) for this project.
+          agentide server set <name> [--command …] [--port N|clear]
+                                      Update a configured server's command and/or port.
+          agentide server rm <name>   Remove a configured server (stops it if running).
           agentide server run [name|all]  Start a configured server (or all) in Servers workspace.
           agentide server run <name> <command>  Start an ad-hoc server (e.g. web npm run dev).
           agentide server stop [name|all] Stop a running server (or all).
@@ -133,6 +139,7 @@ final class AgentBridge {
           cells)   req "cells $sid" ;;
           tools)   req "tools $sid" ;;
           servers) req "servers $sid" ;;
+          ports)   req "ports $sid" ;;
           read)    req "read $sid $1" ;;
           status)  req "status $sid $1" ;;
           close)   req "close $sid $1" ;;
@@ -142,6 +149,11 @@ final class AgentBridge {
           server)
             sub="$1"; [ $# -gt 0 ] && shift
             case "$sub" in
+              add|set)
+                # All tokens in the header so --port N is parsed server-side;
+                # no body (body would swallow flags into the command string).
+                req "server $sid $sub $*" ;;
+              rm|remove|delete) req "server $sid rm $1" ;;
               run)  name="$1"; [ $# -gt 0 ] && shift; req "server $sid run $name" "$*" ;;
               stop) req "server $sid stop $1" ;;
               read) req "server $sid read $1" ;;
