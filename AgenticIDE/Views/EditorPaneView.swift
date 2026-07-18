@@ -1,8 +1,68 @@
 import AppKit
 import SwiftUI
 
-/// Pane 3 of the four-pane layout. Renders the editor tab bar across the top
-/// and the active tab's `CodeEditor` underneath. Empty / loading / binary /
+/// File editor sliding out from the folder pane over the workspace grid.
+/// Takes roughly the left ~58% of the workspace (capped) so a wide strip of
+/// dimmed grid stays clickable on the right — tap it to collapse and close
+/// the file. The tab-bar × does the same. Single-file only (`EditorSession`).
+struct FloatingEditorOverlay: View {
+    let project: Project
+    @Bindable var editor: EditorSession
+    @Bindable var gitWatcher: GitStatusWatcher
+
+    /// Fraction of the workspace width the editor claims; the rest is the
+    /// click-to-dismiss grid strip.
+    private let panelWidthFraction: CGFloat = 0.68
+    private let panelMaxWidth: CGFloat = 880
+    private let panelMinWidth: CGFloat = 420
+
+    var body: some View {
+        GeometryReader { geo in
+            let panelWidth = min(panelMaxWidth,
+                                 max(panelMinWidth, geo.size.width * panelWidthFraction))
+
+            ZStack(alignment: .leading) {
+                // Dimmed grid — full pane so the right strip (and any gap
+                // around the panel) is a clear click target to dismiss.
+                Color.black.opacity(0.28)
+                    .contentShape(Rectangle())
+                    .onTapGesture {
+                        _ = editor.closeAllPromptingIfDirty()
+                    }
+
+                EditorPaneView(project: project, editor: editor, gitWatcher: gitWatcher)
+                    .frame(width: panelWidth)
+                    .frame(maxHeight: .infinity)
+                    .clipShape(
+                        UnevenRoundedRectangle(
+                            topLeadingRadius: 0,
+                            bottomLeadingRadius: 0,
+                            bottomTrailingRadius: DS.Radius.lg,
+                            topTrailingRadius: DS.Radius.lg,
+                            style: .continuous
+                        )
+                    )
+                    .overlay(
+                        UnevenRoundedRectangle(
+                            topLeadingRadius: 0,
+                            bottomLeadingRadius: 0,
+                            bottomTrailingRadius: DS.Radius.lg,
+                            topTrailingRadius: DS.Radius.lg,
+                            style: .continuous
+                        )
+                        .strokeBorder(Color.primary.opacity(0.12), lineWidth: 1)
+                    )
+                    .shadow(color: .black.opacity(0.28), radius: 14, x: 4, y: 0)
+                    // Don't let taps on the editor fall through to the dimmed grid.
+                    .contentShape(Rectangle())
+            }
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+    }
+}
+
+/// Floating file editor body. Renders the (single) file's tab bar across
+/// the top and the `CodeEditor` underneath. Empty / loading / binary /
 /// load-error states each get a placeholder. Save is wired via the global
 /// `.saveActiveEditorTab` notification (posted by File → Save / ⌘S).
 struct EditorPaneView: View {
@@ -19,7 +79,7 @@ struct EditorPaneView: View {
                          onOpenInBrowser: openActiveInBrowser)
             content
         }
-        .background(Color(nsColor: .textBackgroundColor))
+        .background(DS.Surface.editor)
         .onReceive(NotificationCenter.default.publisher(for: .saveActiveEditorTab)) { _ in
             saveActive()
         }
@@ -35,11 +95,13 @@ struct EditorPaneView: View {
                 if let err = tab.loadError {
                     placeholder(systemImage: "exclamationmark.triangle",
                                 title: "Couldn't open this file",
-                                detail: err)
+                                detail: err,
+                                revealURL: tab.url)
                 } else if tab.isBinary {
                     placeholder(systemImage: "doc.zipper",
                                 title: "Binary file",
-                                detail: "This file isn't UTF-8 text — open it externally to edit.")
+                                detail: "This file isn't UTF-8 text — open it in Finder to view or edit externally.",
+                                revealURL: tab.url)
                 } else if !tab.didLoad {
                     VStack(spacing: DS.Space.sm) {
                         ProgressView().controlSize(.small)
@@ -91,7 +153,10 @@ struct EditorPaneView: View {
         }
     }
 
-    private func placeholder(systemImage: String, title: String, detail: String) -> some View {
+    private func placeholder(systemImage: String,
+                             title: String,
+                             detail: String,
+                             revealURL: URL? = nil) -> some View {
         VStack(spacing: DS.Space.md) {
             Image(systemName: systemImage)
                 .font(.system(size: DS.Icon.large, weight: .light))
@@ -102,6 +167,17 @@ struct EditorPaneView: View {
                 .foregroundStyle(.tertiary)
                 .multilineTextAlignment(.center)
                 .frame(maxWidth: 360)
+            if let revealURL {
+                Button {
+                    NSWorkspace.shared.activateFileViewerSelecting([revealURL])
+                } label: {
+                    Label("Show in Finder", systemImage: "folder")
+                }
+                .buttonStyle(.bordered)
+                .controlSize(.regular)
+                .padding(.top, DS.Space.xs)
+                .help("Reveal this file in Finder")
+            }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .padding(DS.Space.xxl)
@@ -243,12 +319,6 @@ struct EditorTabBar: View {
                                 Button("Close") {
                                     Self.requestClose(tab: tab, editor: editor)
                                 }
-                                Button("Close Other Tabs") {
-                                    Self.closeOthers(keep: tab.id, editor: editor)
-                                }
-                                Button("Close All") {
-                                    Self.closeAll(editor: editor)
-                                }
                                 Divider()
                                 Button("Reveal in Finder") {
                                     NSWorkspace.shared.activateFileViewerSelecting([tab.url])
@@ -289,7 +359,7 @@ struct EditorTabBar: View {
         // into the tab area, looking like the gutter "leaked into the
         // header". The control-background colour matches the system's
         // standard non-content surfaces.
-        .background(Color(nsColor: .controlBackgroundColor))
+        .background(DS.Surface.app)
         .zIndex(1)
     }
 
@@ -326,21 +396,6 @@ struct EditorTabBar: View {
             }
         }
         editor.close(id: tab.id)
-    }
-
-    @MainActor
-    private static func closeOthers(keep: UUID, editor: EditorSession) {
-        let toClose = editor.tabs.filter { $0.id != keep }
-        for tab in toClose {
-            requestClose(tab: tab, editor: editor)
-        }
-    }
-
-    @MainActor
-    private static func closeAll(editor: EditorSession) {
-        for tab in editor.tabs {
-            requestClose(tab: tab, editor: editor)
-        }
     }
 }
 
@@ -470,7 +525,7 @@ private struct MarkdownPreviewView: View {
                 .frame(maxWidth: .infinity, alignment: .topLeading)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
-        .background(Color(nsColor: .textBackgroundColor))
+        .background(DS.Surface.editor)
     }
 }
 
@@ -546,7 +601,7 @@ private struct EditorTabChip: View {
     @ViewBuilder
     private var chipBackground: some View {
         if isActive {
-            Rectangle().fill(Color(nsColor: .textBackgroundColor))
+            Rectangle().fill(DS.Surface.editor)
         } else if isHovered {
             Rectangle().fill(Color.primary.opacity(0.05))
         } else {

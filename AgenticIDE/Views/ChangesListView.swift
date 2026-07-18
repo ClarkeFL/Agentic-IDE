@@ -134,10 +134,11 @@ private struct ChangesRow: View {
 
 // MARK: - Footer
 
-/// Pinned to the bottom of pane 2. Shows the current branch + ahead/behind
-/// pill, plus four icon buttons (fetch / pull / push / commit). Buttons
-/// dim when there's nothing to do; commit pops an NSAlert for the message
-/// and stages everything before invoking `git commit`.
+/// Pinned to the bottom of pane 2. Shows the current branch + PR badge on
+/// top, then icon buttons (fetch / pull / push / commit / …) below, with a
+/// divider between the rows. Buttons dim when there's nothing to do; commit
+/// pops an NSAlert for the message and stages everything before invoking
+/// `git commit`.
 struct GitFooterBar: View {
     let project: Project
     @Bindable var gitWatcher: GitStatusWatcher
@@ -155,25 +156,28 @@ struct GitFooterBar: View {
 
     var body: some View {
         if gitWatcher.isGitRepo {
-            // Two rows: the action buttons sit on their own line above so a long
-            // branch name (e.g. "fabio/intake-work" + PR badge) gets the full
-            // width below instead of crowding the buttons onto one line.
-            VStack(alignment: .leading, spacing: DS.Space.md) {
+            // Two rows: branch / PR on top (full width for long names), action
+            // buttons below, with a hairline between them.
+            VStack(alignment: .leading, spacing: 0) {
+                branchLabel
+                    .padding(.horizontal, DS.Space.sm)
+                    .padding(.vertical, DS.Space.sm)
+                Divider()
                 HStack(spacing: DS.Space.xs) {
                     Spacer(minLength: 0)
                     actionButtons
                     Spacer(minLength: 0)
                 }
-                branchLabel
+                .padding(.horizontal, DS.Space.sm)
+                .padding(.vertical, DS.Space.sm)
             }
-            .padding(.horizontal, DS.Space.sm)
-            .padding(.vertical, DS.Space.sm)
             .frame(minHeight: 68)
             .frame(maxWidth: .infinity, alignment: .leading)
             // Solid surface that matches the file-tree header/body — the old
             // .regularMaterial let the desktop wallpaper tint bleed through, so
             // the footer read as a different pane than the folder viewer above.
-            .background(Color(nsColor: .controlBackgroundColor))
+            .background(DS.Surface.app)
+            // Top edge against the file tree / changes list above.
             .overlay(alignment: .top) { Divider() }
         }
     }
@@ -267,7 +271,7 @@ struct GitFooterBar: View {
             }
         }
         // Indent so the branch glyph lands in the same left column as the
-        // first action icon above (which the button's tap-target inset pushes
+        // first action icon below (which the button's tap-target inset pushes
         // ~5pt right of the footer edge).
         .padding(.leading, 5)
         .help(statusTooltip)

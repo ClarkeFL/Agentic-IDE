@@ -119,6 +119,10 @@ final class GhosttyTerminalView: NSView, NSTextInputClient {
         self.wantsLayer = true
         self.layerContentsRedrawPolicy = .duringViewResize
         self.autoresizingMask = [.width, .height]
+        // Ghostty paints full character rows; leftover sub-row pixels at the
+        // bottom of the view aren't terminal content — they show this layer.
+        // Match the Grok canvas so that strip isn't a lighter seam.
+        self.layer?.backgroundColor = DS.Surface.editorNSColor.cgColor
 
         let opts: NSTrackingArea.Options = [.activeAlways, .inVisibleRect, .mouseMoved, .mouseEnteredAndExited, .cursorUpdate]
         let area = NSTrackingArea(rect: .zero, options: opts, owner: self, userInfo: nil)
@@ -355,6 +359,7 @@ final class GhosttyTerminalView: NSView, NSTextInputClient {
 
     override func viewDidChangeEffectiveAppearance() {
         super.viewDidChangeEffectiveAppearance()
+        layer?.backgroundColor = DS.Surface.editorNSColor.cgColor
         applyCurrentColorScheme(refresh: true)
     }
 

@@ -41,7 +41,7 @@ struct WorkspaceHeaderView: View {
         }
         // Solid (not translucent) — matches the other pane headers and avoids
         // the faint shaded band the material produced over dark content.
-        .background(Color(nsColor: .controlBackgroundColor))
+        .background(DS.Surface.app)
     }
 
     @ViewBuilder

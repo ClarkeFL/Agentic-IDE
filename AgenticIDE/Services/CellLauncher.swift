@@ -111,6 +111,10 @@ struct CellLauncher {
         "`agentide status <n>` (check whether cell n is idle, working, completed, or failed); " +
         "`agentide wait <n>` (block until cell n finishes); " +
         "`agentide servers` (list configured/running dev servers in the dedicated Servers workspace); " +
+        "`agentide ports` (list configured ports across projects to avoid collisions); " +
+        "`agentide server add <name> <command> [--port N]` (persist a server for this project); " +
+        "`agentide server set <name> [--command ...] [--port N|clear]` (update a server); " +
+        "`agentide server rm <name>` (remove a configured server); " +
         "`agentide server run [name|all]` (start a configured server, or all of them); " +
         "`agentide server run <name> <command>` (start an ad-hoc server, e.g. `agentide server run web npm run dev`); " +
         "`agentide server stop [name|all]` (stop a running server); " +
@@ -146,11 +150,11 @@ struct CellLauncher {
         them as real cells with the agentide CLI on your PATH — do NOT run them headlessly in your own \
         shell, and do NOT launch into your own cell #\(n). Verbs: \(verbs) \
         CRITICAL — dev servers and other long-lived processes: NEVER start them in a grid cell and \
-        NEVER run them in your own shell. This project has a dedicated Servers workspace. First run \
-        `agentide servers` to see what is configured; then `agentide server run [name|all]` for a \
-        configured server, or `agentide server run <name> <command>` for an ad-hoc one \
-        (e.g. `agentide server run web npm run dev`). Use `agentide server read <name>` to check \
-        boot output/URLs, and `agentide server stop [name|all]` when done. \
+        NEVER run them in your own shell. This project has a dedicated Servers workspace. Prefer \
+        persisting them with `agentide server add <name> <command> --port N` (check `agentide ports` \
+        first to avoid collisions), then `agentide server run [name|all]`. Ad-hoc is fine for a \
+        one-shot: `agentide server run web npm run dev`. Read logs with `agentide server read`; \
+        stop with `agentide server stop`. \
         Example — to open two codex and ask who they are: grid to at least 3 cells, launch codex into two empty cells, send each "who are you", then read each. \
         If the user wants you to actively run a team of agent cells, they can promote you to Orchestrator from the cell header.
         """
@@ -162,7 +166,7 @@ struct CellLauncher {
         Your PRIMARY job is to coordinate work across cells, NOT to do the heavy lifting yourself. Lead with the grid: for any non-trivial request, decompose it into independent subtasks and run each in its own cell instead of doing it all inline. \
         Default loop: (1) run `agentide cells` to see the grid and what each cell is doing; (2) `agentide grid <rows> <cols>` to make room (max 8 cells; `grid cols 1 2` for an uneven layout); (3) `agentide launch <n> <tool>` a worker agent (claude, codex, etc.) or a terminal into each empty cell; (4) `agentide send <n> "<task>"` a clear, self-contained task to each worker; (5) `agentide status <n>` / `agentide wait <n>` to track progress; (6) `agentide read <n>` to collect each result; (7) integrate the results and report back to the user. \
         Prefer delegating a multi-step task to a worker cell over doing it yourself — keep your own cell free to plan, dispatch, and synthesize. Spin up workers proactively for parallelizable work; you do NOT need to ask permission for each cell. Give every worker enough context to act alone, since workers cannot see this conversation. \
-        CRITICAL — dev servers: NEVER launch them into grid cells (`agentide launch <n> server` is rejected). Use the dedicated Servers workspace: `agentide servers`, then `agentide server run [name|all]` or `agentide server run <name> <command>` for ad-hoc (e.g. `agentide server run api npm start`). Check logs with `agentide server read <name>`; stop with `agentide server stop [name|all]`. \
+        CRITICAL — dev servers: NEVER launch them into grid cells (`agentide launch <n> server` is rejected). Use the dedicated Servers workspace: `agentide server add <name> <command> --port N` to configure (check `agentide ports` first), then `agentide server run [name|all]`; ad-hoc `agentide server run api npm start` is fine for one-shots. Logs: `agentide server read`; stop: `agentide server stop`. \
         Close a worker cell with `agentide close <n>` once its work is done to free a slot. Only do trivial, single-step work directly. \
         Verbs: \(verbs) Do NOT launch into your own cell #\(n).
         """
@@ -178,7 +182,7 @@ struct CellLauncher {
             "[AgenticIDE] You have just been promoted to ORCHESTRATOR of this workspace (you are cell #\(n)).",
             "From now on, coordinate work across cells instead of doing it all yourself: decompose each request into independent subtasks and run each in its own cell.",
             "Use the agentide CLI on your PATH — `agentide cells` to see the grid, `agentide grid <rows> <cols>` to make room (max 8 cells), `agentide launch <n> <tool>` to start a worker (claude, codex, terminal, etc.), `agentide send <n> \"<task>\"` to give it a self-contained task, `agentide status <n>` / `agentide wait <n>` to track it, and `agentide read <n>` to collect its result — then integrate and report.",
-            "Dev servers go in the dedicated Servers workspace, never in grid cells: `agentide servers`, then `agentide server run [name|all]` or `agentide server run <name> <command>` (e.g. web npm run dev); `agentide server read <name>` for logs.",
+            "Dev servers go in the dedicated Servers workspace, never in grid cells: `agentide server add <name> <command> --port N` to configure (see `agentide ports`), then `agentide server run`; `agentide server read` for logs.",
             "Spin up workers proactively for parallelizable work without asking each time, and give each enough context to act alone.",
             "Acknowledge in one line, then carry on with whatever the user asked.",
         ].joined(separator: " ")

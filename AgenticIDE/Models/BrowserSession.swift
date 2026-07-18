@@ -39,8 +39,9 @@ final class BrowserManager {
     }
 
     /// Open (or navigate) the browser pane bound to this grid cell. Creating
-    /// a pane makes the edge bar appear; it never auto-expands browser mode —
-    /// the user chooses when to look. A nil url opens the blank start page.
+    /// a pane is listed in the hover drawer; it never auto-expands browser
+    /// mode — the user chooses when to look (⌘B / drawer / globe). A nil url
+    /// opens the blank start page.
     @discardableResult
     func open(_ url: URL?, cell: WorkspaceCell,
               workspace: Workspace? = nil,
@@ -89,16 +90,50 @@ final class BrowserManager {
         setModeActive(false)
     }
 
-    /// Expand browser mode (⌘B when collapsed). Reuses an existing pane or
-    /// opens one for the active workspace when it prefers the browser.
+    /// Expand browser mode (⌘B when collapsed). Always prefers the **selected
+    /// project's active workspace** — never just "whatever pane happens to be
+    /// open" (that left people on another project's blank browser with
+    /// "Set up servers" while the selected project already had servers).
     func expandMode(projectSession: ProjectSession?) {
-        if !sessions.isEmpty {
-            setModeActive(true)
+        if let projectSession, let ws = projectSession.activeWorkspace {
+            if let existing = session(matching: projectSession, workspace: ws) {
+                // Refresh weak refs — ProjectSession can be recreated and leave
+                // projectSession nil, which made the server strip look empty.
+                existing.bindContext(workspace: ws, projectSession: projectSession)
+                focusedId = existing.id
+                setModeActive(true)
+                return
+            }
+            openManual(from: ws, projectSession: projectSession)
             return
         }
-        if let projectSession, let ws = projectSession.activeWorkspace {
-            openManual(from: ws, projectSession: projectSession)
+        // No project/workspace selection — only then fall back to any open pane.
+        if !sessions.isEmpty {
+            setModeActive(true)
         }
+    }
+
+    /// Best existing pane for this project/workspace (manual or agent-bound).
+    private func session(matching projectSession: ProjectSession,
+                         workspace: Workspace) -> BrowserSession? {
+        if let s = sessions.first(where: { $0.sourceWorkspace === workspace }) {
+            return s
+        }
+        if let s = sessions.first(where: { session in
+            guard let cell = session.ownerCell else { return false }
+            return workspace.cells.contains(where: { $0 === cell })
+        }) {
+            return s
+        }
+        if let s = sessions.first(where: { $0.projectSession === projectSession }) {
+            return s
+        }
+        if let s = sessions.first(where: {
+            $0.projectSession?.projectId == projectSession.projectId
+        }) {
+            return s
+        }
+        return nil
     }
 
     /// ⌘B: open browser mode if collapsed, collapse to grid if open.
@@ -263,7 +298,7 @@ enum LocalServerURLDetector {
 
 /// Device viewport presets for the browser pane. `fit` fills the card 1:1;
 /// the rest lay the page out at the device's logical resolution and
-/// aspect-fit it into the card via WKWebView magnification, so JS viewport
+/// aspect-fit it into the card via a view-scale transform, so JS viewport
 /// queries, hit-testing, and the element picker all stay accurate.
 enum BrowserViewport: String, CaseIterable, Identifiable {
     case fit, desktop, laptop, tablet, mobile
@@ -335,10 +370,13 @@ final class BrowserSession: NSObject, Identifiable, WKNavigationDelegate, WKScri
     var canGoBack = false
     var canGoForward = false
     /// Emulated device screen size (toolbar menu or `agentide browser
-    /// viewport`). ponytail: layout size + magnification only — no mobile
+    /// viewport`). ponytail: layout size + view scale only — no mobile
     /// user-agent or touch-event emulation; add a UA switch if a site
     /// serves a genuinely different mobile experience.
     var viewport: BrowserViewport = .fit
+    /// Aspect-fit scale applied by the browser column (1 for fit / when the
+    /// card is larger than the device). Used for element screenshot rects.
+    var displayScale: CGFloat = 1
     /// Annotation picker: while on, hover/drag highlights a component range
     /// and a chip lets the user type a change note that submits into the
     /// owning agent's input.
@@ -382,11 +420,12 @@ final class BrowserSession: NSObject, Identifiable, WKNavigationDelegate, WKScri
         startObservingWebView()
     }
 
-    /// Fill in workspace / project context when it becomes known (agent
-    /// open path, or reusing a manual session). Never clears existing refs.
+    /// Fill in (or refresh) workspace / project context. Non-nil args always
+    /// overwrite — `projectSession` is weak and can go nil when SessionManager
+    /// recreates the session, which would empty the server strip.
     func bindContext(workspace: Workspace?, projectSession: ProjectSession?) {
-        if sourceWorkspace == nil { sourceWorkspace = workspace }
-        if self.projectSession == nil { self.projectSession = projectSession }
+        if let workspace { sourceWorkspace = workspace }
+        if let projectSession { self.projectSession = projectSession }
     }
 
     private func startObservingWebView() {
@@ -609,11 +648,10 @@ final class BrowserSession: NSObject, Identifiable, WKNavigationDelegate, WKScri
                            : "error: element has no visible bounds")
                 return
             }
-            // CSS px → view coords: viewport presets scale content via
-            // webView.magnification, and the snapshot rect is in view space.
-            let m = webView.magnification
-            capture(rect: CGRect(x: parts[0] * m, y: parts[1] * m,
-                                 width: parts[2] * m, height: parts[3] * m),
+            // DOM rects are in the logical (unscaled) web view; the view is
+            // laid out at device size so snapshot space matches 1:1.
+            capture(rect: CGRect(x: parts[0], y: parts[1],
+                                 width: parts[2], height: parts[3]),
                     completion: completion)
         }
     }

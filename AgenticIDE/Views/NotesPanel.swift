@@ -34,13 +34,38 @@ struct NotesPanel: View {
         project.path.appendingPathComponent("notes.md")
     }
 
+    /// Right-edge card chrome — same family as the browser hover drawer and
+    /// the floating file editor (free edge rounded + light border + shadow).
+    private var panelShape: UnevenRoundedRectangle {
+        UnevenRoundedRectangle(
+            topLeadingRadius: DS.Radius.lg,
+            bottomLeadingRadius: DS.Radius.lg,
+            bottomTrailingRadius: 0,
+            topTrailingRadius: 0,
+            style: .continuous
+        )
+    }
+
     var body: some View {
         VStack(spacing: 0) {
             header
+                // Keep chrome above the AppKit editor — NSTextView rulers can
+                // otherwise paint their gutter stroke up through the title.
+                .zIndex(1)
+
+            // Hard clip so the line-number gutter never bleeds into the header.
             content
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                .clipped()
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
-        .background(Color(nsColor: .textBackgroundColor))
+        .background(DS.Surface.editor)
+        .clipShape(panelShape)
+        .overlay(
+            panelShape
+                .strokeBorder(Color.primary.opacity(0.12), lineWidth: 1)
+        )
+        .shadow(color: .black.opacity(0.28), radius: 14, x: -4, y: 0)
         .task(id: project.id) { load() }
         .onDisappear { flush() }
     }
@@ -48,35 +73,34 @@ struct NotesPanel: View {
     // MARK: - Header
 
     private var header: some View {
-        ZStack(alignment: .bottom) {
+        HStack(spacing: DS.Space.sm) {
+            Image(systemName: "note.text")
+                .font(DS.Font.bodySemibold)
+                .foregroundStyle(.secondary)
+            Text("Notes")
+                .font(DS.Font.bodySemibold)
+                .lineLimit(1)
+
+            Spacer(minLength: DS.Space.sm)
+
+            if tab != nil {
+                pill(title: "Preview", icon: "doc.richtext", isOn: showingPreview) {
+                    showingPreview.toggle()
+                }
+            }
+
+            NotesIconButton(systemName: "xmark", help: "Close notes (⌘⇧N)", action: onClose)
+        }
+        .padding(.horizontal, DS.Space.lg - 2)
+        .frame(height: DS.Control.header)
+        .frame(maxWidth: .infinity)
+        // Opaque fill so AppKit gutter ink can't show through the title.
+        .background(DS.Surface.app)
+        .overlay(alignment: .bottom) {
             Rectangle()
                 .fill(Color(nsColor: .separatorColor))
                 .frame(height: 1)
-                .frame(maxWidth: .infinity, alignment: .bottom)
-
-            HStack(spacing: DS.Space.sm) {
-                Image(systemName: "note.text")
-                    .font(DS.Font.bodySemibold)
-                    .foregroundStyle(.secondary)
-                Text("Notes")
-                    .font(DS.Font.bodySemibold)
-                    .lineLimit(1)
-
-                Spacer(minLength: DS.Space.sm)
-
-                if tab != nil {
-                    pill(title: "Preview", icon: "doc.richtext", isOn: showingPreview) {
-                        showingPreview.toggle()
-                    }
-                }
-
-                NotesIconButton(systemName: "xmark", help: "Close notes (⌘⇧N)", action: onClose)
-            }
-            .padding(.horizontal, DS.Space.lg - 2)
-            .frame(height: DS.Control.header)
         }
-        .frame(height: DS.Control.header)
-        .background(Color(nsColor: .controlBackgroundColor))
     }
 
     // MARK: - Content
@@ -97,8 +121,15 @@ struct NotesPanel: View {
                 }
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
             } else {
-                CodeEditor(tab: tab)
+                // Color.clear + overlay keeps the NSScrollView inside the
+                // SwiftUI-proposed rect (raw representables sometimes claim
+                // the full parent and draw the ruler through the header).
+                Color.clear
+                    .overlay {
+                        CodeEditor(tab: tab)
+                    }
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    .clipped()
                     .onChange(of: tab.text) { _, _ in scheduleSave() }
             }
         } else {

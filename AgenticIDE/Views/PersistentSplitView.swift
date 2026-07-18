@@ -135,68 +135,79 @@ struct PersistentSplitView<P1: View, P2: View, P3: View, P4: View, P5: View>: Vi
     var body: some View {
         GeometryReader { geo in
             let total = geo.size.width
-            // Each DividerView's ZStack stretches to its widest child —
-            // the 9pt invisible hit-target — so it reserves that much layout
-            // space, NOT the 1pt visible separator. `dividerCount` drops a
-            // divider for each collapsed pane; a collapsed pane 2 is replaced
-            // by a fixed-width reopen rail instead.
+            let height = geo.size.height
+            // Layout still budgets only a 1pt hairline per seam so pane
+            // spacing is unchanged. Easy grab comes from overlay hit strips
+            // (see `seams`) that sit *on top* of neighbouring pane edges —
+            // without that, the panes steal the mouse and the user has to
+            // hit a perfect pixel on the 1pt line.
             let widths = computeWidths(total: total)
             let w1 = widths.p1
             let w2 = widths.p2
             let w3 = widths.p3
             let w4 = widths.p4
             let w5 = widths.p5
+            let seams = seamCenters(w1: w1, w2: w2, w3: w3, w4: w4, w5: w5)
 
-            HStack(spacing: 0) {
-                pane1()
-                    .frame(width: w1)
-                    .clipped()
-
-                DividerView(onDrag: { delta in dragPane1(delta: delta, total: total) },
-                            onDragStart: { isDragging = true },
-                            onDragEnd: { persist(); isDragging = false })
-
-                if pane2Collapsed {
-                    Pane2ReopenRail(width: Self.railWidth) { onExpandPane2?() }
-                } else {
-                    pane2()
-                        .frame(width: w2)
+            ZStack(alignment: .topLeading) {
+                HStack(spacing: 0) {
+                    pane1()
+                        .frame(width: w1)
                         .clipped()
 
-                    DividerView(onDrag: { delta in dragPane2(delta: delta, total: total) },
-                                onDragStart: { isDragging = true },
-                                onDragEnd: { persist(); isDragging = false })
+                    DividerHairline()
+
+                    if pane2Collapsed {
+                        Pane2ReopenRail(width: Self.railWidth) { onExpandPane2?() }
+                    } else {
+                        pane2()
+                            .frame(width: w2)
+                            .clipped()
+
+                        DividerHairline()
+                    }
+
+                    if !pane3Collapsed {
+                        pane3()
+                            .frame(width: w3)
+                            .clipped()
+
+                        DividerHairline()
+                    }
+
+                    pane4()
+                        .frame(width: w4)
+                        .clipped()
+
+                    if !pane5Collapsed {
+                        // No hairline — Notes draws its own leading border +
+                        // rounded free edge (same card treatment as the browser
+                        // drawer / file editor). Skip `.clipped()` so the
+                        // rounded corners and soft shadow aren't squared off.
+                        pane5()
+                            .frame(width: w5)
+                    }
                 }
+                .frame(width: total, height: height, alignment: .leading)
 
-                if !pane3Collapsed {
-                    pane3()
-                        .frame(width: w3)
-                        .clipped()
-
-                    DividerView(onDrag: { delta in dragPane4(delta: delta, total: total) },
-                                onDragStart: { isDragging = true },
-                                onDragEnd: { persist(); isDragging = false })
-                }
-
-                pane4()
-                    .frame(width: w4)
-                    .clipped()
-
-                if !pane5Collapsed {
-                    DividerView(onDrag: { delta in dragPane5(delta: delta, total: total) },
-                                onDragStart: { isDragging = true },
-                                onDragEnd: { persist(); isDragging = false })
-
-                    pane5()
-                        .frame(width: w5)
-                        .clipped()
+                // Wide, invisible-until-hover grabbers centered on each seam.
+                // zIndex above the HStack so they win hit-testing over the
+                // pane edges they overlap — without reserving extra layout.
+                ForEach(seams) { seam in
+                    DividerGrabber(
+                        onDrag: { delta in dragSeam(seam.id, delta: delta, total: total) },
+                        onDragStart: { isDragging = true },
+                        onDragEnd: {
+                            persist()
+                            isDragging = false
+                        }
+                    )
+                    .frame(width: DividerGrabber.hitWidth, height: height)
+                    .offset(x: seam.x - DividerGrabber.hitWidth / 2)
                 }
             }
             .transaction { t in if isDragging { t.animation = nil } }
-            .frame(width: total, height: geo.size.height, alignment: .leading)
-            // Belt-and-braces clip — even if the maths above had a
-            // miscalculation, content can never paint outside the
-            // GeometryReader's reported bounds.
+            .frame(width: total, height: height, alignment: .leading)
             .clipped()
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -209,6 +220,47 @@ struct PersistentSplitView<P1: View, P2: View, P3: View, P4: View, P5: View>: Vi
                 pane2Width = clamp(target, min: pane2Min, max: pane2Max)
             }
             UserDefaults.standard.set(Double(pane2Width), forKey: "\(autosaveName).pane2Width")
+        }
+    }
+
+    /// X-centers of each draggable seam, in the split's leading-origin space.
+    private func seamCenters(w1: CGFloat, w2: CGFloat, w3: CGFloat,
+                             w4: CGFloat, w5: CGFloat) -> [SplitSeam] {
+        let hair = DividerHairline.layoutWidth
+        var x: CGFloat = 0
+        var out: [SplitSeam] = []
+
+        x += w1
+        out.append(SplitSeam(id: .pane1, x: x + hair / 2))
+        x += hair
+
+        if pane2Collapsed {
+            x += Self.railWidth
+        } else {
+            x += w2
+            out.append(SplitSeam(id: .pane2, x: x + hair / 2))
+            x += hair
+        }
+
+        if !pane3Collapsed {
+            x += w3
+            out.append(SplitSeam(id: .pane4, x: x + hair / 2))
+            x += hair
+        }
+
+        x += w4
+        if !pane5Collapsed {
+            out.append(SplitSeam(id: .pane5, x: x + hair / 2))
+        }
+        return out
+    }
+
+    private func dragSeam(_ id: SplitSeam.ID, delta: CGFloat, total: CGFloat) {
+        switch id {
+        case .pane1: dragPane1(delta: delta, total: total)
+        case .pane2: dragPane2(delta: delta, total: total)
+        case .pane4: dragPane4(delta: delta, total: total)
+        case .pane5: dragPane5(delta: delta, total: total)
         }
     }
 
@@ -231,7 +283,7 @@ struct PersistentSplitView<P1: View, P2: View, P3: View, P4: View, P5: View>: Vi
     }
 
     private func computeWidths(total: CGFloat) -> (p1: CGFloat, p2: CGFloat, p3: CGFloat, p4: CGFloat, p5: CGFloat) {
-        let dividers = DividerView.layoutWidth * dividerCount
+        let dividers = DividerHairline.layoutWidth * dividerCount
         // A collapsed pane 2 reserves a fixed-width rail instead of a pane.
         let rail = pane2Collapsed ? Self.railWidth : 0
         let usable = max(0, total - dividers - rail)
@@ -320,7 +372,7 @@ struct PersistentSplitView<P1: View, P2: View, P3: View, P4: View, P5: View>: Vi
     private func dragPane1(delta: CGFloat, total: CGFloat) {
         let start = dragStart1 ?? pane1Width
         if dragStart1 == nil { dragStart1 = start }
-        let dividers = DividerView.layoutWidth * dividerCount
+        let dividers = DividerHairline.layoutWidth * dividerCount
         let pane2Region = pane2Collapsed ? Self.railWidth : pane2Width
         let elasticMinimum = (pane3Collapsed ? pane4Min : pane3Min + pane4Width) + pane5Region
         let maxAllowed = total - pane2Region - elasticMinimum - dividers
@@ -332,7 +384,7 @@ struct PersistentSplitView<P1: View, P2: View, P3: View, P4: View, P5: View>: Vi
     private func dragPane2(delta: CGFloat, total: CGFloat) {
         let start = dragStart2 ?? pane2Width
         if dragStart2 == nil { dragStart2 = start }
-        let dividers = DividerView.layoutWidth * dividerCount
+        let dividers = DividerHairline.layoutWidth * dividerCount
         let elasticMinimum = (pane3Collapsed ? pane4Min : pane3Min + pane4Width) + pane5Region
         let maxAllowed = total - pane1Width - elasticMinimum - dividers
         pane2Width = clamp(start + delta, min: pane2Min, max: min(pane2Max, maxAllowed))
@@ -342,7 +394,7 @@ struct PersistentSplitView<P1: View, P2: View, P3: View, P4: View, P5: View>: Vi
     private func dragPane4(delta: CGFloat, total: CGFloat) {
         let start = dragStart4 ?? pane4Width
         if dragStart4 == nil { dragStart4 = start }
-        let dividers = DividerView.layoutWidth * dividerCount
+        let dividers = DividerHairline.layoutWidth * dividerCount
         let pane2Region = pane2Collapsed ? Self.railWidth : pane2Width
         let maxAllowed = total - pane1Width - pane2Region - pane3Min - pane5Region - dividers
         pane4Width = clamp(start - delta, min: pane4Min, max: min(pane4Max, maxAllowed))
@@ -354,7 +406,7 @@ struct PersistentSplitView<P1: View, P2: View, P3: View, P4: View, P5: View>: Vi
     private func dragPane5(delta: CGFloat, total: CGFloat) {
         let start = dragStart5 ?? pane5Width
         if dragStart5 == nil { dragStart5 = start }
-        let dividers = DividerView.layoutWidth * dividerCount
+        let dividers = DividerHairline.layoutWidth * dividerCount
         let pane2Region = pane2Collapsed ? Self.railWidth : pane2Width
         // Leave the elastic pane(s) their minimum on the left of the divider.
         let leftMinimum = pane1Width + pane2Region
@@ -403,7 +455,7 @@ private struct Pane2ReopenRail: View {
         // Same fill as the Explorer pane this rail stands in for; the
         // trailing hairline is the seam against the workspace pane (a
         // collapsed pane 2 has no DividerView of its own).
-        .background(Color(nsColor: .textBackgroundColor))
+        .background(DS.Surface.app)
         .overlay(alignment: .trailing) {
             Rectangle()
                 .fill(Color(nsColor: .separatorColor))
@@ -417,133 +469,153 @@ private struct Pane2ReopenRail: View {
     }
 }
 
-/// Thin draggable divider with an enlarged invisible hit area and a
-/// resize-cursor on hover. Reports drag deltas to the parent so the
-/// parent owns the width state and the clamping rules.
-private struct DividerView: View {
-    /// Visible separator thickness — the 1pt grey line the user sees.
-    static let thickness: CGFloat = 1
-    /// Width of the invisible grab/hover zone. Wider than the layout width —
-    /// it overflows over the neighbouring panes so the seam stays easy to
-    /// grab even though the panes' edges touch.
-    static let hitArea: CGFloat = 8
-    /// Layout-reserved width: just the hairline. The panes on either side sit
-    /// flush against it (edge-to-edge design, no card gaps). Parents budget
-    /// total width with THIS value.
-    static let layoutWidth: CGFloat = thickness
+/// One draggable seam between panes. `x` is the center of the 1pt hairline
+/// in the split's leading-origin coordinates.
+private struct SplitSeam: Identifiable {
+    enum ID: Hashable { case pane1, pane2, pane4, pane5 }
+    let id: ID
+    let x: CGFloat
+}
+
+/// Layout-only 1pt spacer between panes. Keeps edge-to-edge spacing; the
+/// actual drag/hover UI lives in the overlay `DividerGrabber`.
+private struct DividerHairline: View {
+    static let layoutWidth: CGFloat = 1
+
+    var body: some View {
+        Color.clear
+            .frame(width: Self.layoutWidth)
+            .frame(maxHeight: .infinity)
+    }
+}
+
+/// Wide, transparent grab strip overlaid on a seam. Layout width stays 1pt
+/// (see `DividerHairline`); this view is ~14pt and sits *above* the pane
+/// edges so the user doesn't need pixel-perfect aim. Draws the blue hover
+/// line itself; at rest it's invisible so styling/spacing stay clean.
+private struct DividerGrabber: View {
+    /// Comfortable grab width. Extends ~7pt into each neighbouring pane
+    /// without changing how much space the layout budgets for seams.
+    static let hitWidth: CGFloat = 14
+
     let onDrag: (CGFloat) -> Void
     let onDragStart: () -> Void
     let onDragEnd: () -> Void
 
-    @State private var isActive = false
-    @State private var isHovered = false
-
     var body: some View {
-        ZStack {
-            Rectangle()
-                .fill(separatorColor)
-                .frame(width: isHovered || isActive ? 2 : Self.thickness)
-            Rectangle()
-                .fill(Color.primary.opacity(isHovered || isActive ? 0.05 : 0.001))
-                .frame(width: Self.hitArea)
-            CursorTrackingView(isHovered: $isHovered)
-                .frame(width: Self.hitArea)
-        }
-        // Only the hairline takes layout space; the wider hover/grab children
-        // overflow symmetrically onto the neighbouring panes.
-        .frame(width: Self.layoutWidth)
-        .frame(maxHeight: .infinity)
-        // Grab target extends well beyond the slim reserved width so the
-        // divider stays easy to grab even though it only reserves 8pt.
-        .contentShape(Rectangle().inset(by: -6))
-        .highPriorityGesture(
-            DragGesture(minimumDistance: 1, coordinateSpace: .global)
-                .onChanged { value in
-                    if !isActive {
-                        isActive = true
-                        onDragStart()
-                    }
-                    onDrag(value.translation.width)
-                }
-                .onEnded { _ in
-                    isActive = false
-                    onDragEnd()
-                }
+        DividerGrabberRepresentable(
+            onDrag: onDrag,
+            onDragStart: onDragStart,
+            onDragEnd: onDragEnd
         )
-    }
-
-    private var separatorColor: Color {
-        if isActive {
-            return Color.accentColor.opacity(0.85)
-        }
-        if isHovered {
-            return Color.accentColor.opacity(0.65)
-        }
-        // Hidden at rest — the cards provide their own borders, so the pane
-        // separators only appear (as a faint accent) while hovering/dragging.
-        return Color.clear
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
 }
 
-private struct CursorTrackingView: NSViewRepresentable {
-    @Binding var isHovered: Bool
+private struct DividerGrabberRepresentable: NSViewRepresentable {
+    let onDrag: (CGFloat) -> Void
+    let onDragStart: () -> Void
+    let onDragEnd: () -> Void
 
-    func makeNSView(context: Context) -> CursorTrackingNSView {
-        let view = CursorTrackingNSView()
-        view.onHoverChange = { hovering in
-            DispatchQueue.main.async {
-                isHovered = hovering
-            }
-        }
+    func makeNSView(context: Context) -> DividerGrabberNSView {
+        let view = DividerGrabberNSView()
+        view.onDrag = onDrag
+        view.onDragStart = onDragStart
+        view.onDragEnd = onDragEnd
         return view
     }
 
-    func updateNSView(_ nsView: CursorTrackingNSView, context: Context) {
-        nsView.onHoverChange = { hovering in
-            DispatchQueue.main.async {
-                isHovered = hovering
-            }
-        }
-        nsView.needsDisplay = true
-        nsView.window?.invalidateCursorRects(for: nsView)
+    func updateNSView(_ nsView: DividerGrabberNSView, context: Context) {
+        nsView.onDrag = onDrag
+        nsView.onDragStart = onDragStart
+        nsView.onDragEnd = onDragEnd
     }
 }
 
-private final class CursorTrackingNSView: NSView {
-    var onHoverChange: ((Bool) -> Void)?
-    private var trackingArea: NSTrackingArea?
+/// AppKit-backed so hit-testing, cursor rects, and click-drag are reliable
+/// (SwiftUI `contentShape` expansion still loses to neighbouring panes).
+private final class DividerGrabberNSView: NSView {
+    var onDrag: ((CGFloat) -> Void)?
+    var onDragStart: (() -> Void)?
+    var onDragEnd: (() -> Void)?
 
+    private var trackingArea: NSTrackingArea?
+    private var dragOriginX: CGFloat?
+    private var isHovering = false
+    private var isDragging = false
+
+    override var isFlipped: Bool { true }
     override var acceptsFirstResponder: Bool { false }
 
-    override func hitTest(_ point: NSPoint) -> NSView? {
-        nil
+    override func resetCursorRects() {
+        addCursorRect(bounds, cursor: .resizeLeftRight)
     }
 
     override func updateTrackingAreas() {
-        if let trackingArea {
-            removeTrackingArea(trackingArea)
-        }
-
-        let area = NSTrackingArea(rect: bounds,
-                                  options: [.mouseEnteredAndExited, .activeAlways, .inVisibleRect],
-                                  owner: self,
-                                  userInfo: nil)
+        if let trackingArea { removeTrackingArea(trackingArea) }
+        let area = NSTrackingArea(
+            rect: bounds,
+            options: [.mouseEnteredAndExited, .activeInKeyWindow, .inVisibleRect],
+            owner: self,
+            userInfo: nil
+        )
         addTrackingArea(area)
         trackingArea = area
         super.updateTrackingAreas()
     }
 
-    override func resetCursorRects() {
-        super.resetCursorRects()
-        addCursorRect(bounds, cursor: .resizeLeftRight)
-    }
-
     override func mouseEntered(with event: NSEvent) {
+        isHovering = true
         NSCursor.resizeLeftRight.set()
-        onHoverChange?(true)
+        needsDisplay = true
     }
 
     override func mouseExited(with event: NSEvent) {
-        onHoverChange?(false)
+        isHovering = false
+        if !isDragging { needsDisplay = true }
+    }
+
+    override func mouseDown(with event: NSEvent) {
+        dragOriginX = event.locationInWindow.x
+        isDragging = true
+        needsDisplay = true
+        onDragStart?()
+        NSCursor.resizeLeftRight.set()
+    }
+
+    override func mouseDragged(with event: NSEvent) {
+        guard let origin = dragOriginX else { return }
+        onDrag?(event.locationInWindow.x - origin)
+        NSCursor.resizeLeftRight.set()
+    }
+
+    override func mouseUp(with event: NSEvent) {
+        dragOriginX = nil
+        isDragging = false
+        needsDisplay = true
+        onDragEnd?()
+    }
+
+    override func draw(_ dirtyRect: NSRect) {
+        // At rest: fully clear — no extra chrome between panes.
+        guard isHovering || isDragging else { return }
+
+        // Soft wash across the hit strip so the active seam is obvious
+        // without looking like a permanent gutter.
+        NSColor.labelColor.withAlphaComponent(isDragging ? 0.07 : 0.04).setFill()
+        bounds.fill()
+
+        // 2pt accent line centered on the seam (matches the old blue hover).
+        let lineWidth: CGFloat = 2
+        let line = NSRect(
+            x: bounds.midX - lineWidth / 2,
+            y: 0,
+            width: lineWidth,
+            height: bounds.height
+        )
+        NSColor.controlAccentColor
+            .withAlphaComponent(isDragging ? 0.90 : 0.70)
+            .setFill()
+        line.fill()
     }
 }

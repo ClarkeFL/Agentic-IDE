@@ -55,18 +55,23 @@ struct MainWindow: View {
                     .transition(.move(edge: .trailing))
                     .zIndex(5)
             } else {
-                HStack(spacing: 0) {
-                    mainContent
-                    if !browsers.sessions.isEmpty {
-                        BrowserEdgeBar(count: browsers.sessions.count) {
-                            enterBrowserMode()
-                        }
-                        .transition(.move(edge: .trailing).combined(with: .opacity))
+                // Full-width grid; browser picker is a hover drawer on the
+                // trailing edge (no permanent chrome — ⌘B opens full mode).
+                mainContent
+                    .transition(.identity)
+                    .overlay(alignment: .trailing) {
+                        BrowserEdgeDrawer(
+                            manager: browsers,
+                            projectSession: selectedProjectSession,
+                            onSelect: { session in
+                                browsers.focusedId = session.id
+                                enterBrowserMode()
+                            },
+                            onStartBrowser: {
+                                startBrowserForSelection()
+                            }
+                        )
                     }
-                }
-                .transition(.identity)
-                // Edge bar sliding in/out compacts the workspace card smoothly.
-                .animation(.easeInOut(duration: 0.25), value: browsers.sessions.isEmpty)
             }
             if showAsk {
                 AskOverlay(isPresented: $showAsk)
@@ -129,12 +134,34 @@ struct MainWindow: View {
         browserModeActive = false
     }
 
+    /// Session for the sidebar selection (live if already materialised).
+    private var selectedProjectSession: ProjectSession? {
+        guard let id = selectedProjectId else { return nil }
+        return sessions.liveSession(for: id) ?? sessions.session(for: id)
+    }
+
+    /// Open a browser for the selected project's active workspace (drawer empty state).
+    private func startBrowserForSelection() {
+        let projectSession = selectedProjectSession
+        if let projectSession, let ws = projectSession.activeWorkspace {
+            browsers.openManual(from: ws, projectSession: projectSession)
+            browserModeActive = browsers.isModeActive
+        } else {
+            browsers.expandMode(projectSession: projectSession)
+            if browsers.isModeActive { browserModeActive = true }
+        }
+        disableWindowBackgroundDrag()
+    }
+
     /// Split view + every long-lived modifier. Extracted so the body's
     /// outer ZStack stays small enough for SwiftUI's type checker — the
     /// previous inline version tripped the "unable to type-check in
     /// reasonable time" budget once the AskOverlay branch was added.
     private var mainContent: some View {
-        splitView
+        // Must run before `splitView` is first constructed so pane2's
+        // @State initialValue reads the migrated floor, not a stale 300–560.
+        let _ = Self.migrateExplorerWidthIfNeeded()
+        return splitView
             // The title bar is hidden and the panes own the whole window
             // height — the sidebar header hosts the traffic lights.
             .ignoresSafeArea(.container, edges: .top)
@@ -189,27 +216,35 @@ struct MainWindow: View {
     /// Pulled out of `body` because the four-pane initialiser plus its
     /// `.frame(...).onAppear...` modifier chain blew past SwiftUI's
     /// type-inference budget when written inline.
+    /// Floor (and default) width of the folder pane — snug to the git
+    /// footer button strip. The pane opens here and can only be dragged
+    /// wider (up to `explorerMaxWidth`), never narrower.
+    private static let explorerMinWidth: CGFloat =
+        6 * DS.Control.large + 5 * DS.Space.xs + 2 * DS.Space.sm  // 192
+    private static let explorerMaxWidth: CGFloat = 360
+    /// One-shot: drop pre-float-editor saves (300–560) that kept the
+    /// folder column fat after the tree became tree-only.
+    private static let explorerWidthMigratedKey = "AgenticIDE.ExplorerTreeOnlyWidthMigrated"
+
     private var splitView: some View {
         PersistentSplitView(
             autosaveName: "AgenticIDE.MainSplit",
             pane1Min: 160, pane1Initial: 200, pane1Max: 360,
-            // Pane 2 is now the Explorer card (file tree + editor). The min is
-            // raised while a file is open so the workspace pane can't shrink the
-            // editor below a usable width; the max is capped to the folder-view
-            // width when no file is open (a bare tree can't usefully be wider)
-            // and only opens up once the editor needs room.
-            pane2Min: explorerMinWidth, pane2Initial: 300, pane2Max: explorerMaxWidth,
+            // Pane 2 is tree-only. Opens at min; drag only widens. The
+            // editor floats over the grid so this column never grows for
+            // editing on its own.
+            pane2Min: Self.explorerMinWidth,
+            pane2Initial: Self.explorerMinWidth,
+            pane2Max: Self.explorerMaxWidth,
             pane2Collapsed: fileTreeCollapsed,
             onExpandPane2: {
                 withAnimation(.easeInOut(duration: 0.18)) { fileTreeCollapsed = false }
             },
-            // Widen the Explorer to a comfortable editing width when a file is
-            // open; shrink back to a tree-only width when none are.
-            pane2PreferredWidth: explorerPreferredWidth,
+            // nil after the one-shot migration below — leave user drag alone.
+            pane2PreferredWidth: nil,
             pane3Min: 0,
-            // Pane 3 is unused — the editor lives inside the Explorer card now.
-            // Keeping it always-collapsed makes pane 4 (the workspace) elastic,
-            // so the workspace takes whatever width is left.
+            // Pane 3 is unused — the editor floats over pane 4 now.
+            // Keeping it always-collapsed makes pane 4 (the workspace) elastic.
             pane3Collapsed: true,
             pane4Min: 540, pane4Initial: 720, pane4Max: 1400,
             // Pane 5 is the optional Notes scratchpad on the far right.
@@ -226,32 +261,6 @@ struct MainWindow: View {
         .animation(.easeInOut(duration: 0.18), value: notesPaneOpen)
     }
 
-    /// Target width for the Explorer pane: wide enough to edit comfortably when
-    /// a file is open, narrow (tree only) when none are. `onChange` in the split
-    /// view animates to this; it never fires on first render, so a persisted
-    /// width still wins on launch.
-    private var explorerPreferredWidth: CGFloat? {
-        guard let project = fileAccessProject else { return nil }
-        let hasFile = !editors.session(for: project.id).tabs.isEmpty
-        return hasFile ? 560 : 300
-    }
-
-    /// Lower bound for the Explorer pane. While a file is open it can't shrink
-    /// below tree + a usable editor width, so dragging the workspace divider
-    /// (or a narrow persisted width on launch) can never crush the editor.
-    private var explorerMinWidth: CGFloat {
-        guard let project = fileAccessProject else { return 200 }
-        return editors.session(for: project.id).tabs.isEmpty ? 200 : 480
-    }
-
-    /// Upper bound for the Explorer pane. With no file open it's just the folder
-    /// tree, so cap it at the tree's max width (240) — dragging wider only makes
-    /// an empty card. With a file open the editor needs room, so let it grow.
-    private var explorerMaxWidth: CGFloat {
-        guard let project = fileAccessProject else { return 240 }
-        return editors.session(for: project.id).tabs.isEmpty ? 240 : 1100
-    }
-
     // MARK: - Pane 1: Sidebar
 
     @ViewBuilder
@@ -262,7 +271,7 @@ struct MainWindow: View {
             .environment(sessions)
     }
 
-    // MARK: - Pane 2: Explorer (file tree + editor)
+    // MARK: - Pane 2: Explorer (file tree only)
 
     @ViewBuilder
     private var explorerPane: some View {
@@ -277,14 +286,19 @@ struct MainWindow: View {
         }
     }
 
-    // MARK: - Pane 4: Terminals
+    // MARK: - Pane 4: Terminals + floating file editor
 
     @ViewBuilder
     private var terminalsPane: some View {
         if let project = activeProject {
-            ProjectWorkspaceView(project: project)
-                .environment(store)
-                .environment(sessions)
+            WorkspaceWithFloatingEditor(
+                project: project,
+                editor: editors.session(for: project.id),
+                gitWatcher: gitWatchers.watcher(for: project.id, rootPath: project.path)
+            )
+            .environment(store)
+            .environment(sessions)
+            .id(project.id)
         } else if store.projects.filter({ !$0.archived }).isEmpty {
             VStack(spacing: DS.Space.lg) {
                 Image(systemName: "folder.badge.plus")
@@ -296,7 +310,7 @@ struct MainWindow: View {
                     .font(.subheadline).foregroundStyle(.tertiary)
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
-            .background(Color(nsColor: .controlBackgroundColor))
+            .background(DS.Surface.app)
         } else {
             paneEmptyState(systemImage: "terminal",
                            text: "Select a project to launch terminals.")
@@ -332,7 +346,7 @@ struct MainWindow: View {
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .padding(DS.Space.xxl)
-        .background(Color(nsColor: .controlBackgroundColor))
+        .background(DS.Surface.app)
     }
 
     private var activeProject: Project? {
@@ -386,6 +400,19 @@ struct MainWindow: View {
         }
     }
 
+    /// Once: pin the folder pane to its floor. Old tree+editor layout
+    /// persisted 300–560pt widths; with a floating editor those look wrong.
+    /// After this, min stays the floor and drag only widens (still saved).
+    @discardableResult
+    private static func migrateExplorerWidthIfNeeded() -> Bool {
+        let defaults = UserDefaults.standard
+        guard !defaults.bool(forKey: explorerWidthMigratedKey) else { return false }
+        defaults.set(Double(explorerMinWidth),
+                     forKey: "AgenticIDE.MainSplit.pane2Width")
+        defaults.set(true, forKey: explorerWidthMigratedKey)
+        return true
+    }
+
     private func handleDrop(providers: [NSItemProvider]) -> Bool {
         var handled = false
         for provider in providers {
@@ -403,6 +430,36 @@ struct MainWindow: View {
             handled = true
         }
         return handled
+    }
+}
+
+// MARK: - Workspace + floating editor
+
+/// Grid always fills the pane; when a file is open the editor floats on top
+/// so the workspace never shrinks. Isolated so `@Bindable` tracks tab
+/// open/close without MainWindow needing to observe every session.
+private struct WorkspaceWithFloatingEditor: View {
+    let project: Project
+    @Bindable var editor: EditorSession
+    @Bindable var gitWatcher: GitStatusWatcher
+
+    var body: some View {
+        ZStack {
+            ProjectWorkspaceView(project: project)
+
+            if editor.hasOpenFile {
+                FloatingEditorOverlay(
+                    project: project,
+                    editor: editor,
+                    gitWatcher: gitWatcher
+                )
+                // Slide out from the folder pane (leading), not from the
+                // far right of the window.
+                .transition(.move(edge: .leading).combined(with: .opacity))
+                .zIndex(2)
+            }
+        }
+        .animation(.easeInOut(duration: 0.22), value: editor.hasOpenFile)
     }
 }
 
@@ -433,6 +490,9 @@ private final class WindowChromeFixerView: NSView {
         window?.isMovableByWindowBackground = false
         for w in NSApp.windows {
             w.isMovableByWindowBackground = false
+            // Paint the window chrome with the Grok canvas so gaps behind
+            // the SwiftUI hierarchy (title-bar strip, etc.) match the app.
+            w.backgroundColor = DS.Surface.appNSColor
         }
     }
 

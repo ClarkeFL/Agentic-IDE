@@ -184,11 +184,19 @@ final class SyntaxHighlighter {
     /// Pure (no UI access), so safe to run off main. Returns the
     /// attributed string Highlightr produced; callers extract the
     /// foreground-colour ranges from it.
+    ///
+    /// Markdown uses a purpose-built colouriser — highlight.js's
+    /// markdown grammar only really paints headings, which makes long
+    /// docs (CLAUDE.md, READMEs) hard to scan. Everything else still
+    /// goes through Highlightr.
     func attributedHighlight(text: String, language: String) -> NSAttributedString? {
+        if language == "markdown" {
+            return MarkdownSyntaxHighlight.attributedString(for: text)
+        }
         // Highlightr reuses its internal JSContext, so this is just a
         // string-in / string-out call. Still, it's synchronous CPU work
         // that we want off the main thread for big files.
-        renderQueue.sync {
+        return renderQueue.sync {
             highlightr?.highlight(text, as: language, fastRender: true)
         }
     }

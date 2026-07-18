@@ -57,7 +57,7 @@ struct FileTreeView: View {
             }
             GitFooterBar(project: project, gitWatcher: gitWatcher)
         }
-        .background(Color(nsColor: .controlBackgroundColor))
+        .background(DS.Surface.app)
         .task(id: project.path) {
             await loadRoot()
         }
@@ -121,7 +121,7 @@ struct FileTreeView: View {
         .frame(height: DS.Control.header)
         // Solid (not translucent) so the tree scrolling underneath doesn't
         // blur through the header. Matches the other pane headers.
-        .background(Color(nsColor: .controlBackgroundColor))
+        .background(DS.Surface.app)
         .overlay(alignment: .bottom) {
             Divider()
         }
@@ -173,7 +173,7 @@ struct FileTreeView: View {
                     .frame(width: 28, height: 20)
                     .background(
                         RoundedRectangle(cornerRadius: DS.Radius.sm, style: .continuous)
-                            .fill(isOn ? Color(nsColor: .controlBackgroundColor) : Color.clear)
+                            .fill(isOn ? DS.Surface.app : Color.clear)
                     )
                 if let badge {
                     Text("\(badge)")

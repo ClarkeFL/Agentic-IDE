@@ -40,15 +40,19 @@ struct WorkspaceCellView: View {
         // ignoresSafeAreaEdges: [] — the window's hidden-titlebar safe area
         // cuts through the workspace pane's header strip; a default background
         // would expand into it and paint over the WorkspaceHeaderView.
-        .background(Color(nsColor: .textBackgroundColor), ignoresSafeAreaEdges: [])
+        .background(DS.Surface.editor, ignoresSafeAreaEdges: [])
         // Seamless tile inside the workspace pane card — no rounded border of
         // its own. The inter-cell gap is the only rest-state separator; the
         // focused cell gets an accent edge so you can still see where keystrokes
         // land. Corner tiles are rounded by the pane card's own clip.
+        // allowsHitTesting(false): the ring is visual only — its 1.5pt stroke
+        // sits on the cell edge where close/zoom live (and on mid-grid seams
+        // in a 2×2), so it must not steal those clicks.
         .overlay(
             Rectangle()
                 .strokeBorder(Color.accentColor.opacity(0.7), lineWidth: 1.5)
                 .opacity(isFocused ? 1 : 0)
+                .allowsHitTesting(false)
         )
         .onHover { hovering = $0 }
         .popover(isPresented: $showServerPopover, arrowEdge: .top) {
@@ -78,39 +82,50 @@ struct WorkspaceCellView: View {
     /// terminal renders below it and fills the rest of the cell.
     private func cellHeader(_ tab: TerminalTab) -> some View {
         HStack(spacing: DS.Space.xs) {
-            quickLaunchIcon(name: cell.icon, size: DS.FontSize.footnote)
-            Text(tab.title)
-                .font(DS.Font.control)
-                .lineLimit(1)
-                .truncationMode(.middle)
-            Spacer(minLength: DS.Space.sm)
-            ToolbarIconButton(
-                systemName: "point.3.connected.trianglepath.dotted",
-                help: cell.isOrchestrator
-                    ? "Orchestrator — coordinates other cells. Click to stand down."
-                    : "Make this cell the Orchestrator (drives the other cells)",
-                isActive: cell.isOrchestrator) {
-                    toggleOrchestrator(tab)
+            // Title area only — focus-on-tap stays off the toolbar so it can't
+            // compete with close/zoom (especially tight mid-grid in a 2×2).
+            HStack(spacing: DS.Space.xs) {
+                quickLaunchIcon(name: cell.icon, size: DS.FontSize.footnote)
+                Text(tab.title)
+                    .font(DS.Font.control)
+                    .lineLimit(1)
+                    .truncationMode(.middle)
+                Spacer(minLength: DS.Space.sm)
+            }
+            .frame(maxHeight: .infinity)
+            .contentShape(Rectangle())
+            .onTapGesture {
+                workspace.focusedCellId = cell.id
+                _ = tab.view.window?.makeFirstResponder(tab.view)
+            }
+
+            HStack(spacing: DS.Space.xxs) {
+                ToolbarIconButton(
+                    systemName: "point.3.connected.trianglepath.dotted",
+                    help: cell.isOrchestrator
+                        ? "Orchestrator — coordinates other cells. Click to stand down."
+                        : "Make this cell the Orchestrator (drives the other cells)",
+                    isActive: cell.isOrchestrator) {
+                        toggleOrchestrator(tab)
+                    }
+                ToolbarIconButton(
+                    systemName: isZoomed
+                        ? "arrow.down.right.and.arrow.up.left"
+                        : "arrow.up.left.and.arrow.down.right",
+                    help: isZoomed ? "Restore grid (⌃⌘F)" : "Zoom cell (⌃⌘F)") {
+                        session.toggleZoom(cellId: cell.id, in: workspace)
+                    }
+                ToolbarIconButton(systemName: "xmark", help: "Close terminal") {
+                    session.closeCell(cell)
                 }
-            ToolbarIconButton(
-                systemName: isZoomed
-                    ? "arrow.down.right.and.arrow.up.left"
-                    : "arrow.up.left.and.arrow.down.right",
-                help: isZoomed ? "Restore grid (⌃⌘F)" : "Zoom cell (⌃⌘F)") {
-                    session.toggleZoom(cellId: cell.id, in: workspace)
-                }
-            ToolbarIconButton(systemName: "xmark", help: "Close terminal") {
-                session.closeCell(cell)
             }
         }
-        .padding(.horizontal, DS.Space.sm)
-        .frame(height: DS.Control.standard)
-        .background(Color(nsColor: .windowBackgroundColor), ignoresSafeAreaEdges: [])
-        .contentShape(Rectangle())
-        .onTapGesture {
-            workspace.focusedCellId = cell.id
-            _ = tab.view.window?.makeFirstResponder(tab.view)
-        }
+        .padding(.leading, DS.Space.sm)
+        // Extra trailing inset so mid-grid / window-edge close targets aren't
+        // flush against the neighbouring cell or the browser edge strip.
+        .padding(.trailing, DS.Space.md)
+        .frame(height: DS.Control.header)
+        .background(DS.Surface.app, ignoresSafeAreaEdges: [])
     }
 
     /// Only one cell should grab first responder on appear. Prefer the focused
@@ -169,7 +184,9 @@ struct WorkspaceCellView: View {
     }
 }
 
-/// Small icon button used in the cell hover toolbar.
+/// Icon button for the cell header toolbar. Hit target is full header height
+/// (`DS.Control.header` / 30pt) — the old 18pt compact square was easy to miss
+/// on mid-grid seams (left-column close sits in the middle of a 2×2).
 private struct ToolbarIconButton: View {
     let systemName: String
     let help: String
@@ -184,7 +201,7 @@ private struct ToolbarIconButton: View {
             Image(systemName: systemName)
                 .font(.system(size: DS.Icon.small, weight: .semibold))
                 .foregroundStyle(isActive ? Color.accentColor : Color.primary)
-                .frame(width: DS.Control.compact, height: DS.Control.compact)
+                .frame(width: DS.Control.standard, height: DS.Control.header)
                 .background(
                     RoundedRectangle(cornerRadius: DS.Radius.sm, style: .continuous)
                         .fill(Color.accentColor.opacity(isActive ? 0.18 : 0.0))
