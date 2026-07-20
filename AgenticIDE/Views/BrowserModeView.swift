@@ -1236,28 +1236,29 @@ private struct BrowserColumn: View {
     }
 
     /// Fit fills the card; a device preset lays out at the logical device size
-    /// (`pageZoom` = 1) and is aspect-fit with a view transform so DOM coords,
-    /// hit-testing, and the element picker stay aligned. One subtree for both
-    /// cases — branching would re-parent the WKWebView on every switch.
+    /// and is aspect-fit by an AppKit host that sets `frame` to the visual
+    /// size and `bounds` to the device size — WebKit then maps mouse events
+    /// into CSS pixels correctly (SwiftUI `scaleEffect` did not).
     private var viewportBody: some View {
         GeometryReader { geo in
             let logical = session.viewport.size
-            let baseW = logical?.width ?? geo.size.width
-            let baseH = logical?.height ?? geo.size.height
-            let scale = logical.map {
-                min(geo.size.width / $0.width, geo.size.height / $0.height, 1)
-            } ?? 1
-            WebView(webView: session.webView, pageZoom: 1)
-                .frame(width: max(1, baseW), height: max(1, baseH))
-                .scaleEffect(scale, anchor: .center)
-                .frame(width: max(1, baseW * scale), height: max(1, baseH * scale))
+            let scale: CGFloat = {
+                guard let logical else { return 1 }
+                return min(geo.size.width / logical.width,
+                           geo.size.height / logical.height, 1)
+            }()
+            ScaledWebViewHost(webView: session.webView, deviceSize: logical)
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
                 .overlay(
                     Rectangle()
                         .strokeBorder(Color(nsColor: .separatorColor),
                                       lineWidth: logical == nil ? 0 : 1)
+                        .allowsHitTesting(false)
                 )
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
                 .onChange(of: scale) { _, new in session.displayScale = new }
+                .onChange(of: session.viewport) { _, _ in
+                    session.displayScale = scale
+                }
                 .onAppear { session.displayScale = scale }
         }
         .background(DS.Surface.app, ignoresSafeAreaEdges: [])
@@ -1500,22 +1501,80 @@ private struct BrowserToolbarButton: View {
     }
 }
 
-private struct WebView: NSViewRepresentable {
+/// Hosts the shared `WKWebView` and applies device-viewport scaling in AppKit
+/// space. Setting `frame` to the aspect-fit visual size and `bounds` to the
+/// logical device size makes WebKit lay out at device CSS pixels while AppKit
+/// maps hits through the same transform — unlike SwiftUI `scaleEffect`, which
+/// scaled drawing without reliably remapping events into the web process.
+private struct ScaledWebViewHost: NSViewRepresentable {
     let webView: WKWebView
-    /// Always 1 for device presets — the card scales the view with
-    /// `scaleEffect` so DOM/layout size matches the emulated device and the
-    /// picker hit-tests correctly. Fit mode is also 1 (frame = card size).
-    var pageZoom: CGFloat = 1
+    /// nil = fit (fill the host 1:1).
+    var deviceSize: CGSize?
 
-    func makeNSView(context: Context) -> WKWebView { webView }
+    func makeNSView(context: Context) -> DeviceWebHostView {
+        let host = DeviceWebHostView()
+        host.embed(webView)
+        host.deviceSize = deviceSize
+        return host
+    }
 
-    func updateNSView(_ nsView: WKWebView, context: Context) {
-        if abs(nsView.pageZoom - pageZoom) > 0.001 {
-            nsView.pageZoom = pageZoom
+    func updateNSView(_ host: DeviceWebHostView, context: Context) {
+        host.embed(webView)
+        host.deviceSize = deviceSize
+        // Keep zoom/magnification neutral — scaling is frame/bounds only.
+        if abs(webView.pageZoom - 1) > 0.001 { webView.pageZoom = 1 }
+        if abs(webView.magnification - 1) > 0.001 { webView.magnification = 1 }
+        host.needsLayout = true
+    }
+}
+
+private final class DeviceWebHostView: NSView {
+    private(set) weak var webView: WKWebView?
+    var deviceSize: CGSize? {
+        didSet {
+            if oldValue != deviceSize { needsLayout = true }
         }
-        // Clear any leftover magnification from older builds.
-        if abs(nsView.magnification - 1) > 0.001 {
-            nsView.magnification = 1
+    }
+
+    override init(frame frameRect: NSRect) {
+        super.init(frame: frameRect)
+        wantsLayer = true
+        layer?.backgroundColor = NSColor.clear.cgColor
+    }
+
+    @available(*, unavailable)
+    required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
+
+    func embed(_ webView: WKWebView) {
+        if self.webView === webView, webView.superview === self { return }
+        // Detach from any previous host without destroying the shared instance.
+        webView.removeFromSuperview()
+        self.webView = webView
+        addSubview(webView)
+        needsLayout = true
+    }
+
+    override func layout() {
+        super.layout()
+        guard let webView else { return }
+        let host = bounds
+        guard host.width > 0.5, host.height > 0.5 else { return }
+
+        if let device = deviceSize, device.width > 1, device.height > 1 {
+            let scale = min(host.width / device.width, host.height / device.height, 1)
+            let visW = device.width * scale
+            let visH = device.height * scale
+            let x = (host.width - visW) * 0.5
+            let y = (host.height - visH) * 0.5
+            let frame = NSRect(x: x, y: y, width: visW, height: visH)
+            if webView.frame != frame { webView.frame = frame }
+            // bounds ≠ frame → AppKit scales drawing + hit-testing into CSS space.
+            let logical = NSRect(origin: .zero, size: device)
+            if webView.bounds != logical { webView.bounds = logical }
+        } else {
+            if webView.frame != host { webView.frame = host }
+            let oneToOne = NSRect(origin: .zero, size: host.size)
+            if webView.bounds != oneToOne { webView.bounds = oneToOne }
         }
     }
 }

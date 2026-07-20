@@ -298,8 +298,9 @@ enum LocalServerURLDetector {
 
 /// Device viewport presets for the browser pane. `fit` fills the card 1:1;
 /// the rest lay the page out at the device's logical resolution and
-/// aspect-fit it into the card via a view-scale transform, so JS viewport
-/// queries, hit-testing, and the element picker all stay accurate.
+/// aspect-fit it into the card via AppKit bounds scaling (frame = visual
+/// size, bounds = device size) so CSS layout, hit-testing, and the element
+/// picker all share one coordinate space.
 enum BrowserViewport: String, CaseIterable, Identifiable {
     case fit, desktop, laptop, tablet, mobile
 
@@ -743,9 +744,31 @@ final class BrowserSession: NSObject, Identifiable, WKNavigationDelegate, WKScri
     // MARK: - Picker
 
     private func applyPicker() {
-        webView.evaluateJavaScript(
-            "window.__agentidePicker && window.__agentidePicker.setActive(\(pickerActive))",
-            completionHandler: nil)
+        if pickerActive {
+            // Tear down + re-inject so script fixes ship without a full navigation
+            // (user scripts alone only run on document load).
+            webView.evaluateJavaScript(
+                """
+                try {
+                  if (window.__agentidePicker && window.__agentidePicker.destroy) {
+                    window.__agentidePicker.destroy();
+                  }
+                } catch (e) {}
+                window.__agentidePicker = null;
+                """
+            ) { [weak self] _, _ in
+                guard let self else { return }
+                self.webView.evaluateJavaScript(Self.pickerJS) { _, _ in
+                    self.webView.evaluateJavaScript(
+                        "window.__agentidePicker && window.__agentidePicker.setActive(true)",
+                        completionHandler: nil)
+                }
+            }
+        } else {
+            webView.evaluateJavaScript(
+                "window.__agentidePicker && window.__agentidePicker.setActive(false)",
+                completionHandler: nil)
+        }
     }
 
     func userContentController(_ userContentController: WKUserContentController,
@@ -819,21 +842,40 @@ final class BrowserSession: NSObject, Identifiable, WKNavigationDelegate, WKScri
 
       var HL_CLASS = 'agentide-hl';
       var HL_STYLE_ID = 'agentide-hl-style';
+      // Fixed overlays + extreme z-index for normal pages. Inside an open
+      // <dialog>/drawer we reparent into that host (mountNear) so we share its
+      // top layer — do NOT use the Popover API for chrome: [popover] applies
+      // display:none !important until showPopover(), and a failed open leaves
+      // the annotation chip permanently invisible while outlines still work.
+      // Overlay layer: fixed inset:0, pointer-events:none so page still receives
+      // hits except on interactive chrome (chip) which opts back in with auto.
+      // Chrome children use position:absolute with coords relative to this layer.
+      // Critical for dialogs/drawers: many use transform, which makes position:fixed
+      // resolve against the modal — feeding viewport getBoundingClientRect() into
+      // left/top then paints a second, shifted ghost highlight.
+      var LAYER =
+        'position:fixed;left:0;top:0;right:0;bottom:0;width:100%;height:100%;' +
+        'z-index:2147483647;pointer-events:none;overflow:visible;';
       var HIGHLIGHT =
-        'position:fixed;z-index:2147483646;pointer-events:none;box-sizing:border-box;' +
+        'position:absolute;pointer-events:none;box-sizing:border-box;' +
         'border:2px solid #007AFF;background:rgba(0,122,255,0.16);border-radius:4px;' +
         'box-shadow:0 0 0 1px rgba(0,122,255,0.35);display:none;';
       var MARQUEE =
-        'position:fixed;z-index:2147483645;pointer-events:none;box-sizing:border-box;' +
+        'position:absolute;pointer-events:none;box-sizing:border-box;' +
         'border:1.5px dashed #007AFF;background:rgba(0,122,255,0.08);display:none;';
       var CHIP =
-        'position:fixed;z-index:2147483647;display:none;box-sizing:border-box;' +
-        'min-width:240px;max-width:380px;padding:6px 8px;border-radius:10px;' +
+        'position:absolute;display:none;box-sizing:border-box;' +
+        'pointer-events:auto;min-width:240px;max-width:380px;padding:6px 8px;border-radius:10px;' +
         'background:rgba(28,28,30,0.96);border:1px solid rgba(255,255,255,0.12);' +
         'box-shadow:0 8px 28px rgba(0,0,0,0.45);font:12px -apple-system,system-ui,sans-serif;' +
         'color:#f5f5f7;';
 
       var boxPool = [];
+      var layer = document.createElement('div');
+      layer.setAttribute('data-agentide-ui', '1');
+      layer.setAttribute('data-agentide-layer', '1');
+      layer.style.cssText = LAYER;
+
       var marquee = document.createElement('div');
       marquee.setAttribute('data-agentide-ui', '1');
       marquee.style.cssText = MARQUEE;
@@ -842,11 +884,13 @@ final class BrowserSession: NSObject, Identifiable, WKNavigationDelegate, WKScri
       chip.setAttribute('data-agentide-ui', '1');
       chip.style.cssText = CHIP;
       chip.innerHTML =
-        '<div data-agentide-hint style="font-size:10px;opacity:0.55;margin:0 0 4px 2px;letter-spacing:0.02em;">' +
+        '<div data-agentide-ui="1" data-agentide-hint ' +
+        'style="font-size:10px;opacity:0.55;margin:0 0 4px 2px;letter-spacing:0.02em;' +
+        'pointer-events:none;">' +
         'Annotate · Enter sends & exits · Esc clears · ⇧/⌘-click or ⇧-drag groups</div>' +
         '<input type="text" data-agentide-ui="1" placeholder="What should change?" ' +
         'style="width:100%;box-sizing:border-box;border:none;outline:none;' +
-        'background:rgba(255,255,255,0.08);color:#f5f5f7;border-radius:6px;' +
+        'pointer-events:auto;background:rgba(255,255,255,0.08);color:#f5f5f7;border-radius:6px;' +
         'padding:7px 9px;font:12px -apple-system,system-ui,sans-serif;" />';
       var input = chip.querySelector('input');
       var hint = chip.querySelector('[data-agentide-hint]');
@@ -864,8 +908,195 @@ final class BrowserSession: NSObject, Identifiable, WKNavigationDelegate, WKScri
         suppressHover: false
       };
 
+      /// Interactive picker chrome only (chip + input). Highlight boxes are
+      /// pointer-events:none and must NOT count — clicks pass through them.
       function isUI(el) {
-        return !!(el && el.closest && el.closest('[data-agentide-ui]'));
+        if (!el) { return false; }
+        if (el.nodeType === 3) { el = el.parentElement; }
+        if (!el) { return false; }
+        if (el === chip || el === input || el === marquee) { return true; }
+        try {
+          if (chip.contains(el)) { return true; }
+        } catch (e) {}
+        return false;
+      }
+
+      /// True when this pointer/keyboard event is aimed at the type chip.
+      function eventIsUI(e) {
+        if (!e) { return false; }
+        try {
+          var path = typeof e.composedPath === 'function' ? e.composedPath() : null;
+          if (path && path.length) {
+            for (var i = 0; i < path.length; i++) {
+              var n = path[i];
+              if (n === chip || n === input || n === marquee) { return true; }
+              if (n && chip.contains && n.nodeType === 1 && chip.contains(n)) { return true; }
+            }
+          }
+        } catch (err) {}
+        return isUI(e.target);
+      }
+
+      function uiShow(el) {
+        if (!el) { return; }
+        el.style.display = 'block';
+      }
+
+      function uiHide(el) {
+        if (!el) { return; }
+        el.style.display = 'none';
+      }
+
+      function focusInput() {
+        try {
+          if (typeof input.focus === 'function') {
+            input.focus({ preventScroll: true });
+          }
+        } catch (e) {
+          try { input.focus(); } catch (e2) {}
+        }
+      }
+
+      /// Viewport → layer-local coords. getBoundingClientRect is always viewport;
+      /// our chrome is position:absolute inside the fixed layer, which may itself
+      /// sit inside a transformed dialog (fixed containing block ≠ viewport).
+      function layerRect() {
+        try {
+          return layer.getBoundingClientRect();
+        } catch (e) {
+          return { left: 0, top: 0, right: 0, bottom: 0, width: 0, height: 0 };
+        }
+      }
+
+      /// Keep the overlay layer in the same host as the selection. Open <dialog>
+      /// elements live in the top layer — the layer must be inside them to paint
+      /// above modal content.
+      function mountLayer(nearEl) {
+        if (!document.body) { return; }
+        var host = document.body;
+        if (nearEl) {
+          var modal = closestModal(nearEl);
+          if (modal) { host = modal; }
+        }
+        if (layer.parentElement !== host) {
+          try { host.appendChild(layer); } catch (e) {
+            if (layer.parentElement !== document.body) {
+              document.body.appendChild(layer);
+            }
+          }
+        }
+        if (marquee.parentElement !== layer) { layer.appendChild(marquee); }
+        if (chip.parentElement !== layer) { layer.appendChild(chip); }
+        boxPool.forEach(function (b) {
+          if (b.parentElement !== layer) { layer.appendChild(b); }
+        });
+      }
+
+      function isVisibleBox(el) {
+        if (!el || !el.getBoundingClientRect) { return false; }
+        try {
+          var r = el.getBoundingClientRect();
+          if (r.width < 2 || r.height < 2) { return false; }
+          var cs = window.getComputedStyle(el);
+          if (cs.display === 'none' || cs.visibility === 'hidden' || cs.opacity === '0') {
+            return false;
+          }
+          return true;
+        } catch (e) { return false; }
+      }
+
+      /// Closest *open, visible* modal / drawer / sheet. Never return a closed
+      /// or display:none dialog — mounting the chip there hides it entirely.
+      function closestModal(el) {
+        if (!el || !el.closest) { return null; }
+        try {
+          var d = el.closest('dialog[open]');
+          if (d && isVisibleBox(d)) { return d; }
+        } catch (e) {}
+        var n = el;
+        while (n && n !== document.body && n !== document.documentElement) {
+          if (n.getAttribute) {
+            var state = n.getAttribute('data-state');
+            var role = (n.getAttribute('role') || '').toLowerCase();
+            var cls = (typeof n.className === 'string' ? n.className : '').toLowerCase();
+            var ariaModal = n.getAttribute('aria-modal') === 'true';
+            var isDialogRole = role === 'dialog' || role === 'alertdialog' || ariaModal;
+            var looksLikeOverlay = /\b(drawer|sheet|modal|dialog)\b/.test(cls);
+            var openish = state === 'open' || n.hasAttribute('data-open')
+              || (n.tagName === 'DIALOG' && (n.open || n.hasAttribute('open')));
+            // Require an open signal — bare role=dialog matches closed portals.
+            if ((isDialogRole || looksLikeOverlay) && openish && isVisibleBox(n)) {
+              return n;
+            }
+          }
+          n = n.parentElement;
+        }
+        return null;
+      }
+
+      function isBackdrop(el) {
+        if (!el || el === document.body || el === document.documentElement) { return false; }
+        if (isUI(el)) { return false; }
+        var role = (el.getAttribute('role') || '').toLowerCase();
+        if (role === 'presentation' || role === 'none') { return true; }
+        var cls = (typeof el.className === 'string' ? el.className : '').toLowerCase();
+        if (/\b(backdrop|overlay|scrim|underlay)\b/.test(cls)) { return true; }
+        if (el.hasAttribute('data-aria-hidden') || el.getAttribute('aria-hidden') === 'true') {
+          var r0 = el.getBoundingClientRect();
+          if (r0.width > window.innerWidth * 0.85 && r0.height > window.innerHeight * 0.85) {
+            return true;
+          }
+        }
+        try {
+          var r = el.getBoundingClientRect();
+          if (r.width < window.innerWidth * 0.9 || r.height < window.innerHeight * 0.9) {
+            return false;
+          }
+          var cs = window.getComputedStyle(el);
+          if (cs.pointerEvents === 'none') { return true; }
+          // Full-viewport dim layer with no meaningful text.
+          var text = (el.innerText || '').trim();
+          if (text.length < 2 && el.children.length <= 2) {
+            var bg = cs.backgroundColor || '';
+            if (/rgba?\(\s*\d+,\s*\d+,\s*\d+,\s*0?\.?[0-8]/.test(bg) || bg === 'transparent') {
+              return true;
+            }
+          }
+        } catch (e) {}
+        return false;
+      }
+
+      function isInteractive(el) {
+        if (!el || el.nodeType !== 1) { return false; }
+        var tag = el.tagName;
+        if (/^(A|BUTTON|INPUT|SELECT|TEXTAREA|LABEL|SUMMARY|OPTION)$/i.test(tag)) { return true; }
+        var role = (el.getAttribute('role') || '').toLowerCase();
+        if (/^(button|link|checkbox|radio|tab|menuitem|option|switch|textbox|combobox|slider|spinbutton|searchbox)$/.test(role)) {
+          return true;
+        }
+        if (el.hasAttribute('contenteditable') && el.getAttribute('contenteditable') !== 'false') {
+          return true;
+        }
+        if (el.hasAttribute('tabindex') && el.getAttribute('tabindex') !== '-1') { return true; }
+        if (typeof el.onclick === 'function') { return true; }
+        return false;
+      }
+
+      function isTrivialLeaf(el) {
+        if (!el) { return true; }
+        if (isInteractive(el)) { return false; }
+        var tag = el.tagName;
+        if (/^(SVG|PATH|I|BR|HR|WBR|USE|CIRCLE|RECT|LINE|POLYLINE|POLYGON)$/i.test(tag)) {
+          return true;
+        }
+        var r = el.getBoundingClientRect();
+        if (r.width > 0 && r.height > 0 && r.width < 28 && r.height < 28) { return true; }
+        // Tiny text wrappers inside buttons/links.
+        if (/^(SPAN|STRONG|EM|B|SMALL|TIME|SVG)$/i.test(tag)) {
+          var t = (el.innerText || el.textContent || '').trim();
+          if (t.length < 48) { return true; }
+        }
+        return false;
       }
 
       function ensureStyle() {
@@ -886,11 +1117,7 @@ final class BrowserSession: NSObject, Identifiable, WKNavigationDelegate, WKScri
       function ensureMounted() {
         if (!document.body) { return; }
         ensureStyle();
-        if (!marquee.isConnected) { document.body.appendChild(marquee); }
-        if (!chip.isConnected) { document.body.appendChild(chip); }
-        boxPool.forEach(function (b) {
-          if (!b.isConnected) { document.body.appendChild(b); }
-        });
+        mountLayer(state.selected[0] || state.hover || null);
       }
 
       function acquireBox() {
@@ -901,12 +1128,13 @@ final class BrowserSession: NSObject, Identifiable, WKNavigationDelegate, WKScri
         b.setAttribute('data-agentide-ui', '1');
         b.style.cssText = HIGHLIGHT;
         boxPool.push(b);
-        if (document.body) { document.body.appendChild(b); }
+        ensureMounted();
+        layer.appendChild(b);
         return b;
       }
 
       function hideAllBoxes() {
-        boxPool.forEach(function (b) { b.style.display = 'none'; });
+        boxPool.forEach(function (b) { uiHide(b); });
       }
 
       function clearElementOutlines() {
@@ -918,14 +1146,23 @@ final class BrowserSession: NSObject, Identifiable, WKNavigationDelegate, WKScri
       }
 
       function placeBox(box, el) {
-        if (!el || !el.getBoundingClientRect) { box.style.display = 'none'; return; }
+        if (!el || !el.getBoundingClientRect) {
+          uiHide(box);
+          return;
+        }
         var r = el.getBoundingClientRect();
-        if (r.width < 1 || r.height < 1) { box.style.display = 'none'; return; }
-        box.style.display = 'block';
-        box.style.left = Math.round(r.left) + 'px';
-        box.style.top = Math.round(r.top) + 'px';
+        if (r.width < 1 || r.height < 1) {
+          uiHide(box);
+          return;
+        }
+        mountLayer(el);
+        if (box.parentElement !== layer) { layer.appendChild(box); }
+        var lr = layerRect();
+        box.style.left = Math.round(r.left - lr.left) + 'px';
+        box.style.top = Math.round(r.top - lr.top) + 'px';
         box.style.width = Math.max(0, Math.round(r.width)) + 'px';
         box.style.height = Math.max(0, Math.round(r.height)) + 'px';
+        uiShow(box);
       }
 
       function paintSelection() {
@@ -966,19 +1203,24 @@ final class BrowserSession: NSObject, Identifiable, WKNavigationDelegate, WKScri
         return parts.join(' > ');
       }
 
-      function hideMarquee() { marquee.style.display = 'none'; }
+      function hideMarquee() {
+        uiHide(marquee);
+      }
 
       function updateMarquee(x1, y1, x2, y2) {
         ensureMounted();
+        // x1/y1 are client (viewport) coords — keep viewport rect for hit tests,
+        // only convert when painting into the layer.
         var left = Math.min(x1, x2);
         var top = Math.min(y1, y2);
         var w = Math.abs(x2 - x1);
         var h = Math.abs(y2 - y1);
-        marquee.style.display = 'block';
-        marquee.style.left = left + 'px';
-        marquee.style.top = top + 'px';
+        var lr = layerRect();
+        marquee.style.left = Math.round(left - lr.left) + 'px';
+        marquee.style.top = Math.round(top - lr.top) + 'px';
         marquee.style.width = w + 'px';
         marquee.style.height = h + 'px';
+        uiShow(marquee);
         return { left: left, top: top, right: left + w, bottom: top + h, width: w, height: h };
       }
 
@@ -996,36 +1238,40 @@ final class BrowserSession: NSObject, Identifiable, WKNavigationDelegate, WKScri
       /// Prefer "component-sized" nodes: interactive tags, roles, cards, mid blocks.
       function isComponentCandidate(el) {
         if (!el || el === document.body || el === document.documentElement) { return false; }
-        if (isUI(el)) { return false; }
+        if (isUI(el) || isBackdrop(el)) { return false; }
         var tag = el.tagName;
-        if (/^(SCRIPT|STYLE|META|LINK|BR|HR|NOSCRIPT|SVG|PATH)$/i.test(tag)) { return false; }
+        if (/^(SCRIPT|STYLE|META|LINK|BR|HR|NOSCRIPT|SVG|PATH|HEAD|HTML)$/i.test(tag)) { return false; }
         var r = el.getBoundingClientRect();
-        if (r.width < 10 || r.height < 10) { return false; }
-        // Skip near-viewport wrappers that swallow multi-select.
-        if (r.width > window.innerWidth * 0.92 && r.height > window.innerHeight * 0.55) {
+        if (r.width < 8 || r.height < 8) { return false; }
+        // Skip near-viewport wrappers (page shells) — but allow modal panels.
+        var inModal = !!closestModal(el);
+        if (!inModal && r.width > window.innerWidth * 0.92 && r.height > window.innerHeight * 0.55) {
+          return false;
+        }
+        // Inside a modal, still skip the full-bleed shell of the dialog itself
+        // when it's essentially the viewport (user wants content inside).
+        if (inModal && el === closestModal(el)
+            && r.width > window.innerWidth * 0.96 && r.height > window.innerHeight * 0.9) {
           return false;
         }
         var role = (el.getAttribute('role') || '').toLowerCase();
         var cls = (typeof el.className === 'string' ? el.className : '').toLowerCase();
-        var interactive = /^(A|BUTTON|INPUT|SELECT|TEXTAREA|LABEL|SUMMARY|DETAILS|IMG|VIDEO|CANVAS)$/i.test(tag)
-          || typeof el.onclick === 'function'
-          || el.hasAttribute('tabindex')
-          || el.hasAttribute('contenteditable')
-          || /^(button|link|checkbox|radio|tab|menuitem|option|switch|textbox|listitem|article|card|group)$/.test(role);
-        if (interactive) { return true; }
-        if (/^(LI|ARTICLE|SECTION|ASIDE|FIGURE|FIELDSET|TR|TD|TH|HEADER|FOOTER|NAV|MAIN|FORM|UL|OL|DL)$/i.test(tag)) {
+        if (isInteractive(el)) { return true; }
+        if (/^(IMG|VIDEO|CANVAS|PICTURE)$/i.test(tag)) { return true; }
+        if (/^(listitem|article|card|group|region|heading)$/.test(role)) { return true; }
+        if (/^(LI|ARTICLE|SECTION|ASIDE|FIGURE|FIELDSET|TR|TD|TH|HEADER|FOOTER|NAV|MAIN|FORM|UL|OL|DL|H1|H2|H3|H4|H5|H6|P)$/i.test(tag)) {
           return true;
         }
         // Common component class hints (cards, tiles, rows, items).
-        if (/\b(card|tile|item|row|cell|panel|widget|product|post|entry|box|col|column|grid-item)\b/.test(cls)) {
+        if (/\b(card|tile|item|row|cell|panel|widget|product|post|entry|box|col|column|grid-item|menu-item|list-item)\b/.test(cls)) {
           return true;
         }
         if (r.width >= 36 && r.height >= 20 && r.width * r.height >= 900) { return true; }
         return false;
       }
 
-      /// Score how "component-like" an element is for multi-select grouping.
-      /// Higher = better peer to keep when marquee-selecting cards/items.
+      /// Score for multi-select peer grouping only — not used to inflate
+      /// single-click parents over precise interactive targets.
       function componentScore(el) {
         var r = el.getBoundingClientRect();
         var area = r.width * r.height;
@@ -1034,24 +1280,23 @@ final class BrowserSession: NSObject, Identifiable, WKNavigationDelegate, WKScri
         var tag = el.tagName;
         var role = (el.getAttribute('role') || '').toLowerCase();
         var cls = (typeof el.className === 'string' ? el.className : '').toLowerCase();
-        if (/^(LI|ARTICLE|SECTION|ASIDE|FIGURE|A|BUTTON|IMG|TR)$/i.test(tag)) { score += 4; }
-        if (/listitem|article|card|button|link/.test(role)) { score += 4; }
-        if (/\b(card|tile|item|row|product|post|entry|grid-item)\b/.test(cls)) { score += 5; }
+        if (isInteractive(el)) { score += 6; }
+        if (/^(LI|ARTICLE|FIGURE|A|BUTTON|IMG|TR|H1|H2|H3)$/i.test(tag)) { score += 3; }
+        if (/listitem|article|card|button|link/.test(role)) { score += 3; }
+        if (/\b(card|tile|item|row|product|post|entry|grid-item)\b/.test(cls)) { score += 4; }
         // Prefer mid-size peers (cards), not tiny icons or giant sections.
         var frac = area / Math.max(1, vp);
-        if (frac > 0.002 && frac < 0.25) { score += 3; }
-        else if (frac >= 0.25) { score -= 2; }
-        // Similar aspect ratio to a card/row helps grouping.
+        if (frac > 0.001 && frac < 0.18) { score += 3; }
+        else if (frac >= 0.18) { score -= 3; }
         var ar = r.width / Math.max(1, r.height);
-        if (ar > 0.4 && ar < 6) { score += 1; }
-        // Prefer direct children of flex/grid parents (common card lists).
+        if (ar > 0.35 && ar < 8) { score += 1; }
         var p = el.parentElement;
         if (p) {
           try {
             var cs = window.getComputedStyle(p);
             if (cs.display === 'flex' || cs.display === 'grid'
                 || cs.display === 'inline-flex' || cs.display === 'inline-grid') {
-              score += 3;
+              score += 2;
             }
           } catch (e) {}
         }
@@ -1140,12 +1385,24 @@ final class BrowserSession: NSObject, Identifiable, WKNavigationDelegate, WKScri
       var MAX_SELECT = 24;
 
       function pickManyFromMarquee(m) {
+        var mx = (m.left + m.right) / 2;
+        var my = (m.top + m.bottom) / 2;
+        var marqueeArea = Math.max(1, m.width * m.height);
+        // Small drag → single precise pick (don't expand to surrounding cards).
+        if (m.width < 28 && m.height < 28) {
+          var one = pickDeepestAt(mx, my);
+          return one ? [one] : [];
+        }
+
+        var scopeRoot = null;
+        var scopeHit = pickDeepestAt(mx, my);
+        if (scopeHit) { scopeRoot = closestModal(scopeHit); }
+
         var hits = [];
         var all = document.body ? document.body.querySelectorAll('*') : [];
-        var marqueeArea = Math.max(1, m.width * m.height);
-        // Center-in-marquee is the most reliable multi-card signal.
         for (var i = 0; i < all.length; i++) {
           var el = all[i];
+          if (scopeRoot && !scopeRoot.contains(el)) { continue; }
           if (!isComponentCandidate(el)) { continue; }
           var r = el.getBoundingClientRect();
           var er = { left: r.left, top: r.top, right: r.right, bottom: r.bottom };
@@ -1156,58 +1413,133 @@ final class BrowserSession: NSObject, Identifiable, WKNavigationDelegate, WKScri
           if (overlap <= 0 && !centerIn) { continue; }
           var area = r.width * r.height;
           if (area <= 0) { continue; }
+          // Element much larger than marquee is usually a container swallowing the drag.
+          if (area > marqueeArea * 6 && !isInteractive(el)) { continue; }
           var inside = overlap / area;
           var covers = overlap / marqueeArea;
-          // Keep if center is in marquee, mostly inside, or marquee covers a useful chunk.
-          if (!centerIn && inside < 0.3 && covers < 0.05) { continue; }
-          hits.push({
-            el: el,
-            score: (centerIn ? 3 : 0) + inside * 2 + covers + componentScore(el) * 0.15,
-            area: area
-          });
+          if (!centerIn && inside < 0.35 && covers < 0.08) { continue; }
+          var score = (centerIn ? 3 : 0) + inside * 2 + covers
+            + (isInteractive(el) ? 2 : 0) + componentScore(el) * 0.1;
+          // Prefer elements similar in size to the marquee for single-component drags.
+          var sizeRatio = area / marqueeArea;
+          if (sizeRatio > 0.25 && sizeRatio < 4) { score += 1.5; }
+          hits.push({ el: el, score: score, area: area });
         }
         hits.sort(function (a, b) { return b.score - a.score || a.area - b.area; });
-        // Cap raw hits before grouping to keep work bounded.
+
+        // Medium marquee: if one interactive/tight hit dominates, keep just that.
+        if (marqueeArea < 90000 && hits.length) {
+          var top = hits[0];
+          var peers = hits.filter(function (h) {
+            if (h.el === top.el) { return true; }
+            var ar = h.area / Math.max(1, top.area);
+            return ar > 0.45 && ar < 2.2 && Math.abs(h.score - top.score) < 2.5;
+          });
+          if (peers.length < 2) {
+            // Prefer interactive under the marquee when only one solid hit.
+            for (var j = 0; j < Math.min(hits.length, 8); j++) {
+              if (isInteractive(hits[j].el)) { return [hits[j].el]; }
+            }
+            return [top.el];
+          }
+        }
+
         var els = hits.slice(0, 80).map(function (h) { return h.el; });
         els = groupComponents(els);
         if (!els.length) {
-          var mx = (m.left + m.right) / 2;
-          var my = (m.top + m.bottom) / 2;
           var hit = pickDeepestAt(mx, my);
           if (hit) { els = [hit]; }
         }
         return els.slice(0, MAX_SELECT);
       }
 
+      /// Topmost non-UI, non-backdrop element under the cursor.
+      function rawHitAt(x, y) {
+        var stack = [];
+        try {
+          if (document.elementsFromPoint) {
+            stack = document.elementsFromPoint(x, y) || [];
+          }
+        } catch (e) {}
+        if (!stack.length) {
+          var one = document.elementFromPoint(x, y);
+          if (one) { stack = [one]; }
+        }
+        for (var i = 0; i < stack.length; i++) {
+          var el = stack[i];
+          if (!el || !(el instanceof Element)) { continue; }
+          if (isUI(el)) { continue; }
+          if (isBackdrop(el)) { continue; }
+          return el;
+        }
+        return null;
+      }
+
+      /// Single-click / hover: prefer the precise interactive target, not the
+      /// parent card. Only climb for trivial leaves (icons, bare text spans).
       function pickDeepestAt(x, y) {
-        var hit = document.elementFromPoint(x, y);
-        if (!hit || isUI(hit) || !(hit instanceof Element)) { return null; }
-        // Walk up collecting candidates; prefer best component score near the leaf.
+        var hit = rawHitAt(x, y);
+        if (!hit) { return null; }
+
+        var modal = closestModal(hit);
+        // Climb past our own outline paint targets if any slipped through.
         var node = hit;
+        while (node && isUI(node)) { node = node.parentElement; }
+        if (!node || !(node instanceof Element)) { return null; }
+
+        // Deepest interactive ancestor within the modal/page.
+        var n = node;
+        var interactive = null;
         var candidates = [];
-        while (node && node !== document.body) {
-          if (isComponentCandidate(node)) { candidates.push(node); }
-          node = node.parentElement;
+        while (n && n !== document.body && n !== document.documentElement) {
+          if (modal && n !== modal && !modal.contains(n)) { break; }
+          if (isComponentCandidate(n)) { candidates.push(n); }
+          if (!interactive && isInteractive(n)) { interactive = n; }
+          // Stop at modal root — don't select the whole page behind a drawer.
+          if (modal && n === modal) { break; }
+          n = n.parentElement;
         }
-        if (!candidates.length) {
-          return hit instanceof Element ? hit : null;
+
+        if (interactive) {
+          // Use the interactive control itself (button/link/input), not its card.
+          return interactive;
         }
-        // Prefer the tightest good component (first few ancestors), scored.
-        var best = candidates[0];
-        var bestS = componentScore(best);
-        for (var i = 1; i < Math.min(candidates.length, 5); i++) {
-          var s = componentScore(candidates[i]);
-          // Prefer deeper (smaller) unless outer scores clearly better (card vs icon).
-          if (s > bestS + 2) {
-            best = candidates[i];
-            bestS = s;
+
+        // No interactive control: climb only while the leaf is trivial, and
+        // keep the tightest useful block (never jump to a much larger card).
+        var best = node;
+        if (candidates.length) {
+          best = candidates[0];
+          var bestArea = elArea(best);
+          for (var i = 1; i < Math.min(candidates.length, 8); i++) {
+            // Stop as soon as we have a non-trivial target — do not promote
+            // a button-sized block up to its parent card.
+            if (!isTrivialLeaf(best)) { break; }
+            var c = candidates[i];
+            var a = elArea(c);
+            // Allow a modest climb for icon/span → labeled control wrapper.
+            if (a < Math.max(bestArea * 12, 4000)
+                && a < window.innerWidth * window.innerHeight * 0.15) {
+              best = c;
+              bestArea = a;
+              continue;
+            }
+            break;
+          }
+        } else {
+          while (best && isTrivialLeaf(best) && best.parentElement
+                 && best.parentElement !== document.body) {
+            if (modal && !modal.contains(best.parentElement)
+                && best.parentElement !== modal) { break; }
+            best = best.parentElement;
+            if (isComponentCandidate(best)) { break; }
           }
         }
-        return best;
+        return best instanceof Element ? best : hit;
       }
 
       function hideChip() {
-        chip.style.display = 'none';
+        uiHide(chip);
         input.value = '';
         state.annotating = false;
       }
@@ -1229,6 +1561,7 @@ final class BrowserSession: NSObject, Identifiable, WKNavigationDelegate, WKScri
         paintSelection();
         updateHint();
         var left = Infinity, top = Infinity, right = -Infinity, bottom = -Infinity;
+        var anchor = state.selected[0];
         state.selected.forEach(function (el) {
           if (!el.getBoundingClientRect) { return; }
           var r = el.getBoundingClientRect();
@@ -1238,17 +1571,31 @@ final class BrowserSession: NSObject, Identifiable, WKNavigationDelegate, WKScri
           bottom = Math.max(bottom, r.bottom);
         });
         if (!isFinite(left)) { left = 16; top = 16; right = 16; bottom = 16; }
+        mountLayer(anchor);
+        var lr = layerRect();
         var chipW = 300;
-        var cLeft = Math.min(Math.max(8, left), window.innerWidth - chipW - 8);
-        var cTop = bottom + 8;
-        if (cTop + 64 > window.innerHeight) {
-          cTop = Math.max(8, top - 64);
+        // Clamp within the layer (viewport or modal), then convert to layer-local.
+        var viewW = lr.width || window.innerWidth;
+        var viewH = lr.height || window.innerHeight;
+        var cLeftVp = Math.min(Math.max(lr.left + 8, left), lr.left + viewW - chipW - 8);
+        var cTopVp = bottom + 8;
+        if (cTopVp + 64 > lr.top + viewH) {
+          cTopVp = Math.max(lr.top + 8, top - 64);
         }
-        chip.style.display = 'block';
-        chip.style.left = cLeft + 'px';
-        chip.style.top = cTop + 'px';
+        chip.setAttribute('data-agentide-chip', '1');
+        chip.style.left = Math.round(cLeftVp - lr.left) + 'px';
+        chip.style.top = Math.round(cTopVp - lr.top) + 'px';
         chip.style.width = chipW + 'px';
-        setTimeout(function () { try { input.focus(); input.select(); } catch (e) {} }, 0);
+        chip.style.pointerEvents = 'auto';
+        input.style.pointerEvents = 'auto';
+        uiShow(chip);
+        // Defer past the mouseup/click that opened us — preventDefault on the
+        // pick can otherwise leave the field unfocused in WKWebView.
+        setTimeout(function () {
+          focusInput();
+          try { input.select(); } catch (e) {}
+        }, 0);
+        setTimeout(focusInput, 50);
       }
 
       function setSelection(els, openChip) {
@@ -1328,6 +1675,7 @@ final class BrowserSession: NSObject, Identifiable, WKNavigationDelegate, WKScri
 
       function onMove(e) {
         if (!state.active) { return; }
+        if (eventIsUI(e)) { return; }
         if (state.dragging) {
           var dx = e.clientX - state.startX;
           var dy = e.clientY - state.startY;
@@ -1360,7 +1708,6 @@ final class BrowserSession: NSObject, Identifiable, WKNavigationDelegate, WKScri
           return;
         }
         if (state.annotating || state.suppressHover) { return; }
-        if (isUI(e.target)) { return; }
         var el = pickDeepestAt(e.clientX, e.clientY);
         state.hover = el;
         if (!state.selected.length) { paintSelection(); }
@@ -1368,7 +1715,12 @@ final class BrowserSession: NSObject, Identifiable, WKNavigationDelegate, WKScri
 
       function onDown(e) {
         if (!state.active || e.button !== 0) { return; }
-        if (isUI(e.target)) { return; }
+        // Clicking the type box: do not start a pick / steal the event from the input.
+        if (eventIsUI(e)) {
+          state.dragging = false;
+          state.dragMoved = false;
+          return;
+        }
         state.suppressHover = false;
         var additive = e.shiftKey || e.metaKey || e.ctrlKey;
         // Additive click (no drag intent yet): toggle into selection.
@@ -1385,7 +1737,16 @@ final class BrowserSession: NSObject, Identifiable, WKNavigationDelegate, WKScri
       }
 
       function onUp(e) {
-        if (!state.active || !state.dragging) { return; }
+        if (!state.active) { return; }
+        // Released on the chip — cancel any in-progress pick, keep selection.
+        if (eventIsUI(e)) {
+          state.dragging = false;
+          state.dragMoved = false;
+          state.additiveDrag = false;
+          hideMarquee();
+          return;
+        }
+        if (!state.dragging) { return; }
         state.dragging = false;
         e.preventDefault();
         e.stopPropagation();
@@ -1422,13 +1783,16 @@ final class BrowserSession: NSObject, Identifiable, WKNavigationDelegate, WKScri
 
       function onClick(e) {
         if (!state.active) { return; }
-        if (isUI(e.target)) { return; }
+        // Let the input receive click/focus; block page navigation under picks.
+        if (eventIsUI(e)) { return; }
         e.preventDefault();
         e.stopPropagation();
       }
 
       function onKey(e) {
         if (!state.active) { return; }
+        // While typing in the chip, only handle Enter/Esc — never swallow keys.
+        var inChip = eventIsUI(e) || document.activeElement === input;
         if (e.key === 'Escape') {
           if (state.annotating || state.selected.length || state.hover) {
             e.preventDefault();
@@ -1442,33 +1806,81 @@ final class BrowserSession: NSObject, Identifiable, WKNavigationDelegate, WKScri
           }
           return;
         }
-        if (e.key === 'Enter' && state.annotating && document.activeElement === input) {
+        if (e.key === 'Enter' && state.annotating && (document.activeElement === input || inChip)) {
           e.preventDefault();
           e.stopPropagation();
           submitAnnotation();
+          return;
         }
+        if (inChip) { return; }
       }
 
+      // Chip bubble listeners only — capture would stopPropagation before the
+      // input receives the event and break focus/typing.
+      chip.addEventListener('pointerdown', function (e) {
+        e.stopPropagation();
+      });
+      chip.addEventListener('mousedown', function (e) {
+        e.stopPropagation();
+        if (e.target !== input) { focusInput(); }
+      });
+      chip.addEventListener('mouseup', function (e) {
+        e.stopPropagation();
+      });
+      chip.addEventListener('click', function (e) {
+        e.stopPropagation();
+      });
+
       input.addEventListener('keydown', function (e) {
+        e.stopPropagation();
         if (e.key === 'Enter') {
           e.preventDefault();
-          e.stopPropagation();
           submitAnnotation();
         } else if (e.key === 'Escape') {
           e.preventDefault();
-          e.stopPropagation();
           clearSelection();
         }
       });
+      input.addEventListener('keyup', function (e) { e.stopPropagation(); });
+      input.addEventListener('keypress', function (e) { e.stopPropagation(); });
+
+      function onScrollOrResize() {
+        if (state.active && (state.selected.length || state.hover || state.annotating)) {
+          paintSelection();
+          if (state.annotating && state.selected.length) { showChip(); }
+        }
+      }
 
       window.__agentidePicker = {
+        version: 4,
         setActive: function (on) {
           state.active = !!on;
           document.documentElement.style.cursor = on ? 'crosshair' : '';
           if (!on) { clearSelection(); }
           else { ensureMounted(); state.suppressHover = false; paintSelection(); }
         },
-        clear: function () { clearSelection(); }
+        clear: function () { clearSelection(); },
+        destroy: function () {
+          state.active = false;
+          clearSelection();
+          document.documentElement.style.cursor = '';
+          try {
+            document.removeEventListener('mousemove', onMove, true);
+            document.removeEventListener('mousedown', onDown, true);
+            document.removeEventListener('mouseup', onUp, true);
+            document.removeEventListener('click', onClick, true);
+            document.removeEventListener('keydown', onKey, true);
+            window.removeEventListener('scroll', onScrollOrResize, true);
+            window.removeEventListener('resize', onScrollOrResize, true);
+          } catch (e) {}
+          try {
+            if (layer && layer.parentNode) { layer.parentNode.removeChild(layer); }
+            var st = document.getElementById(HL_STYLE_ID);
+            if (st && st.parentNode) { st.parentNode.removeChild(st); }
+          } catch (e) {}
+          boxPool = [];
+          window.__agentidePicker = null;
+        }
       };
 
       document.addEventListener('mousemove', onMove, true);
@@ -1476,12 +1888,8 @@ final class BrowserSession: NSObject, Identifiable, WKNavigationDelegate, WKScri
       document.addEventListener('mouseup', onUp, true);
       document.addEventListener('click', onClick, true);
       document.addEventListener('keydown', onKey, true);
-      window.addEventListener('scroll', function () {
-        if (state.active && (state.selected.length || state.hover)) { paintSelection(); }
-      }, true);
-      window.addEventListener('resize', function () {
-        if (state.active && (state.selected.length || state.hover)) { paintSelection(); }
-      }, true);
+      window.addEventListener('scroll', onScrollOrResize, true);
+      window.addEventListener('resize', onScrollOrResize, true);
     })();
     """#
 
