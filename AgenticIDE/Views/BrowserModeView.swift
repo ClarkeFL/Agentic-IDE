@@ -1502,10 +1502,14 @@ private struct BrowserToolbarButton: View {
 }
 
 /// Hosts the shared `WKWebView` and applies device-viewport scaling in AppKit
-/// space. Setting `frame` to the aspect-fit visual size and `bounds` to the
-/// logical device size makes WebKit lay out at device CSS pixels while AppKit
-/// maps hits through the same transform — unlike SwiftUI `scaleEffect`, which
-/// scaled drawing without reliably remapping events into the web process.
+/// space. An intermediate container owns the frame/bounds scale (visual frame
+/// vs logical bounds); the `WKWebView` always stays 1:1 inside it.
+///
+/// Scaling on the web view itself (cb926a3) left bounds sticky when returning
+/// to Fit — mobile layout kept showing after the toolbar said Fit. WebKit also
+/// does not reliably reflow when its own bounds are force-mismatched from
+/// frame. Container-level scale keeps hit-testing mapped (unlike SwiftUI
+/// `scaleEffect`) while viewport switches reset cleanly.
 private struct ScaledWebViewHost: NSViewRepresentable {
     let webView: WKWebView
     /// nil = fit (fill the host 1:1).
@@ -1514,67 +1518,105 @@ private struct ScaledWebViewHost: NSViewRepresentable {
     func makeNSView(context: Context) -> DeviceWebHostView {
         let host = DeviceWebHostView()
         host.embed(webView)
-        host.deviceSize = deviceSize
+        host.apply(deviceSize: deviceSize)
         return host
     }
 
     func updateNSView(_ host: DeviceWebHostView, context: Context) {
         host.embed(webView)
-        host.deviceSize = deviceSize
         // Keep zoom/magnification neutral — scaling is frame/bounds only.
         if abs(webView.pageZoom - 1) > 0.001 { webView.pageZoom = 1 }
         if abs(webView.magnification - 1) > 0.001 { webView.magnification = 1 }
-        host.needsLayout = true
+        host.apply(deviceSize: deviceSize)
     }
 }
 
 private final class DeviceWebHostView: NSView {
+    /// Owns the device aspect-fit scale. frame = visual rect in this host;
+    /// bounds = logical CSS pixels. WKWebView fills this 1:1.
+    private let scaleView = NSView()
     private(set) weak var webView: WKWebView?
-    var deviceSize: CGSize? {
-        didSet {
-            if oldValue != deviceSize { needsLayout = true }
-        }
-    }
+    private var deviceSize: CGSize?
 
     override init(frame frameRect: NSRect) {
         super.init(frame: frameRect)
         wantsLayer = true
         layer?.backgroundColor = NSColor.clear.cgColor
+        scaleView.wantsLayer = true
+        scaleView.layer?.backgroundColor = NSColor.clear.cgColor
+        addSubview(scaleView)
     }
 
     @available(*, unavailable)
     required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
 
     func embed(_ webView: WKWebView) {
-        if self.webView === webView, webView.superview === self { return }
+        if self.webView === webView, webView.superview === scaleView { return }
         // Detach from any previous host without destroying the shared instance.
         webView.removeFromSuperview()
         self.webView = webView
-        addSubview(webView)
+        scaleView.addSubview(webView)
+        // Drop any leftover frame≠bounds scale from older host code paths.
+        let size = webView.frame.size
+        if size.width > 0.5, size.height > 0.5 {
+            webView.bounds = NSRect(origin: .zero, size: size)
+        }
         needsLayout = true
+    }
+
+    /// Update the emulated device and re-layout immediately so toolbar
+    /// switches (mobile → fit, etc.) never wait on a deferred layout pass.
+    func apply(deviceSize: CGSize?) {
+        let changed = !cgSizeEqual(self.deviceSize, deviceSize)
+        self.deviceSize = deviceSize
+        if changed || bounds.width > 0.5 {
+            layoutDevice()
+        }
     }
 
     override func layout() {
         super.layout()
+        layoutDevice()
+    }
+
+    private func layoutDevice() {
         guard let webView else { return }
         let host = bounds
         guard host.width > 0.5, host.height > 0.5 else { return }
 
+        let logical: CGSize
+        let visualFrame: NSRect
         if let device = deviceSize, device.width > 1, device.height > 1 {
             let scale = min(host.width / device.width, host.height / device.height, 1)
             let visW = device.width * scale
             let visH = device.height * scale
             let x = (host.width - visW) * 0.5
             let y = (host.height - visH) * 0.5
-            let frame = NSRect(x: x, y: y, width: visW, height: visH)
-            if webView.frame != frame { webView.frame = frame }
-            // bounds ≠ frame → AppKit scales drawing + hit-testing into CSS space.
-            let logical = NSRect(origin: .zero, size: device)
-            if webView.bounds != logical { webView.bounds = logical }
+            logical = device
+            visualFrame = NSRect(x: x, y: y, width: visW, height: visH)
         } else {
-            if webView.frame != host { webView.frame = host }
-            let oneToOne = NSRect(origin: .zero, size: host.size)
-            if webView.bounds != oneToOne { webView.bounds = oneToOne }
+            logical = host.size
+            visualFrame = host
+        }
+
+        // Always write frame + bounds (no equality short-circuit). Skipping a
+        // write left device bounds stuck when returning to Fit.
+        scaleView.frame = visualFrame
+        scaleView.bounds = NSRect(origin: .zero, size: logical)
+
+        // WKWebView stays identity inside the scale container so WebKit’s
+        // layout width tracks logical CSS pixels, not a mismatched bounds.
+        let fill = NSRect(origin: .zero, size: logical)
+        webView.frame = fill
+        webView.bounds = fill
+    }
+
+    private func cgSizeEqual(_ a: CGSize?, _ b: CGSize?) -> Bool {
+        switch (a, b) {
+        case (nil, nil): return true
+        case let (x?, y?):
+            return abs(x.width - y.width) < 0.5 && abs(x.height - y.height) < 0.5
+        default: return false
         }
     }
 }
