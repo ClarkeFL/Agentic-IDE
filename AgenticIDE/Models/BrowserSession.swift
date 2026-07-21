@@ -1553,13 +1553,11 @@ final class BrowserSession: NSObject, Identifiable, WKNavigationDelegate, WKScri
         }
       }
 
-      function showChip() {
-        if (!state.selected.length) { hideChip(); return; }
+      /// Place the chip under the selection. Does not focus or select text —
+      /// scroll/resize must not clobber caret or wipe the note mid-type.
+      function positionChip() {
+        if (!state.selected.length) { return; }
         ensureMounted();
-        state.annotating = true;
-        state.hover = null;
-        paintSelection();
-        updateHint();
         var left = Infinity, top = Infinity, right = -Infinity, bottom = -Infinity;
         var anchor = state.selected[0];
         state.selected.forEach(function (el) {
@@ -1589,13 +1587,26 @@ final class BrowserSession: NSObject, Identifiable, WKNavigationDelegate, WKScri
         chip.style.pointerEvents = 'auto';
         input.style.pointerEvents = 'auto';
         uiShow(chip);
-        // Defer past the mouseup/click that opened us — preventDefault on the
-        // pick can otherwise leave the field unfocused in WKWebView.
-        setTimeout(function () {
-          focusInput();
-          try { input.select(); } catch (e) {}
-        }, 0);
-        setTimeout(focusInput, 50);
+      }
+
+      function showChip() {
+        if (!state.selected.length) { hideChip(); return; }
+        var wasOpen = state.annotating && chip.style.display !== 'none';
+        state.annotating = true;
+        state.hover = null;
+        paintSelection();
+        updateHint();
+        positionChip();
+        // Focus+select only on first open. Re-selecting on every showChip wiped
+        // long notes: input overflow fires capture scroll → showChip → select
+        // all → next keystroke replaces the whole note with one character.
+        if (!wasOpen) {
+          setTimeout(function () {
+            focusInput();
+            try { input.select(); } catch (e) {}
+          }, 0);
+          setTimeout(focusInput, 50);
+        }
       }
 
       function setSelection(els, openChip) {
@@ -1844,15 +1855,23 @@ final class BrowserSession: NSObject, Identifiable, WKNavigationDelegate, WKScri
       input.addEventListener('keyup', function (e) { e.stopPropagation(); });
       input.addEventListener('keypress', function (e) { e.stopPropagation(); });
 
-      function onScrollOrResize() {
+      function onScrollOrResize(e) {
+        // Horizontal scroll inside the annotation <input> (text longer than
+        // the field) must not reposition/re-focus the chip.
+        if (e && e.type === 'scroll') {
+          var t = e.target;
+          if (t === input || t === chip || (t && chip.contains && t.nodeType === 1 && chip.contains(t))) {
+            return;
+          }
+        }
         if (state.active && (state.selected.length || state.hover || state.annotating)) {
           paintSelection();
-          if (state.annotating && state.selected.length) { showChip(); }
+          if (state.annotating && state.selected.length) { positionChip(); }
         }
       }
 
       window.__agentidePicker = {
-        version: 4,
+        version: 5,
         setActive: function (on) {
           state.active = !!on;
           document.documentElement.style.cursor = on ? 'crosshair' : '';
