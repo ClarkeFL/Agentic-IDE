@@ -87,7 +87,7 @@ struct ProjectSidebarView: View {
             .animation(.easeOut(duration: 0.12), value: hoveredDropKey)
 
             Divider()
-            // Footer: weekly AI plan usage (Claude / Codex / Grok) + CPU · MEM.
+            // Footer: weekly AI plan usage (Claude / Fable / Codex / Grok) + CPU · MEM.
             VStack(alignment: .leading, spacing: DS.Space.sm) {
                 UsageBar()
                 ResourceBar()
