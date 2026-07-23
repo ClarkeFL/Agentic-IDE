@@ -1,14 +1,14 @@
 import AppKit
 import SwiftUI
 
-/// Weekly AI plan usage for Claude / Codex / Grok.
+/// Weekly AI plan usage for Claude / Fable / Codex / Grok.
 ///
 /// - `.stacked` — sidebar footer (one provider per row, above CPU/MEM).
 /// - `.inline`  — browser agent column footer (providers side-by-side).
 ///
 /// Bars are weekly plan utilization only. A trailing warning glyph appears
-/// when that provider's short (≈5h) window is near its cap — Fable/Claude
-/// and Codex/GPT.
+/// when that provider's short (≈5h) window is near its cap — Claude and
+/// Codex/GPT. Fable is Anthropic's separate weekly-scoped bucket.
 ///
 /// **Stale samples** (source older than 6h): empty dashed track + `81%*` so
 /// the last-known value stays visible without looking live.
@@ -156,12 +156,14 @@ struct UsageBar: View {
             if let brand = provider.brandIcon {
                 quickLaunchIcon(name: brand, size: 11)
                     .foregroundStyle(.secondary)
-            } else {
-                // Grok — no brand asset yet; a compact "G" mark keeps the column aligned.
-                Text("G")
+            } else if let letter = provider.letterMark {
+                // Fable / Grok — no brand asset; compact letter keeps the column aligned.
+                Text(letter)
                     .font(.system(size: 9, weight: .bold, design: .rounded))
                     .foregroundStyle(.secondary)
                     .frame(width: 11, height: 11)
+            } else {
+                Color.clear.frame(width: 11, height: 11)
             }
         }
         .opacity(opacity)
@@ -249,9 +251,12 @@ struct UsageBar: View {
             case "wait": parts.append("rate-limited; try again shortly")
             case "err": parts.append("couldn’t fetch")
             default:
-                if row.provider == .grok {
+                switch row.provider {
+                case .grok:
                     parts.append("run Grok once so it logs billing credits")
-                } else {
+                case .fable:
+                    parts.append("no Fable weekly-scoped limit in Claude usage response")
+                default:
                     parts.append("no data yet")
                 }
             }
@@ -274,6 +279,6 @@ struct UsageBar: View {
     }
 
     private var helpText: String {
-        "Weekly AI plan usage (Claude · Codex · Grok). Dashed bar + %* = last known (>6h). Yellow triangle = 5-hour window nearly full."
+        "Weekly AI plan usage (Claude · Fable · Codex · Grok). Dashed bar + %* = last known (>6h). Yellow triangle = 5-hour window nearly full."
     }
 }

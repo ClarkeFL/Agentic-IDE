@@ -6,6 +6,7 @@ import OSLog
 struct ProviderUsage: Identifiable, Equatable, Sendable {
     enum Provider: String, CaseIterable, Identifiable, Sendable {
         case claude
+        case fable
         case codex
         case grok
 
@@ -14,6 +15,7 @@ struct ProviderUsage: Identifiable, Equatable, Sendable {
         var displayName: String {
             switch self {
             case .claude: return "Claude"
+            case .fable:  return "Fable"
             case .codex:  return "Codex"
             case .grok:   return "Grok"
             }
@@ -23,14 +25,25 @@ struct ProviderUsage: Identifiable, Equatable, Sendable {
         var brandIcon: String? {
             switch self {
             case .claude: return "brand:claude"
+            case .fable:  return nil // compact "F" mark in UsageBar
             case .codex:  return "brand:codex"
             case .grok:   return nil
             }
         }
 
+        /// Single-letter mark when `brandIcon` is nil (Fable / Grok).
+        var letterMark: String? {
+            switch self {
+            case .fable: return "F"
+            case .grok:  return "G"
+            default:     return nil
+            }
+        }
+
         var usageURL: URL? {
             switch self {
-            case .claude:
+            case .claude, .fable:
+                // Fable is Anthropic-scoped weekly; same usage dashboard as Claude.
                 return URL(string: "https://claude.ai/settings/usage")
             case .codex:
                 return URL(string: "https://chatgpt.com/codex/cloud/settings/analytics#usage")
@@ -83,6 +96,8 @@ struct ProviderUsage: Identifiable, Equatable, Sendable {
 /// Sources:
 /// - **Claude** — Anthropic OAuth usage API (same data as `/usage`), using the
 ///   token Claude Code already stores in the login Keychain.
+/// - **Fable** — Anthropic `limits[]` entry with `weekly_scoped` + model
+///   display name "Fable" (separate weekly bucket from general Claude).
 /// - **Codex** — live ChatGPT usage API (`backend-api/wham/usage`) using the
 ///   OAuth token opencode stores in `~/.local/share/opencode/auth.json`;
 ///   falls back to the latest `rate_limits` block in `~/.codex/sessions`
@@ -96,11 +111,12 @@ struct ProviderUsage: Identifiable, Equatable, Sendable {
 @Observable
 final class UsageMonitor {
     private(set) var claude: ProviderUsage = .empty(.claude)
+    private(set) var fable: ProviderUsage = .empty(.fable)
     private(set) var codex: ProviderUsage = .empty(.codex)
     private(set) var grok: ProviderUsage = .empty(.grok, placeholder: "—")
 
-    /// Rows in display order.
-    var rows: [ProviderUsage] { [claude, codex, grok] }
+    /// Rows in display order (Fable sits under Claude — same API, own quota).
+    var rows: [ProviderUsage] { [claude, fable, codex, grok] }
 
     /// Fire the short-window warning at this utilization (percent).
     static let shortWindowWarnThreshold: Double = 80
@@ -141,22 +157,31 @@ final class UsageMonitor {
     func refresh() {
         queue.async { [weak self] in
             guard let self else { return }
-            let claude = self.fetchClaude()
+            let anthropic = self.fetchAnthropic()
             let codex = self.fetchCodex()
             let grok = self.fetchGrok()
             DispatchQueue.main.async {
-                self.claude = claude
+                self.claude = anthropic.claude
+                self.fable = anthropic.fable
                 self.codex = codex
                 self.grok = grok
             }
         }
     }
 
-    // MARK: - Claude
+    // MARK: - Claude + Fable (same Anthropic OAuth usage response)
 
-    private func fetchClaude() -> ProviderUsage {
+    private struct AnthropicUsage {
+        var claude: ProviderUsage
+        var fable: ProviderUsage
+    }
+
+    private func fetchAnthropic() -> AnthropicUsage {
         guard let token = Self.claudeAccessToken() else {
-            return .empty(.claude, placeholder: "login")
+            return AnthropicUsage(
+                claude: .empty(.claude, placeholder: "login"),
+                fable: .empty(.fable, placeholder: "login")
+            )
         }
 
         var request = URLRequest(
@@ -174,46 +199,70 @@ final class UsageMonitor {
             let (data, response) = try Self.syncData(for: request)
             if let http = response as? HTTPURLResponse, !(200..<300).contains(http.statusCode) {
                 log.debug("Claude usage HTTP \(http.statusCode)")
+                let placeholder: String
                 if http.statusCode == 401 || http.statusCode == 403 {
-                    return .empty(.claude, placeholder: "login")
+                    placeholder = "login"
+                } else if http.statusCode == 429 {
+                    placeholder = "wait"
+                } else {
+                    placeholder = "err"
                 }
-                if http.statusCode == 429 {
-                    return .empty(.claude, placeholder: "wait")
-                }
-                return .empty(.claude, placeholder: "err")
+                return AnthropicUsage(
+                    claude: .empty(.claude, placeholder: placeholder),
+                    fable: .empty(.fable, placeholder: placeholder)
+                )
             }
             guard let json = try JSONSerialization.jsonObject(with: data) as? [String: Any] else {
-                return .empty(.claude, placeholder: "err")
+                return AnthropicUsage(
+                    claude: .empty(.claude, placeholder: "err"),
+                    fable: .empty(.fable, placeholder: "err")
+                )
             }
-            return Self.parseClaude(json)
+            return Self.parseAnthropic(json)
         } catch {
             log.debug("Claude usage fetch failed: \(error.localizedDescription, privacy: .public)")
-            return .empty(.claude, placeholder: "err")
+            return AnthropicUsage(
+                claude: .empty(.claude, placeholder: "err"),
+                fable: .empty(.fable, placeholder: "err")
+            )
         }
     }
 
-    private static func parseClaude(_ json: [String: Any]) -> ProviderUsage {
+    private static func parseAnthropic(_ json: [String: Any]) -> AnthropicUsage {
         let weekly = window(from: json["seven_day"])
         let fiveHour = window(from: json["five_hour"])
 
-        // Short-window warning: global 5h, or a Fable-scoped session limit if
-        // Anthropic exposes one in `limits[]` (takes the higher pressure).
+        // Claude short-window = global 5h / unscoped session only.
+        // Fable has its own weekly row — do not fold it into Claude's warning.
         var shortPercent = fiveHour?.percent
         var shortResets = fiveHour?.resetsAt
+        var fableWeekly: ParsedWindow?
+
         if let limits = json["limits"] as? [[String: Any]] {
             for limit in limits {
                 let kind = (limit["kind"] as? String ?? "").lowercased()
                 let scopeName = ((limit["scope"] as? [String: Any])?["model"] as? [String: Any])?["display_name"] as? String
                     ?? ""
                 let isFable = scopeName.localizedCaseInsensitiveContains("fable")
-                let isSession = kind.contains("session") || kind.contains("five")
-                guard isSession else { continue }
-                guard let p = number(limit["percent"]) else { continue }
-                // Fable-scoped session always wins; otherwise fill if missing.
-                if isFable || shortPercent == nil {
-                    shortPercent = isFable ? max(shortPercent ?? 0, p) : p
-                    shortResets = parseISO8601(limit["resets_at"] as? String) ?? shortResets
+
+                if isFable {
+                    // Prefer weekly_scoped; accept any Fable limit with a %.
+                    guard let p = number(limit["percent"]) else { continue }
+                    let isWeekly = kind.contains("weekly") || kind.contains("seven")
+                    if isWeekly || fableWeekly == nil {
+                        fableWeekly = ParsedWindow(
+                            percent: p,
+                            resetsAt: parseISO8601(limit["resets_at"] as? String)
+                        )
+                    }
+                    continue
                 }
+
+                let isSession = kind.contains("session") || kind.contains("five")
+                guard isSession, shortPercent == nil else { continue }
+                guard let p = number(limit["percent"]) else { continue }
+                shortPercent = p
+                shortResets = parseISO8601(limit["resets_at"] as? String) ?? shortResets
             }
         }
 
@@ -227,15 +276,31 @@ final class UsageMonitor {
             return parts.joined(separator: " · ")
         }()
 
-        return ProviderUsage(
+        let now = Date() // live API response
+        let claude = ProviderUsage(
             provider: .claude,
             weeklyPercent: weekly?.percent,
             weeklyResetsAt: weekly?.resetsAt,
             shortWindowWarning: warn,
             shortWindowDetail: detail,
             placeholder: "—",
-            sampledAt: Date() // live API response
+            sampledAt: now
         )
+        let fable: ProviderUsage
+        if let fableWeekly {
+            fable = ProviderUsage(
+                provider: .fable,
+                weeklyPercent: fableWeekly.percent,
+                weeklyResetsAt: fableWeekly.resetsAt,
+                shortWindowWarning: false,
+                shortWindowDetail: nil,
+                placeholder: "—",
+                sampledAt: now
+            )
+        } else {
+            fable = .empty(.fable, placeholder: "—")
+        }
+        return AnthropicUsage(claude: claude, fable: fable)
     }
 
     /// Reads Claude Code's OAuth access token from the login Keychain.

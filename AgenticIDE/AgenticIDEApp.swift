@@ -9,7 +9,7 @@ struct AgenticIDEApp: App {
     @State private var editors = EditorSessionManager()
     @State private var gitWatchers = GitStatusWatcherStore()
     @State private var resources = ResourceMonitor()
-    /// Polls Claude / Codex / Grok weekly plan usage for the sidebar footer.
+    /// Polls Claude / Fable / Codex / Grok weekly plan usage for the sidebar footer.
     @State private var usage = UsageMonitor()
     /// In-memory, project-agnostic chat thread powering the Ask overlay
     /// (⌘⇧A). Owned at the app level so the conversation persists across
