@@ -50,8 +50,14 @@ final class CompletionSoundPlayer {
             return
         }
         current?.stop()
+        sound.volume = Self.configuredVolume()
         sound.play()
         current = sound
+    }
+
+    private static func configuredVolume() -> Float {
+        let stored = UserDefaults.standard.object(forKey: AppSettings.Keys.completionSoundVolume) as? Double ?? 1
+        return Float(min(max(stored, 0), 1))
     }
 
     private func resolveSound() -> NSSound? {
